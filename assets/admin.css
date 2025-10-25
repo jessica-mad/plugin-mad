@@ -1,0 +1,22 @@
+/* assets/admin.css */
+
+/* Espaciado en títulos */
+.wrap h1 {
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+/* Cuadros de selección de términos */
+.madsuite-terms-box {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #ddd;
+  padding: 8px;
+  background: #fff;
+}
+
+/* Inputs */
+.madsuite-terms-box label {
+  display: block;
+  margin-bottom: 6px;
+}

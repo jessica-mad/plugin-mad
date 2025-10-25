@@ -1,0 +1,20 @@
+/**
+ * Private Store - Frontend Styles
+ * 
+ * Estilos para la tienda privada en el frontend
+ * 
+ * Nota: Los estilos principales están actualmente embebidos en dashboard-link.php
+ * y en los badges de productos. Este archivo está preparado para estilos adicionales.
+ *
+ * @package MAD_Suite
+ * @subpackage Private_Store
+ */
+
+/* ==========================================================================
+   Estilos adicionales para el frontend
+   ========================================================================== */
+
+/* Puedes agregar estilos globales para la tienda privada aquí */
+
+/* Ejemplo: Estilos para mejorar la visualización de productos VIP */
+/* .private-store-page .product { ... } */

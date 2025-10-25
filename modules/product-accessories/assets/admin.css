@@ -1,0 +1,115 @@
+/**
+ * MAD Suite - Product Accessories Admin Styles
+ * Estilos opcionales para mejorar la apariencia del editor
+ */
+
+/* Meta boxes */
+.mad_prod_accessory #poststuff #post-body.columns-2 {
+    margin-right: 300px;
+}
+
+.mad_prod_accessory .postbox {
+    border: 1px solid #ccd0d4;
+}
+
+.mad_prod_accessory .inside {
+    padding: 12px;
+}
+
+/* Selector de producto */
+.mad_prod_accessory .select2-container {
+    max-width: 100%;
+}
+
+/* Lista de categorías */
+.mad_prod_accessory .category-checklist {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    padding: 10px;
+    background: #fafafa;
+}
+
+.mad_prod_accessory .category-checklist label {
+    display: block;
+    padding: 3px 0;
+    cursor: pointer;
+}
+
+.mad_prod_accessory .category-checklist label:hover {
+    background: #f0f0f0;
+}
+
+/* Inputs de cantidad */
+.mad_prod_accessory input[type="number"] {
+    padding: 5px 10px;
+}
+
+/* Información del producto vinculado */
+.mad_prod_accessory .product-info {
+    background: #e8f5e9;
+    padding: 10px;
+    margin-top: 10px;
+    border-left: 3px solid #4caf50;
+}
+
+/* Columnas personalizadas en listado */
+.widefat .column-linked_product {
+    width: 25%;
+}
+
+.widefat .column-applies_to {
+    width: 30%;
+}
+
+/* Estado visual cuando no hay producto vinculado */
+.mad_prod_accessory .no-product-selected {
+    background: #fff3cd;
+    border-left: 3px solid #ffc107;
+    padding: 10px;
+    margin-top: 10px;
+}
+
+/* Ayuda contextual */
+.mad_prod_accessory .description {
+    font-style: italic;
+    color: #666;
+    font-size: 13px;
+    margin-top: 5px;
+}
+
+/* Secciones colapsables mejoradas */
+.mad_prod_accessory .postbox-header h2 {
+    font-size: 14px;
+}
+
+/* Destacar campos obligatorios */
+.mad_prod_accessory label.required::after {
+    content: " *";
+    color: #dc3232;
+    font-weight: bold;
+}
+
+/* Mejorar Select2 en el tema de WordPress */
+.mad_prod_accessory .select2-container--default .select2-selection--single,
+.mad_prod_accessory .select2-container--default .select2-selection--multiple {
+    border-color: #8c8f94;
+    border-radius: 3px;
+}
+
+.mad_prod_accessory .select2-container--default.select2-container--focus .select2-selection--single,
+.mad_prod_accessory .select2-container--default.select2-container--focus .select2-selection--multiple {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+    .mad_prod_accessory #post-body.columns-2 {
+        margin-right: 0;
+    }
+    
+    .mad_prod_accessory .inside {
+        padding: 10px;
+    }
+}
