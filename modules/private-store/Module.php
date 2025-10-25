@@ -1,474 +1,566 @@
 <?php
 /**
- * Private Store Module
+ * Private Shop Module - Sistema de Reglas de Descuento
  * 
- * Gestiona una tienda privada con usuarios VIP, descuentos especiales
- * y productos exclusivos.
- *
- * @package MAD_Suite
- * @subpackage Private_Store
+ * Estructura de una regla de descuento:
+ * 
+ * [
+ *   'id' => 'unique_id',
+ *   'name' => 'Black Friday VIP',
+ *   'enabled' => true,
+ *   'discount_type' => 'percentage', // 'percentage' o 'fixed'
+ *   'discount_value' => 20,
+ *   'apply_to' => 'categories', // 'products', 'categories', 'tags'
+ *   'target_ids' => [12, 15, 23], // IDs de productos, categorías o tags
+ *   'roles' => ['customer', 'subscriber'],
+ *   'priority' => 10, // Menor número = mayor prioridad
+ *   'date_from' => '2025-10-01', // Opcional
+ *   'date_to' => '2025-10-31', // Opcional
+ * ]
  */
 
-namespace MAD_Suite\Modules\PrivateStore;
-
-if (!defined('ABSPATH')) {
-    exit;
-}
+namespace MADSuite\Modules\PrivateShop;
 
 class Module {
     
     private static $instance = null;
-    private $module_path;
-    private $module_url;
-    private $logger;
+    private $log_file;
     
-    /**
-     * Singleton instance
-     */
     public static function instance() {
-        if (null === self::$instance) {
+        if (self::$instance === null) {
             self::$instance = new self();
         }
         return self::$instance;
     }
     
-    /**
-     * Constructor
-     */
     private function __construct() {
-        $this->module_path = trailingslashit( plugin_dir_path(__FILE__) );
-$this->module_url  = trailingslashit( plugin_dir_url(__FILE__) );
-
-        
-        // Cargar dependencias primero
-        $this->load_dependencies();
-        
-        // Inicializar logger
-        $this->logger = new Logger('private-store');
-        
-        // Inicializar hooks
+        $this->init_logs();
         $this->init_hooks();
-        
-        $this->logger->info('Módulo Private Store inicializado');
     }
     
     /**
-     * Cargar dependencias
+     * Inicializa el sistema de logs
      */
-    private function load_dependencies() {
-        require_once $this->module_path . 'includes/Logger.php';
-        require_once $this->module_path . 'includes/UserRole.php';
-        require_once $this->module_path . 'includes/ProductVisibility.php';
-        require_once $this->module_path . 'includes/PricingEngine.php';
+    private function init_logs() {
+        $upload_dir = wp_upload_dir();
+        $log_dir = $upload_dir['basedir'] . '/mad-suite-logs';
+        
+        if (!file_exists($log_dir)) {
+            wp_mkdir_p($log_dir);
+            file_put_contents($log_dir . '/.htaccess', 'Deny from all');
+            file_put_contents($log_dir . '/index.php', '<?php // Silence is golden');
+        }
+        
+        $this->log_file = $log_dir . '/private-shop-' . date('Y-m-d') . '.log';
     }
     
     /**
-     * Inicializar hooks
+     * Log con formato legible
+     */
+    private function log($message, $level = 'INFO') {
+        $timestamp = date('Y-m-d H:i:s');
+        $formatted = sprintf("[%s] [%s] %s\n", $timestamp, $level, $message);
+        error_log($formatted, 3, $this->log_file);
+    }
+    
+    /**
+     * Inicializa todos los hooks
      */
     private function init_hooks() {
-        // Admin hooks
-        add_action('admin_menu', [$this, 'add_admin_menu'], 20);
-        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
+        // Admin
+        add_action('admin_menu', [$this, 'add_admin_menu']);
+        add_action('admin_post_save_private_shop_rule', [$this, 'save_discount_rule']);
+        add_action('admin_post_delete_private_shop_rule', [$this, 'delete_discount_rule']);
+        add_action('admin_post_toggle_private_shop_rule', [$this, 'toggle_discount_rule']);
         
-        // Frontend hooks
-        add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_assets']);
+        // Frontend - Descuentos
+        add_filter('woocommerce_product_get_price', [$this, 'apply_discount_to_price'], 99, 2);
+        add_filter('woocommerce_product_get_regular_price', [$this, 'apply_discount_to_price'], 99, 2);
+        add_filter('woocommerce_product_variation_get_price', [$this, 'apply_discount_to_price'], 99, 2);
+        add_filter('woocommerce_product_variation_get_regular_price', [$this, 'apply_discount_to_price'], 99, 2);
         
-        // Inicializar componentes
-        UserRole::instance();
-        ProductVisibility::instance();
-        PricingEngine::instance();
+        // Carrito - CRÍTICO
+        add_action('woocommerce_before_calculate_totals', [$this, 'apply_discount_to_cart'], 99);
         
-        // Dashboard del cliente
-        add_filter('woocommerce_account_menu_items', [$this, 'add_dashboard_menu_item'], 40);
-        add_action('init', [$this, 'add_dashboard_endpoint']);
-        add_action('woocommerce_account_private-store_endpoint', [$this, 'render_private_store_page']);
+        // Display
+        add_filter('woocommerce_get_price_html', [$this, 'custom_price_html'], 99, 2);
         
-        // AJAX handlers
-        add_action('wp_ajax_mads_ps_save_discount', [$this, 'ajax_save_discount']);
-        add_action('wp_ajax_mads_ps_delete_discount', [$this, 'ajax_delete_discount']);
-        add_action('wp_ajax_mads_ps_save_general_settings', [$this, 'ajax_save_general_settings']);
-        add_action('wp_ajax_mads_ps_clear_all_discounts', [$this, 'ajax_clear_all_discounts']);
-        add_action('wp_ajax_mads_ps_reset_settings', [$this, 'ajax_reset_settings']);
-        add_action('wp_ajax_mads_ps_download_log', [$this, 'ajax_download_log']);
-        add_action('wp_ajax_mads_ps_clear_log', [$this, 'ajax_clear_log']);
+        // Estilos frontend
+        add_action('wp_head', [$this, 'add_frontend_styles']);
+        
+        $this->log('Module initialized successfully');
     }
     
     /**
-     * Agregar menú en admin
+     * Obtiene todas las reglas de descuento
      */
-    public function add_admin_menu() {
-    add_submenu_page(
-        'mad-suite',
-        __('Tienda Privada', 'mad-suite'),
-        __('Tienda Privada', 'mad-suite'),
-        'manage_woocommerce',
-        'mad-suite-private-store',
-        [$this, 'render_settings_page']
-    );
-    
-    // NUEVO: Submenú importador
-    add_submenu_page(
-        'mad-suite',
-        __('Importar Usuarios VIP', 'mad-suite'),
-        __('↳ Importar VIP', 'mad-suite'),
-        'manage_woocommerce',
-        'mad-suite-private-store-import',
-        [$this, 'render_importer_page']
-    );
-}
-    
-
-    /**
-     * Cargar assets del admin
-     */
-    public function enqueue_admin_assets($hook) {
-    if ('mad-suite_page_mad-suite-private-store' !== $hook) {
-        return;
+    private function get_discount_rules() {
+        return get_option('mad_private_shop_rules', []);
     }
     
-    // Obtener tab actual
-    $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'general';
-    
-    // CSS Principal
-    wp_enqueue_style(
-        'mads-private-store-admin',
-        $this->module_url . 'assets/admin.css',
-        [],
-        MAD_SUITE_VERSION
-    );
-    
-    // JS Principal
-    wp_enqueue_script(
-        'mads-private-store-admin',
-        $this->module_url . 'assets/admin.js',
-        ['jquery', 'wp-util'],
-        MAD_SUITE_VERSION,
-        true
-    );
-    
-    // Localizar script principal
-    wp_localize_script('mads-private-store-admin', 'madsPrivateStore', [
-        'ajaxUrl' => admin_url('admin-ajax.php'),
-        'nonce' => wp_create_nonce('mads_private_store'),
-        'strings' => [
-            'confirmDelete' => __('¿Estás seguro de eliminar este descuento?', 'mad-suite'),
-            'saved' => __('Guardado correctamente', 'mad-suite'),
-            'error' => __('Error al guardar', 'mad-suite')
-        ]
-    ]);
-    
-    // JS específico para Users Tab
-    if ($active_tab === 'users') {
-        wp_enqueue_script(
-            'mads-private-store-users-tab',
-            $this->module_url . 'assets/users-tab.js',
-            ['jquery', 'mads-private-store-admin'],
-            MAD_SUITE_VERSION,
-            true
-        );
-        
-        // Localizar para users tab (reutiliza las mismas variables)
-        wp_localize_script('mads-private-store-users-tab', 'madsPrivateStoreUsers', [
-            'ajaxUrl' => admin_url('admin-ajax.php'),
-            'nonce' => wp_create_nonce('mads_private_store'),
-            'i18n' => [
-                'importing' => __('Importando...', 'mad-suite'),
-                'searching' => __('Buscando...', 'mad-suite'),
-                'adding' => __('Agregando usuarios...', 'mad-suite'),
-                'done' => __('Completado', 'mad-suite'),
-                'error' => __('Error', 'mad-suite')
-            ]
-        ]);
-    }
-}
-    
     /**
-     * Cargar assets del frontend
+     * Obtiene reglas activas para el usuario actual
      */
-    public function enqueue_frontend_assets() {
-        if (!$this->is_private_store_page()) {
-            return;
+    private function get_active_rules_for_user() {
+        if (!is_user_logged_in()) {
+            return [];
         }
         
-        wp_enqueue_style(
-            'mads-private-store-front',
-            $this->module_url . 'assets/frontend.css',
-            [],
-            MAD_SUITE_VERSION
-        );
-    }
-    
-    /**
-     * Agregar item al menú de Mi Cuenta
-     */
-    public function add_dashboard_menu_item($items) {
-        if (!current_user_can('private_store_access')) {
-            return $items;
-        }
+        $all_rules = $this->get_discount_rules();
+        $user = wp_get_current_user();
+        $active_rules = [];
         
-        $role_name = get_option('mads_ps_role_name', __('Tienda VIP', 'mad-suite'));
-        
-        $new_items = [];
-        foreach ($items as $key => $label) {
-            $new_items[$key] = $label;
+        foreach ($all_rules as $rule) {
+            // Verificar si está habilitada
+            if (!isset($rule['enabled']) || !$rule['enabled']) {
+                continue;
+            }
             
-            // Insertar después de "Dashboard"
-            if ($key === 'dashboard') {
-                $new_items['private-store'] = $role_name;
+            // Verificar fechas (si están configuradas)
+            if (isset($rule['date_from']) && !empty($rule['date_from'])) {
+                if (strtotime($rule['date_from']) > time()) {
+                    continue;
+                }
+            }
+            if (isset($rule['date_to']) && !empty($rule['date_to'])) {
+                if (strtotime($rule['date_to']) < time()) {
+                    continue;
+                }
+            }
+            
+            // Verificar rol del usuario
+            if (!empty($rule['roles'])) {
+                $has_role = false;
+                foreach ($rule['roles'] as $role) {
+                    if (in_array($role, $user->roles)) {
+                        $has_role = true;
+                        break;
+                    }
+                }
+                if (!$has_role) {
+                    continue;
+                }
+            }
+            
+            $active_rules[] = $rule;
+        }
+        
+        // Ordenar por prioridad (menor = mayor prioridad)
+        usort($active_rules, function($a, $b) {
+            $priority_a = isset($a['priority']) ? intval($a['priority']) : 999;
+            $priority_b = isset($b['priority']) ? intval($b['priority']) : 999;
+            return $priority_a - $priority_b;
+        });
+        
+        return $active_rules;
+    }
+    
+    /**
+     * Obtiene el descuento aplicable a un producto
+     * Retorna: ['type' => 'percentage'|'fixed', 'value' => float, 'rule_name' => string]
+     */
+    private function get_product_discount($product_id) {
+        $active_rules = $this->get_active_rules_for_user();
+        
+        if (empty($active_rules)) {
+            return null;
+        }
+        
+        $product = wc_get_product($product_id);
+        if (!$product) {
+            return null;
+        }
+        
+        // Buscar la primera regla que aplique (ya están ordenadas por prioridad)
+        foreach ($active_rules as $rule) {
+            $applies = false;
+            
+            switch ($rule['apply_to']) {
+                case 'products':
+                    // Descuento por productos específicos
+                    if (in_array($product_id, $rule['target_ids'])) {
+                        $applies = true;
+                    }
+                    break;
+                    
+                case 'categories':
+                    // Descuento por categorías
+                    $product_categories = wp_get_post_terms($product_id, 'product_cat', ['fields' => 'ids']);
+                    if (array_intersect($rule['target_ids'], $product_categories)) {
+                        $applies = true;
+                    }
+                    break;
+                    
+                case 'tags':
+                    // Descuento por etiquetas
+                    $product_tags = wp_get_post_terms($product_id, 'product_tag', ['fields' => 'ids']);
+                    if (array_intersect($rule['target_ids'], $product_tags)) {
+                        $applies = true;
+                    }
+                    break;
+            }
+            
+            if ($applies) {
+                return [
+                    'type' => $rule['discount_type'],
+                    'value' => floatval($rule['discount_value']),
+                    'rule_name' => $rule['name'],
+                    'rule_id' => $rule['id']
+                ];
             }
         }
         
-        return $new_items;
+        return null;
     }
     
     /**
-     * Agregar endpoint personalizado
+     * Calcula el precio con descuento
      */
-    public function add_dashboard_endpoint() {
-        add_rewrite_endpoint('private-store', EP_ROOT | EP_PAGES);
-    }
-    
-    /**
-     * Renderizar página de tienda privada
-     */
-    public function render_private_store_page() {
-        if (!current_user_can('private_store_access')) {
-            wp_die(__('No tienes acceso a esta sección', 'mad-suite'));
+    private function calculate_discounted_price($original_price, $discount) {
+        if (!$discount) {
+            return $original_price;
         }
         
-        $this->logger->info('Usuario ' . get_current_user_id() . ' accedió a tienda privada');
+        if ($discount['type'] === 'percentage') {
+            return $original_price * (1 - ($discount['value'] / 100));
+        } else {
+            // Descuento fijo
+            $new_price = $original_price - $discount['value'];
+            return max(0, $new_price); // No puede ser negativo
+        }
+    }
+    
+    /**
+     * Aplica descuento al precio del producto
+     */
+    public function apply_discount_to_price($price, $product) {
+        if (is_admin() && !wp_doing_ajax()) {
+            return $price;
+        }
         
-        // Redirigir a la tienda con parámetro especial
-        $shop_url = add_query_arg('private_store', '1', wc_get_page_permalink('shop'));
-        wp_redirect($shop_url);
+        $product_id = $product->get_id();
+        $discount = $this->get_product_discount($product_id);
+        
+        if ($discount) {
+            // IMPORTANTE: Usar get_regular_price() en vez del parámetro $price
+            // porque $price puede venir vacío o con valor incorrecto
+            $original_price = floatval($product->get_regular_price());
+            
+            // Si no hay precio regular, intentar con el precio normal
+            if ($original_price <= 0) {
+                $original_price = floatval($price);
+            }
+            
+            // Si aún no hay precio, retornar sin modificar
+            if ($original_price <= 0) {
+                return $price;
+            }
+            
+            $discounted_price = $this->calculate_discounted_price($original_price, $discount);
+            
+            $this->log(sprintf(
+                'Precio modificado - ID: %d | Regla: %s | Tipo: %s %s | Original: %s | Final: %s',
+                $product_id,
+                $discount['rule_name'],
+                $discount['value'],
+                $discount['type'] === 'percentage' ? '%' : '€',
+                number_format($original_price, 2),
+                number_format($discounted_price, 2)
+            ));
+            
+            return $discounted_price;
+        }
+        
+        return $price;
+    }
+    
+    /**
+     * Aplica descuento en el carrito
+     * CRÍTICO: Este hook hace que funcione en carrito y checkout
+     */
+    public function apply_discount_to_cart($cart) {
+        if (is_admin() && !defined('DOING_AJAX')) {
+            return;
+        }
+        
+        // Evitar bucles infinitos
+        if (did_action('woocommerce_before_calculate_totals') >= 2) {
+            return;
+        }
+        
+        $this->log('=== APLICANDO DESCUENTOS AL CARRITO ===');
+        
+        $items_modified = 0;
+        
+        foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+            $product = $cart_item['data'];
+            $product_id = $product->get_id();
+            
+            // Si es variación, obtener el ID del padre para buscar descuento
+            $parent_id = $product->get_parent_id();
+            $search_id = $parent_id > 0 ? $parent_id : $product_id;
+            
+            $discount = $this->get_product_discount($search_id);
+            
+            if ($discount) {
+                // Obtener precio original
+                $original_price = floatval($product->get_regular_price());
+                
+                if ($original_price <= 0) {
+                    $this->log("Producto ID $product_id sin precio regular, omitiendo", 'WARNING');
+                    continue;
+                }
+                
+                // Calcular precio con descuento
+                $discounted_price = $this->calculate_discounted_price($original_price, $discount);
+                
+                // IMPORTANTE: set_price modifica el precio del producto en el carrito
+                $cart_item['data']->set_price($discounted_price);
+                
+                $items_modified++;
+                
+                $this->log(sprintf(
+                    'Carrito modificado - Producto: %s | Regla: %s | Original: %s | Final: %s | Cant: %d',
+                    $product->get_name(),
+                    $discount['rule_name'],
+                    number_format($original_price, 2),
+                    number_format($discounted_price, 2),
+                    $cart_item['quantity']
+                ));
+            }
+        }
+        
+        if ($items_modified > 0) {
+            $this->log("✓ {$items_modified} productos con descuento aplicado en carrito", 'SUCCESS');
+        } else {
+            $this->log('No se aplicaron descuentos en este carrito', 'INFO');
+        }
+    }
+    
+    /**
+     * Muestra el precio con descuento en el frontend
+     */
+    public function custom_price_html($price_html, $product) {
+        $product_id = $product->get_id();
+        
+        // Si es variación, buscar descuento en el padre también
+        $parent_id = $product->get_parent_id();
+        $search_id = $parent_id > 0 ? $parent_id : $product_id;
+        
+        $discount = $this->get_product_discount($search_id);
+        
+        if ($discount) {
+            // Obtener precio original
+            $original_price = floatval($product->get_regular_price());
+            
+            if ($original_price <= 0) {
+                return $price_html; // Sin modificar si no hay precio
+            }
+            
+            // Calcular precio con descuento
+            $discounted_price = $this->calculate_discounted_price($original_price, $discount);
+            
+            // Badge según tipo de descuento
+            if ($discount['type'] === 'percentage') {
+                $badge = sprintf(
+                    '<span class="private-shop-badge private-shop-percentage">-%s%%</span>', 
+                    number_format($discount['value'], 0)
+                );
+            } else {
+                $badge = sprintf(
+                    '<span class="private-shop-badge private-shop-fixed">-%s</span>', 
+                    wc_price($discount['value'])
+                );
+            }
+            
+            // HTML del precio
+            $price_html = sprintf(
+                '<del><span class="woocommerce-Price-amount amount">%s</span></del> ' .
+                '<ins><span class="woocommerce-Price-amount amount">%s</span></ins> ' .
+                '%s',
+                wc_price($original_price),
+                wc_price($discounted_price),
+                $badge
+            );
+            
+            $this->log(sprintf(
+                'HTML precio generado - ID: %d | Original: %s | Final: %s',
+                $product_id,
+                number_format($original_price, 2),
+                number_format($discounted_price, 2)
+            ));
+        }
+        
+        return $price_html;
+    }
+    
+    /**
+     * Añade menú de administración
+     */
+    public function add_admin_menu() {
+        add_submenu_page(
+            'mad-suite',
+            'Private Shop - Descuentos',
+            'Private Shop',
+            'manage_options',
+            'mad-private-shop',
+            [$this, 'render_admin_page']
+        );
+    }
+    
+    /**
+     * Renderiza página de administración
+     */
+    public function render_admin_page() {
+        $action = isset($_GET['action']) ? $_GET['action'] : 'list';
+        
+        switch ($action) {
+            case 'edit':
+            case 'new':
+                include __DIR__ . '/views/edit-rule.php';
+                break;
+            default:
+                include __DIR__ . '/views/rules-list.php';
+                break;
+        }
+    }
+    
+    /**
+     * Guarda una regla de descuento
+     */
+    public function save_discount_rule() {
+        // Verificar nonce y permisos
+        if (!isset($_POST['private_shop_nonce']) || 
+            !wp_verify_nonce($_POST['private_shop_nonce'], 'save_private_shop_rule') ||
+            !current_user_can('manage_options')) {
+            wp_die('Error de seguridad');
+        }
+        
+        $this->log('=== GUARDANDO REGLA DE DESCUENTO ===');
+        
+        $rules = $this->get_discount_rules();
+        
+        // Obtener o crear ID
+        $rule_id = isset($_POST['rule_id']) && !empty($_POST['rule_id']) 
+            ? sanitize_text_field($_POST['rule_id']) 
+            : uniqid('rule_');
+        
+        // Construir regla
+        $rule = [
+            'id' => $rule_id,
+            'name' => sanitize_text_field($_POST['rule_name']),
+            'enabled' => isset($_POST['rule_enabled']),
+            'discount_type' => sanitize_text_field($_POST['discount_type']),
+            'discount_value' => floatval($_POST['discount_value']),
+            'apply_to' => sanitize_text_field($_POST['apply_to']),
+            'target_ids' => isset($_POST['target_ids']) ? array_map('intval', $_POST['target_ids']) : [],
+            'roles' => isset($_POST['roles']) ? array_map('sanitize_text_field', $_POST['roles']) : [],
+            'priority' => isset($_POST['priority']) ? intval($_POST['priority']) : 10,
+            'date_from' => sanitize_text_field($_POST['date_from'] ?? ''),
+            'date_to' => sanitize_text_field($_POST['date_to'] ?? ''),
+        ];
+        
+        $rules[$rule_id] = $rule;
+        update_option('mad_private_shop_rules', $rules);
+        
+        $this->log(sprintf('Regla guardada: %s | Tipo: %s %s | Aplica a: %s', 
+            $rule['name'], 
+            $rule['discount_value'], 
+            $rule['discount_type'],
+            $rule['apply_to']
+        ), 'SUCCESS');
+        
+        wp_redirect(add_query_arg([
+            'page' => 'mad-private-shop',
+            'saved' => 'true'
+        ], admin_url('admin.php')));
         exit;
     }
     
     /**
-     * Renderizar página de configuración
+     * Elimina una regla
      */
-    public function render_settings_page() {
-        $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'general';
-        
-        include $this->module_path . 'views/settings.php';
-    }
-    
-/**
- * Renderizar página de importador CSV
- */
-public function render_importer_page() {
-    include $this->module_path . 'views/csv-importer-simple.php';
-}
-
-    /**
-     * AJAX: Guardar descuento
-     */
-    public function ajax_save_discount() {
-        check_ajax_referer('mads_private_store', 'nonce');
-        
-        if (!current_user_can('manage_woocommerce')) {
-            wp_send_json_error(['message' => __('Permisos insuficientes', 'mad-suite')]);
+    public function delete_discount_rule() {
+        if (!isset($_GET['nonce']) || 
+            !wp_verify_nonce($_GET['nonce'], 'delete_rule') ||
+            !current_user_can('manage_options')) {
+            wp_die('Error de seguridad');
         }
         
-        $discount_id = isset($_POST['discount_id']) ? intval($_POST['discount_id']) : 0;
-        $discount_data = [
-            'type' => sanitize_text_field($_POST['type']),
-            'target' => sanitize_text_field($_POST['target']),
-            'amount' => floatval($_POST['amount']),
-            'amount_type' => sanitize_text_field($_POST['amount_type'])
-        ];
+        $rule_id = sanitize_text_field($_GET['rule_id']);
+        $rules = $this->get_discount_rules();
         
-        $discounts = get_option('mads_ps_discounts', []);
-        
-        if ($discount_id > 0) {
-            $discounts[$discount_id] = $discount_data;
-            $this->logger->info("Descuento actualizado: ID {$discount_id}", $discount_data);
-        } else {
-            $discounts[] = $discount_data;
-            $this->logger->info("Nuevo descuento creado", $discount_data);
+        if (isset($rules[$rule_id])) {
+            $rule_name = $rules[$rule_id]['name'];
+            unset($rules[$rule_id]);
+            update_option('mad_private_shop_rules', $rules);
+            $this->log("Regla eliminada: $rule_name", 'INFO');
         }
         
-        update_option('mads_ps_discounts', $discounts);
-        
-        wp_send_json_success([
-            'message' => __('Descuento guardado correctamente', 'mad-suite'),
-            'discounts' => $discounts
-        ]);
+        wp_redirect(add_query_arg([
+            'page' => 'mad-private-shop',
+            'deleted' => 'true'
+        ], admin_url('admin.php')));
+        exit;
     }
     
     /**
-     * AJAX: Eliminar descuento
+     * Activa/desactiva una regla
      */
-    public function ajax_delete_discount() {
-        check_ajax_referer('mads_private_store', 'nonce');
-        
-        if (!current_user_can('manage_woocommerce')) {
-            wp_send_json_error(['message' => __('Permisos insuficientes', 'mad-suite')]);
+    public function toggle_discount_rule() {
+        if (!isset($_GET['nonce']) || 
+            !wp_verify_nonce($_GET['nonce'], 'toggle_rule') ||
+            !current_user_can('manage_options')) {
+            wp_die('Error de seguridad');
         }
         
-        $discount_id = intval($_POST['discount_id']);
-        $discounts = get_option('mads_ps_discounts', []);
+        $rule_id = sanitize_text_field($_GET['rule_id']);
+        $rules = $this->get_discount_rules();
         
-        if (isset($discounts[$discount_id])) {
-            $this->logger->info("Descuento eliminado: ID {$discount_id}", $discounts[$discount_id]);
-            unset($discounts[$discount_id]);
-            update_option('mads_ps_discounts', array_values($discounts));
+        if (isset($rules[$rule_id])) {
+            $rules[$rule_id]['enabled'] = !$rules[$rule_id]['enabled'];
+            update_option('mad_private_shop_rules', $rules);
             
-            wp_send_json_success([
-                'message' => __('Descuento eliminado', 'mad-suite')
-            ]);
+            $status = $rules[$rule_id]['enabled'] ? 'activada' : 'desactivada';
+            $this->log("Regla {$rules[$rule_id]['name']} $status", 'INFO');
         }
         
-        wp_send_json_error(['message' => __('Descuento no encontrado', 'mad-suite')]);
+        wp_redirect(add_query_arg([
+            'page' => 'mad-private-shop'
+        ], admin_url('admin.php')));
+        exit;
+    }
+    
+    public function get_log_url() {
+        $upload_dir = wp_upload_dir();
+        return $upload_dir['baseurl'] . '/mad-suite-logs/private-shop-' . date('Y-m-d') . '.log';
     }
     
     /**
-     * AJAX: Guardar configuración general
+     * Añade estilos CSS para los badges de descuento
      */
-    public function ajax_save_general_settings() {
-        check_ajax_referer('mads_private_store', 'nonce');
-        
-        if (!current_user_can('manage_woocommerce')) {
-            wp_send_json_error(['message' => __('Permisos insuficientes', 'mad-suite')]);
+    public function add_frontend_styles() {
+        ?>
+        <style>
+        .private-shop-badge {
+            display: inline-block;
+            background: #4CAF50;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
         }
-        
-        $settings = [
-            'role_name' => sanitize_text_field($_POST['role_name']),
-            'redirect_after_login' => isset($_POST['redirect_after_login']) ? 1 : 0,
-            'show_vip_badge' => isset($_POST['show_vip_badge']) ? 1 : 0,
-            'enable_logging' => isset($_POST['enable_logging']) ? 1 : 0,
-            'custom_css' => wp_strip_all_tags($_POST['custom_css'])
-        ];
-        
-        foreach ($settings as $key => $value) {
-            update_option('mads_ps_' . $key, $value);
+        .private-shop-badge.private-shop-percentage {
+            background: #2196F3;
         }
-        
-        // Actualizar nombre del rol
-        if (!empty($settings['role_name'])) {
-            UserRole::instance()->update_role_name($settings['role_name']);
+        .private-shop-badge.private-shop-fixed {
+            background: #FF9800;
         }
-        
-        $this->logger->info('Configuración general actualizada', $settings);
-        
-        wp_send_json_success([
-            'message' => __('Configuración guardada correctamente', 'mad-suite')
-        ]);
-    }
-    
-    /**
-     * AJAX: Limpiar todos los descuentos
-     */
-    public function ajax_clear_all_discounts() {
-        check_ajax_referer('mads_private_store', 'nonce');
-        
-        if (!current_user_can('manage_woocommerce')) {
-            wp_send_json_error(['message' => __('Permisos insuficientes', 'mad-suite')]);
-        }
-        
-        $discounts = get_option('mads_ps_discounts', []);
-        $count = count($discounts);
-        
-        delete_option('mads_ps_discounts');
-        
-        $this->logger->warning("Todos los descuentos eliminados", [
-            'count' => $count,
-            'user_id' => get_current_user_id()
-        ]);
-        
-        wp_send_json_success([
-            'message' => sprintf(__('%d descuentos eliminados correctamente', 'mad-suite'), $count)
-        ]);
-    }
-    
-    /**
-     * AJAX: Restablecer configuración
-     */
-    public function ajax_reset_settings() {
-        check_ajax_referer('mads_private_store', 'nonce');
-        
-        if (!current_user_can('manage_woocommerce')) {
-            wp_send_json_error(['message' => __('Permisos insuficientes', 'mad-suite')]);
-        }
-        
-        $options = [
-            'mads_ps_role_name',
-            'mads_ps_redirect_after_login',
-            'mads_ps_show_vip_badge',
-            'mads_ps_enable_logging',
-            'mads_ps_custom_css'
-        ];
-        
-        foreach ($options as $option) {
-            delete_option($option);
-        }
-        
-        $this->logger->warning("Configuración restablecida a valores predeterminados", [
-            'user_id' => get_current_user_id()
-        ]);
-        
-        wp_send_json_success([
-            'message' => __('Configuración restablecida correctamente', 'mad-suite')
-        ]);
-    }
-    
-    /**
-     * AJAX: Descargar log
-     */
-    public function ajax_download_log() {
-        check_ajax_referer('mads_private_store', 'nonce');
-        
-        if (!current_user_can('manage_woocommerce')) {
-            wp_die(__('Permisos insuficientes', 'mad-suite'));
-        }
-        
-        $logger = new Logger('private-store');
-        $logger->download_log();
-    }
-    
-    /**
-     * AJAX: Limpiar log actual
-     */
-    public function ajax_clear_log() {
-        check_ajax_referer('mads_private_store', 'nonce');
-        
-        if (!current_user_can('manage_woocommerce')) {
-            wp_send_json_error(['message' => __('Permisos insuficientes', 'mad-suite')]);
-        }
-        
-        $logger = new Logger('private-store');
-        $result = $logger->clear_current_log();
-        
-        if ($result) {
-            wp_send_json_success([
-                'message' => __('Log limpiado correctamente', 'mad-suite')
-            ]);
-        } else {
-            wp_send_json_error([
-                'message' => __('No se pudo limpiar el log', 'mad-suite')
-            ]);
-        }
-    }
-    
-    /**
-     * Verificar si estamos en página de tienda privada
-     */
-    private function is_private_store_page() {
-        return isset($_GET['private_store']) || get_query_var('private-store');
-    }
-    
-    /**
-     * Get module path
-     */
-    public function get_path($file = '') {
-        return $this->module_path . $file;
-    }
-    
-    /**
-     * Get module URL
-     */
-    public function get_url($file = '') {
-        return $this->module_url . $file;
+        </style>
+        <?php
     }
 }
 
