@@ -20,11 +20,13 @@
     
     $(document).ready(function() {
         
-        // Verificar que madsPrivateStore está disponible
-        if (typeof madsPrivateStore === 'undefined') {
-            console.error('madsPrivateStore no está definido. El módulo no funcionará correctamente.');
+        // Verificar que las variables están disponibles
+        if (typeof madsPrivateStoreUsers === 'undefined') {
+            console.error('❌ madsPrivateStoreUsers no está definido');
             return;
         }
+        
+        console.log('✅ Users Tab JS cargado correctamente');
         
         // ==========================================
         // MODAL: Abrir/Cerrar
@@ -32,6 +34,7 @@
         
         // Abrir modal agregar usuarios
         $('#add-users-btn, #add-first-user-btn').on('click', function() {
+            console.log('🔵 Abriendo modal agregar usuarios');
             selectedUsers = [];
             $('#selected-users-list').empty();
             $('.selected-users-wrapper').hide();
@@ -43,6 +46,7 @@
         
         // Abrir modal importar CSV
         $('#import-csv-btn').on('click', function() {
+            console.log('🔵 Abriendo modal importar CSV');
             selectedFile = null;
             $('#csv-file-input').val('');
             $('#selected-file-name').hide();
@@ -91,48 +95,41 @@
         });
         
         function searchUsers(search) {
+            console.log('🔍 Buscando usuarios:', search);
+            
             $.ajax({
-                url: madsPrivateStore.ajaxUrl,
+                url: madsPrivateStoreUsers.ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'mads_ps_search_users',
-                    nonce: madsPrivateStore.nonce,
+                    nonce: madsPrivateStoreUsers.nonce,
                     search: search
                 },
                 success: function(response) {
                     $('.search-loading').hide();
                     
                     if (response.success && response.data.users) {
-                        renderSearchResults(response.data.users);
+                        renderUserResults(response.data.users);
                     } else {
                         $('#user-search-results').html(
-                            '<div style="padding: 20px; text-align: center; color: #666;">' +
-                            'No se encontraron usuarios' +
-                            '</div>'
+                            '<p style="padding: 15px; text-align: center; color: #666;">No se encontraron usuarios</p>'
                         );
                     }
                 },
-                error: function() {
+                error: function(xhr, status, error) {
                     $('.search-loading').hide();
-                    $('#user-search-results').html(
-                        '<div style="padding: 20px; text-align: center; color: #dc3232;">' +
-                        'Error en la búsqueda' +
-                        '</div>'
-                    );
+                    console.error('❌ Error en búsqueda:', error);
+                    showNotice('Error al buscar usuarios', 'error');
                 }
             });
         }
         
-        function renderSearchResults(users) {
+        function renderUserResults(users) {
             const $results = $('#user-search-results');
             $results.empty();
             
             if (users.length === 0) {
-                $results.html(
-                    '<div style="padding: 20px; text-align: center; color: #666;">' +
-                    'No se encontraron usuarios' +
-                    '</div>'
-                );
+                $results.html('<p style="padding: 15px; text-align: center; color: #666;">No se encontraron usuarios</p>');
                 return;
             }
             
@@ -140,34 +137,21 @@
                 const isSelected = selectedUsers.some(u => u.id === user.id);
                 const isVip = user.is_vip;
                 
-                let statusHtml = '';
-                let itemClass = 'user-result-item';
+                const $item = $('<div>')
+                    .addClass('user-result-item')
+                    .toggleClass('selected', isSelected)
+                    .toggleClass('is-vip', isVip)
+                    .attr('data-user-id', user.id)
+                    .html(`
+                        <div class="user-result-name">${escapeHtml(user.display_name)}</div>
+                        <div class="user-result-email">${escapeHtml(user.email)}</div>
+                        ${isVip ? '<div class="user-result-status is-vip">⭐ Ya es VIP</div>' : ''}
+                    `);
                 
-                if (isVip) {
-                    statusHtml = '<span class="user-result-status is-vip">Ya es VIP</span>';
-                    itemClass += ' is-vip';
-                } else if (isSelected) {
-                    statusHtml = '<span class="user-result-status" style="color: #2196F3;">✓ Seleccionado</span>';
-                }
-                
-                const $item = $('<div>', {
-                    class: itemClass,
-                    'data-user-id': user.id,
-                    'data-username': user.display_name,
-                    'data-email': user.email,
-                    html: `
-                        <div class="user-result-info">
-                            <div class="user-result-name">${escapeHtml(user.display_name)}</div>
-                            <div class="user-result-email">${escapeHtml(user.email)}</div>
-                            ${statusHtml}
-                        </div>
-                    `
-                });
-                
-                // Solo permitir click si no es VIP
                 if (!isVip) {
                     $item.on('click', function() {
                         toggleUserSelection(user);
+                        $(this).toggleClass('selected');
                     });
                 }
                 
@@ -175,14 +159,16 @@
             });
         }
         
+        // ==========================================
+        // GESTIÓN DE USUARIOS SELECCIONADOS
+        // ==========================================
+        
         function toggleUserSelection(user) {
             const index = selectedUsers.findIndex(u => u.id === user.id);
             
             if (index > -1) {
-                // Remover
                 selectedUsers.splice(index, 1);
             } else {
-                // Agregar
                 selectedUsers.push(user);
             }
             
@@ -191,30 +177,31 @@
         
         function updateSelectedUsers() {
             const $list = $('#selected-users-list');
-            $list.empty();
+            const $wrapper = $('.selected-users-wrapper');
             
             if (selectedUsers.length === 0) {
-                $('.selected-users-wrapper').hide();
+                $wrapper.hide();
                 $('#confirm-add-users').prop('disabled', true);
                 return;
             }
             
-            $('.selected-users-wrapper').show();
-            $('#confirm-add-users').prop('disabled', false);
+            $wrapper.show();
+            $list.empty();
             
             selectedUsers.forEach(function(user) {
-                const $chip = $('<div>', {
-                    class: 'selected-user-chip',
-                    html: `
-                        ${escapeHtml(user.display_name)}
-                        <span class="remove-chip" data-user-id="${user.id}">✕</span>
-                    `
-                });
+                const $chip = $('<div>')
+                    .addClass('selected-user-chip')
+                    .html(`
+                        <span>${escapeHtml(user.display_name)}</span>
+                        <span class="remove-chip" data-user-id="${user.id}">×</span>
+                    `);
                 
                 $list.append($chip);
             });
             
-            // Handler para remover chips
+            $('#confirm-add-users').prop('disabled', false);
+            
+            // Handler para remover
             $('.remove-chip').on('click', function() {
                 const userId = parseInt($(this).data('user-id'));
                 const index = selectedUsers.findIndex(u => u.id === userId);
@@ -248,15 +235,19 @@
             
             const userIds = selectedUsers.map(u => u.id);
             
+            console.log('📤 Enviando usuarios para agregar:', userIds);
+            
             $.ajax({
-                url: madsPrivateStore.ajaxUrl,
+                url: madsPrivateStoreUsers.ajaxUrl,
                 type: 'POST',
                 data: {
                     action: 'mads_ps_add_vip_users_bulk',
-                    nonce: madsPrivateStore.nonce,
+                    nonce: madsPrivateStoreUsers.nonce,
                     user_ids: userIds
                 },
                 success: function(response) {
+                    console.log('✅ Respuesta agregar usuarios:', response);
+                    
                     if (response.success) {
                         showNotice(response.data.message, 'success');
                         $('#add-users-modal').fadeOut(200);
@@ -274,7 +265,8 @@
                         showNotice(response.data.message || 'Error al agregar usuarios', 'error');
                     }
                 },
-                error: function() {
+                error: function(xhr, status, error) {
+                    console.error('❌ Error AJAX:', error);
                     showNotice('Error de conexión', 'error');
                 },
                 complete: function() {
@@ -354,22 +346,40 @@
             
             const formData = new FormData();
             formData.append('action', 'mads_ps_import_users_csv');
-            formData.append('nonce', madsPrivateStore.nonce);
+            formData.append('nonce', madsPrivateStoreUsers.nonce);
             formData.append('csv_file', selectedFile);
             
+            console.log('📤 Enviando CSV para importar');
+            
             $.ajax({
-  url: madsPrivateStore.ajaxUrl,   // ✅ usar la URL localizada
-  method: 'POST',
-  data: {
-    action: 'mads_ps_import_users',
-    nonce: madsPrivateStore.nonce,
-    file: file
-  },
-  success: function(response) {
-    console.log(response);
-  }
-});
-
+                url: madsPrivateStoreUsers.ajaxUrl,
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                success: function(response) {
+                    console.log('✅ Respuesta importar CSV:', response);
+                    
+                    if (response.success) {
+                        renderImportResults(response.data.results);
+                        showNotice('Importación completada', 'success');
+                        
+                        // Recargar después de 3 segundos
+                        setTimeout(function() {
+                            location.reload();
+                        }, 3000);
+                    } else {
+                        showNotice(response.data.message || 'Error al importar', 'error');
+                    }
+                },
+                error: function(xhr, status, error) {
+                    console.error('❌ Error AJAX:', error);
+                    showNotice('Error de conexión', 'error');
+                },
+                complete: function() {
+                    $button.prop('disabled', false).html(originalText);
+                }
+            });
         });
         
         function renderImportResults(results) {
@@ -401,96 +411,63 @@
         // ==========================================
         
         $('#export-csv-btn').on('click', function() {
-            const $button = $(this);
-            const originalHtml = $button.html();
+            console.log('📥 Exportando usuarios VIP a CSV');
             
-            $button.prop('disabled', true).html(
-                '<span class="dashicons dashicons-update-alt spin"></span> Exportando...'
-            );
+            // Crear un formulario temporal
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = madsPrivateStoreUsers.ajaxUrl;
             
-            // Crear form temporal para descarga
-            const form = $('<form>', {
-                method: 'POST',
-                action: madsPrivateStore.ajaxUrl,
-                style: 'display: none;'
-            });
+            const actionInput = document.createElement('input');
+            actionInput.type = 'hidden';
+            actionInput.name = 'action';
+            actionInput.value = 'mads_ps_export_vip_users';
+            form.appendChild(actionInput);
             
-            form.append($('<input>', {
-                type: 'hidden',
-                name: 'action',
-                value: 'mads_ps_export_vip_users'
-            }));
+            const nonceInput = document.createElement('input');
+            nonceInput.type = 'hidden';
+            nonceInput.name = 'nonce';
+            nonceInput.value = madsPrivateStoreUsers.nonce;
+            form.appendChild(nonceInput);
             
-            form.append($('<input>', {
-                type: 'hidden',
-                name: 'nonce',
-                value: madsPrivateStore.nonce
-            }));
-            
-            $('body').append(form);
+            document.body.appendChild(form);
             form.submit();
-            form.remove();
-            
-            // Restaurar botón después de 2 segundos
-            setTimeout(function() {
-                $button.prop('disabled', false).html(originalHtml);
-            }, 2000);
-        });
-        
-        // ==========================================
-        // REMOVER USUARIO VIP
-        // ==========================================
-        
-        $(document).on('click', '.remove-vip-user', function() {
-            const userId = $(this).data('user-id');
-            const username = $(this).data('username');
-            
-            if (!confirm(`¿Quitar acceso VIP a ${username}?`)) {
-                return;
-            }
-            
-            // Redirigir usando admin-post.php
-            const nonceValue = madsPrivateStore.nonce;
-            const adminPostUrl = madsPrivateStore.ajaxUrl.replace('/admin-ajax.php', '/admin-post.php');
-            
-            window.location.href = adminPostUrl + 
-                '?action=mads_toggle_vip_access' +
-                '&user_id=' + userId +
-                '&toggle=remove' +
-                '&_wpnonce=' + nonceValue;
+            document.body.removeChild(form);
         });
         
         // ==========================================
         // HELPERS
         // ==========================================
         
-        function showNotice(message, type = 'success') {
-            const noticeClass = type === 'success' ? 'notice-success' : 'notice-error';
-            const $notice = $('<div class="notice ' + noticeClass + ' is-dismissible"><p>' + message + '</p></div>');
+        function showNotice(message, type) {
+            const noticeClass = type === 'error' ? 'notice-error' : 'notice-success';
+            const $notice = $('<div>')
+                .addClass(`notice ${noticeClass} is-dismissible`)
+                .html(`<p>${escapeHtml(message)}</p>`);
             
-            $('.mads-private-store-settings h1').after($notice);
+            $('.wrap').prepend($notice);
             
-            // Auto dismiss después de 5 segundos
+            // Auto-dismiss después de 5 segundos
             setTimeout(function() {
                 $notice.fadeOut(function() {
                     $(this).remove();
                 });
             }, 5000);
-            
-            // Scroll to top
-            $('html, body').animate({ scrollTop: 0 }, 300);
         }
         
         function showResultsDetails(details) {
             if (!details || details.length === 0) return;
             
-            let html = '<div class="notice notice-info" style="margin-top: 20px;"><h4>Detalles:</h4><ul>';
-            details.forEach(function(detail) {
-                html += '<li>' + escapeHtml(detail) + '</li>';
-            });
-            html += '</ul></div>';
+            const $notice = $('<div>')
+                .addClass('notice notice-info is-dismissible')
+                .html(`
+                    <p><strong>Detalles:</strong></p>
+                    <ul style="margin: 5px 0; padding-left: 20px;">
+                        ${details.map(d => `<li>${escapeHtml(d)}</li>`).join('')}
+                    </ul>
+                `);
             
-            $('.mads-private-store-settings h1').after(html);
+            $('.wrap').prepend($notice);
         }
         
         function escapeHtml(text) {
@@ -501,23 +478,9 @@
                 '"': '&quot;',
                 "'": '&#039;'
             };
-            return text.replace(/[&<>"']/g, m => map[m]);
+            return String(text).replace(/[&<>"']/g, function(m) { return map[m]; });
         }
         
     });
-    
-    // CSS para animación de spin
-    $('<style>')
-        .prop('type', 'text/css')
-        .html(`
-            @keyframes spin {
-                from { transform: rotate(0deg); }
-                to { transform: rotate(360deg); }
-            }
-            .spin {
-                animation: spin 1s linear infinite;
-            }
-        `)
-        .appendTo('head');
     
 })(jQuery);

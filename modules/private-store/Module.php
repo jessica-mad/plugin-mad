@@ -97,61 +97,90 @@ $this->module_url  = trailingslashit( plugin_dir_url(__FILE__) );
      * Agregar menú en admin
      */
     public function add_admin_menu() {
-        add_submenu_page(
-            'mad-suite',
-            __('Tienda Privada', 'mad-suite'),
-            __('Tienda Privada', 'mad-suite'),
-            'manage_woocommerce',
-            'mad-suite-private-store',
-            [$this, 'render_settings_page']
-        );
-    }
+    add_submenu_page(
+        'mad-suite',
+        __('Tienda Privada', 'mad-suite'),
+        __('Tienda Privada', 'mad-suite'),
+        'manage_woocommerce',
+        'mad-suite-private-store',
+        [$this, 'render_settings_page']
+    );
     
+    // NUEVO: Submenú importador
+    add_submenu_page(
+        'mad-suite',
+        __('Importar Usuarios VIP', 'mad-suite'),
+        __('↳ Importar VIP', 'mad-suite'),
+        'manage_woocommerce',
+        'mad-suite-private-store-import',
+        [$this, 'render_importer_page']
+    );
+}
+    
+
     /**
      * Cargar assets del admin
      */
     public function enqueue_admin_assets($hook) {
-        if ('mad-suite_page_mad-suite-private-store' !== $hook) {
-            return;
-        }
-        
-        // CSS Principal
-        wp_enqueue_style(
-            'mads-private-store-admin',
-            $this->module_url . 'assets/admin.css',
-            [],
-            MAD_SUITE_VERSION
-        );
-        
-        // JS Principal
+    if ('mad-suite_page_mad-suite-private-store' !== $hook) {
+        return;
+    }
+    
+    // Obtener tab actual
+    $active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'general';
+    
+    // CSS Principal
+    wp_enqueue_style(
+        'mads-private-store-admin',
+        $this->module_url . 'assets/admin.css',
+        [],
+        MAD_SUITE_VERSION
+    );
+    
+    // JS Principal
+    wp_enqueue_script(
+        'mads-private-store-admin',
+        $this->module_url . 'assets/admin.js',
+        ['jquery', 'wp-util'],
+        MAD_SUITE_VERSION,
+        true
+    );
+    
+    // Localizar script principal
+    wp_localize_script('mads-private-store-admin', 'madsPrivateStore', [
+        'ajaxUrl' => admin_url('admin-ajax.php'),
+        'nonce' => wp_create_nonce('mads_private_store'),
+        'strings' => [
+            'confirmDelete' => __('¿Estás seguro de eliminar este descuento?', 'mad-suite'),
+            'saved' => __('Guardado correctamente', 'mad-suite'),
+            'error' => __('Error al guardar', 'mad-suite')
+        ]
+    ]);
+    
+    // JS específico para Users Tab
+    if ($active_tab === 'users') {
         wp_enqueue_script(
-            'mads-private-store-admin',
-            $this->module_url . 'assets/admin.js',
-            ['jquery', 'wp-util'],
+            'mads-private-store-users-tab',
+            $this->module_url . 'assets/users-tab.js',
+            ['jquery', 'mads-private-store-admin'],
             MAD_SUITE_VERSION,
             true
         );
         
-        // JS para Users Tab
-        wp_enqueue_script(
-    'mads-private-store-users-tab',
-    $this->module_url . 'assets/users-tab.js',
-    ['jquery'],  // QUITA LA DEPENDENCIA de mads-private-store-admin
-    time(),      // FUERZA A NO USAR CACHE
-    true
-);
-        
-        // IMPORTANTE: Localizar DESPUÉS de registrar los scripts
-        wp_localize_script('mads-private-store-users-tab', 'madsPrivateStore', [
-    'ajaxUrl' => admin_url('admin-ajax.php'),
-    'nonce' => wp_create_nonce('mads_private_store'),
-    'strings' => [
-        'confirmDelete' => __('¿Estás seguro de eliminar este descuento?', 'mad-suite'),
-        'saved' => __('Guardado correctamente', 'mad-suite'),
-        'error' => __('Error al guardar', 'mad-suite')
-    ]
-]);
+        // Localizar para users tab (reutiliza las mismas variables)
+        wp_localize_script('mads-private-store-users-tab', 'madsPrivateStoreUsers', [
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('mads_private_store'),
+            'i18n' => [
+                'importing' => __('Importando...', 'mad-suite'),
+                'searching' => __('Buscando...', 'mad-suite'),
+                'adding' => __('Agregando usuarios...', 'mad-suite'),
+                'done' => __('Completado', 'mad-suite'),
+                'error' => __('Error', 'mad-suite')
+            ]
+        ]);
     }
+}
     
     /**
      * Cargar assets del frontend
@@ -224,6 +253,13 @@ $this->module_url  = trailingslashit( plugin_dir_url(__FILE__) );
         include $this->module_path . 'views/settings.php';
     }
     
+/**
+ * Renderizar página de importador CSV
+ */
+public function render_importer_page() {
+    include $this->module_path . 'views/csv-importer-simple.php';
+}
+
     /**
      * AJAX: Guardar descuento
      */
