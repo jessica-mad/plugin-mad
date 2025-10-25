@@ -25,6 +25,9 @@ class Module {
     
     private static $instance = null;
     private $log_file;
+    private $active_rules_cache = null;
+    private $processing_cart = false;
+    private $price_cache = [];
     
     public static function instance() {
         if (self::$instance === null) {
@@ -55,12 +58,15 @@ class Module {
     }
     
     /**
-     * Log con formato legible
+     * Log con formato legible (optimizado)
      */
     private function log($message, $level = 'INFO') {
-        $timestamp = date('Y-m-d H:i:s');
-        $formatted = sprintf("[%s] [%s] %s\n", $timestamp, $level, $message);
-        error_log($formatted, 3, $this->log_file);
+        // Solo logear en modo debug o eventos críticos
+        if ($level === 'SUCCESS' || $level === 'ERROR' || $level === 'WARNING') {
+            $timestamp = date('Y-m-d H:i:s');
+            $formatted = sprintf("[%s] [%s] %s\n", $timestamp, $level, $message);
+            error_log($formatted, 3, $this->log_file);
+        }
     }
     
     /**
@@ -99,10 +105,16 @@ class Module {
     }
     
     /**
-     * Obtiene reglas activas para el usuario actual
+     * Obtiene reglas activas para el usuario actual (con caché)
      */
     private function get_active_rules_for_user() {
+        // Usar caché si ya se calculó en esta request
+        if ($this->active_rules_cache !== null) {
+            return $this->active_rules_cache;
+        }
+        
         if (!is_user_logged_in()) {
+            $this->active_rules_cache = [];
             return [];
         }
         
@@ -151,6 +163,9 @@ class Module {
             $priority_b = isset($b['priority']) ? intval($b['priority']) : 999;
             return $priority_a - $priority_b;
         });
+        
+        // Guardar en caché para esta request
+        $this->active_rules_cache = $active_rules;
         
         return $active_rules;
     }
@@ -231,46 +246,57 @@ class Module {
     }
     
     /**
-     * Aplica descuento al precio del producto
+     * Aplica descuento al precio del producto (con caché y protección)
      */
     public function apply_discount_to_price($price, $product) {
+        // Solo en frontend
         if (is_admin() && !wp_doing_ajax()) {
             return $price;
         }
         
+        // Evitar recursión infinita
+        static $processing = [];
         $product_id = $product->get_id();
+        
+        if (isset($processing[$product_id])) {
+            return $price;
+        }
+        
+        $processing[$product_id] = true;
+        
+        // Usar caché si ya calculamos este precio
+        if (isset($this->price_cache[$product_id])) {
+            unset($processing[$product_id]);
+            return $this->price_cache[$product_id];
+        }
+        
         $discount = $this->get_product_discount($product_id);
         
         if ($discount) {
-            // IMPORTANTE: Usar get_regular_price() en vez del parámetro $price
-            // porque $price puede venir vacío o con valor incorrecto
+            // Usar get_regular_price() del producto
             $original_price = floatval($product->get_regular_price());
             
-            // Si no hay precio regular, intentar con el precio normal
+            // Fallback al parámetro $price
             if ($original_price <= 0) {
                 $original_price = floatval($price);
             }
             
-            // Si aún no hay precio, retornar sin modificar
+            // Validación de precio válido
             if ($original_price <= 0) {
+                unset($processing[$product_id]);
                 return $price;
             }
             
             $discounted_price = $this->calculate_discounted_price($original_price, $discount);
             
-            $this->log(sprintf(
-                'Precio modificado - ID: %d | Regla: %s | Tipo: %s %s | Original: %s | Final: %s',
-                $product_id,
-                $discount['rule_name'],
-                $discount['value'],
-                $discount['type'] === 'percentage' ? '%' : '€',
-                number_format($original_price, 2),
-                number_format($discounted_price, 2)
-            ));
+            // Guardar en caché
+            $this->price_cache[$product_id] = $discounted_price;
             
+            unset($processing[$product_id]);
             return $discounted_price;
         }
         
+        unset($processing[$product_id]);
         return $price;
     }
     
@@ -279,16 +305,26 @@ class Module {
      * CRÍTICO: Este hook hace que funcione en carrito y checkout
      */
     public function apply_discount_to_cart($cart) {
+        // Solo en frontend
         if (is_admin() && !defined('DOING_AJAX')) {
             return;
         }
         
-        // Evitar bucles infinitos
-        if (did_action('woocommerce_before_calculate_totals') >= 2) {
+        // CRÍTICO: Evitar ejecución múltiple
+        if ($this->processing_cart) {
             return;
         }
         
-        $this->log('=== APLICANDO DESCUENTOS AL CARRITO ===');
+        $this->processing_cart = true;
+        
+        // Evitar bucles infinitos adicional
+        static $run_count = 0;
+        $run_count++;
+        
+        if ($run_count > 1) {
+            $this->processing_cart = false;
+            return;
+        }
         
         $items_modified = 0;
         
@@ -307,7 +343,6 @@ class Module {
                 $original_price = floatval($product->get_regular_price());
                 
                 if ($original_price <= 0) {
-                    $this->log("Producto ID $product_id sin precio regular, omitiendo", 'WARNING');
                     continue;
                 }
                 
@@ -318,30 +353,25 @@ class Module {
                 $cart_item['data']->set_price($discounted_price);
                 
                 $items_modified++;
-                
-                $this->log(sprintf(
-                    'Carrito modificado - Producto: %s | Regla: %s | Original: %s | Final: %s | Cant: %d',
-                    $product->get_name(),
-                    $discount['rule_name'],
-                    number_format($original_price, 2),
-                    number_format($discounted_price, 2),
-                    $cart_item['quantity']
-                ));
             }
         }
         
-        if ($items_modified > 0) {
-            $this->log("✓ {$items_modified} productos con descuento aplicado en carrito", 'SUCCESS');
-        } else {
-            $this->log('No se aplicaron descuentos en este carrito', 'INFO');
-        }
+        $this->processing_cart = false;
     }
     
     /**
-     * Muestra el precio con descuento en el frontend
+     * Muestra el precio con descuento en el frontend (simplificado)
      */
     public function custom_price_html($price_html, $product) {
+        // Evitar recursión
+        static $processing = [];
         $product_id = $product->get_id();
+        
+        if (isset($processing[$product_id])) {
+            return $price_html;
+        }
+        
+        $processing[$product_id] = true;
         
         // Si es variación, buscar descuento en el padre también
         $parent_id = $product->get_parent_id();
@@ -353,44 +383,36 @@ class Module {
             // Obtener precio original
             $original_price = floatval($product->get_regular_price());
             
-            if ($original_price <= 0) {
-                return $price_html; // Sin modificar si no hay precio
-            }
-            
-            // Calcular precio con descuento
-            $discounted_price = $this->calculate_discounted_price($original_price, $discount);
-            
-            // Badge según tipo de descuento
-            if ($discount['type'] === 'percentage') {
-                $badge = sprintf(
-                    '<span class="private-shop-badge private-shop-percentage">-%s%%</span>', 
-                    number_format($discount['value'], 0)
+            if ($original_price > 0) {
+                // Calcular precio con descuento
+                $discounted_price = $this->calculate_discounted_price($original_price, $discount);
+                
+                // Badge según tipo de descuento
+                if ($discount['type'] === 'percentage') {
+                    $badge = sprintf(
+                        '<span class="private-shop-badge private-shop-percentage">-%s%%</span>', 
+                        number_format($discount['value'], 0)
+                    );
+                } else {
+                    $badge = sprintf(
+                        '<span class="private-shop-badge private-shop-fixed">-%s</span>', 
+                        wc_price($discount['value'])
+                    );
+                }
+                
+                // HTML del precio
+                $price_html = sprintf(
+                    '<del><span class="woocommerce-Price-amount amount">%s</span></del> ' .
+                    '<ins><span class="woocommerce-Price-amount amount">%s</span></ins> ' .
+                    '%s',
+                    wc_price($original_price),
+                    wc_price($discounted_price),
+                    $badge
                 );
-            } else {
-                $badge = sprintf(
-                    '<span class="private-shop-badge private-shop-fixed">-%s</span>', 
-                    wc_price($discount['value'])
-                );
             }
-            
-            // HTML del precio
-            $price_html = sprintf(
-                '<del><span class="woocommerce-Price-amount amount">%s</span></del> ' .
-                '<ins><span class="woocommerce-Price-amount amount">%s</span></ins> ' .
-                '%s',
-                wc_price($original_price),
-                wc_price($discounted_price),
-                $badge
-            );
-            
-            $this->log(sprintf(
-                'HTML precio generado - ID: %d | Original: %s | Final: %s',
-                $product_id,
-                number_format($original_price, 2),
-                number_format($discounted_price, 2)
-            ));
         }
         
+        unset($processing[$product_id]);
         return $price_html;
     }
     
