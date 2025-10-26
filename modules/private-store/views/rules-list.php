@@ -24,6 +24,18 @@ if (isset($_GET['deleted'])) {
         </a>
     </h1>
     
+    <!-- NUEVO: Tabs de navegación -->
+    <nav class="nav-tab-wrapper" style="margin: 20px 0;">
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>" 
+           class="nav-tab nav-tab-active">
+            📋 Reglas de Descuento
+        </a>
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>" 
+           class="nav-tab">
+            🎫 Cupones Generados
+        </a>
+    </nav>
+    
     <!-- Link a logs -->
     <div class="notice notice-info" style="margin: 20px 0;">
         <p>
@@ -58,6 +70,7 @@ if (isset($_GET['deleted'])) {
                         <th style="width: 120px;">Aplica a</th>
                         <th style="width: 150px;">Roles</th>
                         <th style="width: 100px;">Prioridad</th>
+                        <th style="width: 100px;">Prefijo</th>
                         <th style="width: 150px;">Fechas</th>
                         <th style="width: 150px;">Acciones</th>
                     </tr>
@@ -86,6 +99,9 @@ if (isset($_GET['deleted'])) {
                             'action' => 'edit',
                             'rule_id' => $rule['id']
                         ], admin_url('admin.php'));
+                        
+                        // NUEVO: Obtener prefijo del cupón
+                        $coupon_prefix = isset($rule['coupon_config']['prefix']) ? $rule['coupon_config']['prefix'] : 'ps';
                     ?>
                         <tr class="<?php echo !$is_enabled ? 'inactive' : ''; ?>">
                             <td style="text-align: center;">
@@ -142,6 +158,11 @@ if (isset($_GET['deleted'])) {
                             <td style="text-align: center;">
                                 <?php echo isset($rule['priority']) ? $rule['priority'] : 10; ?>
                             </td>
+                            <td>
+                                <code style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px;">
+                                    <?php echo esc_html($coupon_prefix); ?>_*
+                                </code>
+                            </td>
                             <td style="font-size: 12px;">
                                 <?php if (!empty($rule['date_from']) || !empty($rule['date_to'])): ?>
                                     <?php if (!empty($rule['date_from'])): ?>
@@ -160,7 +181,7 @@ if (isset($_GET['deleted'])) {
                                 </a>
                                 <a href="<?php echo esc_url($delete_url); ?>" 
                                    class="button button-small button-link-delete"
-                                   onclick="return confirm('¿Eliminar esta regla?\n\nNombre: <?php echo esc_js($rule['name']); ?>');">
+                                   onclick="return confirm('¿Eliminar esta regla?\n\nSe eliminarán también todos los cupones generados.\n\nNombre: <?php echo esc_js($rule['name']); ?>');">
                                     🗑️
                                 </a>
                             </td>
@@ -196,6 +217,26 @@ if (isset($_GET['deleted'])) {
                         ?>
                     </div>
                     <div style="color: #666;">Items con descuento</div>
+                </div>
+                <div style="padding: 15px; background: #f3e5f5; border-radius: 4px;">
+                    <div style="font-size: 32px; font-weight: bold; color: #7b1fa2;">
+                        <?php 
+                        // NUEVO: Contar cupones generados
+                        $rule_coupons = get_option('mad_private_shop_rule_coupons', []);
+                        $total_coupons = 0;
+                        foreach ($rule_coupons as $data) {
+                            if (isset($data['user_coupons'])) {
+                                $total_coupons += count($data['user_coupons']);
+                            }
+                        }
+                        echo $total_coupons;
+                        ?>
+                    </div>
+                    <div style="color: #666;">
+                        Cupones generados
+                        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>" 
+                           style="margin-left: 5px;">Ver →</a>
+                    </div>
                 </div>
             </div>
         </div>
