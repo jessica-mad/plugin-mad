@@ -31,14 +31,69 @@ class Module {
     private function init_logs() {
         $upload_dir = wp_upload_dir();
         $log_dir = $upload_dir['basedir'] . '/mad-suite-logs';
-        
+
         if (!file_exists($log_dir)) {
             wp_mkdir_p($log_dir);
             file_put_contents($log_dir . '/.htaccess', 'Deny from all');
             file_put_contents($log_dir . '/index.php', '<?php // Silence is golden');
         }
-        
+
         $this->log_file = $log_dir . '/private-shop-' . date('Y-m-d') . '.log';
+    }
+
+    /**
+     * Verifica si WPML está activo
+     */
+    private function is_wpml_active() {
+        return function_exists('icl_object_id') || function_exists('wpml_get_language_information');
+    }
+
+    /**
+     * Obtiene todos los IDs de un producto en todos los idiomas
+     */
+    private function get_all_translation_ids($product_id, $post_type = 'product') {
+        if (!$this->is_wpml_active()) {
+            return [$product_id];
+        }
+
+        $ids = [$product_id];
+
+        // Obtener idiomas disponibles
+        $languages = apply_filters('wpml_active_languages', null);
+
+        if (empty($languages)) {
+            return $ids;
+        }
+
+        foreach ($languages as $lang) {
+            $translated_id = apply_filters('wpml_object_id', $product_id, $post_type, false, $lang['code']);
+            if ($translated_id && $translated_id != $product_id && !in_array($translated_id, $ids)) {
+                $ids[] = $translated_id;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Obtiene el ID original de un producto (idioma por defecto)
+     */
+    private function get_original_product_id($product_id, $post_type = 'product') {
+        if (!$this->is_wpml_active()) {
+            return $product_id;
+        }
+
+        // Obtener idioma por defecto
+        $default_lang = apply_filters('wpml_default_language', null);
+
+        if (!$default_lang) {
+            return $product_id;
+        }
+
+        // Obtener ID en idioma original
+        $original_id = apply_filters('wpml_object_id', $product_id, $post_type, false, $default_lang);
+
+        return $original_id ? $original_id : $product_id;
     }
     
     /**
@@ -110,7 +165,9 @@ class Module {
         // Shortcodes
         add_shortcode('mi_cupon', [$this, 'render_my_coupon_shortcode']);
 
-        $this->log('Module initialized', 'SUCCESS');
+        // Log de inicialización
+        $wpml_status = $this->is_wpml_active() ? 'ACTIVO' : 'INACTIVO';
+        $this->log('Module initialized - WPML: ' . $wpml_status, 'SUCCESS');
     }
     
     /**
@@ -310,7 +367,7 @@ class Module {
     }
     
     /**
-     * Obtiene productos por tags
+     * Obtiene productos por tags (incluye traducciones WPML)
      */
     private function get_products_by_tags($tag_ids) {
         $products = wc_get_products([
@@ -324,7 +381,17 @@ class Module {
             ],
             'return' => 'ids'
         ]);
-        
+
+        // Si WPML está activo, agregar todas las traducciones
+        if ($this->is_wpml_active() && !empty($products)) {
+            $all_product_ids = [];
+            foreach ($products as $product_id) {
+                $translation_ids = $this->get_all_translation_ids($product_id, 'product');
+                $all_product_ids = array_merge($all_product_ids, $translation_ids);
+            }
+            $products = array_unique($all_product_ids);
+        }
+
         return $products;
     }
     
@@ -547,15 +614,46 @@ class Module {
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
+        // Si WPML está activo, obtener todas las traducciones de este producto
+        $all_product_ids = [$check_id];
+        if ($this->is_wpml_active()) {
+            $all_product_ids = $this->get_all_translation_ids($check_id, 'product');
+        }
+
         $applies = false;
 
         if ($rule['apply_to'] === 'products') {
-            $applies = in_array($check_id, $rule['target_ids']);
+            // Verificar si alguna traducción del producto está en la regla
+            $applies = !empty(array_intersect($all_product_ids, $rule['target_ids']));
         } else if ($rule['apply_to'] === 'categories') {
+            // Verificar categorías (WPML sincroniza automáticamente las taxonomías)
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
+
+            // Si WPML está activo, también obtener categorías traducidas
+            if ($this->is_wpml_active() && !empty($categories)) {
+                $all_category_ids = [];
+                foreach ($categories as $cat_id) {
+                    $cat_translations = $this->get_all_translation_ids($cat_id, 'product_cat');
+                    $all_category_ids = array_merge($all_category_ids, $cat_translations);
+                }
+                $categories = array_unique($all_category_ids);
+            }
+
             $applies = !empty(array_intersect($rule['target_ids'], $categories));
         } else if ($rule['apply_to'] === 'tags') {
+            // Verificar tags (WPML sincroniza automáticamente las taxonomías)
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
+
+            // Si WPML está activo, también obtener tags traducidos
+            if ($this->is_wpml_active() && !empty($tags)) {
+                $all_tag_ids = [];
+                foreach ($tags as $tag_id) {
+                    $tag_translations = $this->get_all_translation_ids($tag_id, 'product_tag');
+                    $all_tag_ids = array_merge($all_tag_ids, $tag_translations);
+                }
+                $tags = array_unique($all_tag_ids);
+            }
+
             $applies = !empty(array_intersect($rule['target_ids'], $tags));
         }
 
@@ -622,15 +720,41 @@ class Module {
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
+        // Si WPML está activo, obtener todas las traducciones
+        $all_product_ids = [$check_id];
+        if ($this->is_wpml_active()) {
+            $all_product_ids = $this->get_all_translation_ids($check_id, 'product');
+        }
+
         $applies = false;
 
         if ($rule['apply_to'] === 'products') {
-            $applies = in_array($check_id, $rule['target_ids']);
+            $applies = !empty(array_intersect($all_product_ids, $rule['target_ids']));
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
+
+            if ($this->is_wpml_active() && !empty($categories)) {
+                $all_category_ids = [];
+                foreach ($categories as $cat_id) {
+                    $cat_translations = $this->get_all_translation_ids($cat_id, 'product_cat');
+                    $all_category_ids = array_merge($all_category_ids, $cat_translations);
+                }
+                $categories = array_unique($all_category_ids);
+            }
+
             $applies = !empty(array_intersect($rule['target_ids'], $categories));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
+
+            if ($this->is_wpml_active() && !empty($tags)) {
+                $all_tag_ids = [];
+                foreach ($tags as $tag_id) {
+                    $tag_translations = $this->get_all_translation_ids($tag_id, 'product_tag');
+                    $all_tag_ids = array_merge($all_tag_ids, $tag_translations);
+                }
+                $tags = array_unique($all_tag_ids);
+            }
+
             $applies = !empty(array_intersect($rule['target_ids'], $tags));
         }
 
@@ -697,15 +821,41 @@ class Module {
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
+        // Si WPML está activo, obtener todas las traducciones
+        $all_product_ids = [$check_id];
+        if ($this->is_wpml_active()) {
+            $all_product_ids = $this->get_all_translation_ids($check_id, 'product');
+        }
+
         $applies = false;
 
         if ($rule['apply_to'] === 'products') {
-            $applies = in_array($check_id, $rule['target_ids']);
+            $applies = !empty(array_intersect($all_product_ids, $rule['target_ids']));
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
+
+            if ($this->is_wpml_active() && !empty($categories)) {
+                $all_category_ids = [];
+                foreach ($categories as $cat_id) {
+                    $cat_translations = $this->get_all_translation_ids($cat_id, 'product_cat');
+                    $all_category_ids = array_merge($all_category_ids, $cat_translations);
+                }
+                $categories = array_unique($all_category_ids);
+            }
+
             $applies = !empty(array_intersect($rule['target_ids'], $categories));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
+
+            if ($this->is_wpml_active() && !empty($tags)) {
+                $all_tag_ids = [];
+                foreach ($tags as $tag_id) {
+                    $tag_translations = $this->get_all_translation_ids($tag_id, 'product_tag');
+                    $all_tag_ids = array_merge($all_tag_ids, $tag_translations);
+                }
+                $tags = array_unique($all_tag_ids);
+            }
+
             $applies = !empty(array_intersect($rule['target_ids'], $tags));
         }
 
@@ -1594,6 +1744,23 @@ class Module {
                 'name' => 'Validación de Reglas',
                 'status' => 'warning',
                 'message' => 'Algunas reglas tienen configuración incompleta: ' . implode(', ', $invalid_rules)
+            ];
+        }
+
+        // Check 7: WPML
+        if ($this->is_wpml_active()) {
+            $languages = apply_filters('wpml_active_languages', null);
+            $lang_count = is_array($languages) ? count($languages) : 0;
+            $checks[] = [
+                'name' => 'WPML (Multiidioma)',
+                'status' => 'ok',
+                'message' => 'WPML está activo con ' . $lang_count . ' idiomas. Los descuentos se aplicarán automáticamente en todos los idiomas.'
+            ];
+        } else {
+            $checks[] = [
+                'name' => 'WPML (Multiidioma)',
+                'status' => 'ok',
+                'message' => 'WPML no está activo. El sitio funciona en un solo idioma.'
             ];
         }
 
