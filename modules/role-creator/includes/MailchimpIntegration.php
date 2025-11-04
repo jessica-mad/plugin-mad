@@ -374,11 +374,19 @@ class MailchimpIntegration
      */
     public function test_connection()
     {
+        $logger = Logger::instance();
+
         if (! $this->is_configured()) {
+            $logger->error('Test connection: Mailchimp no está configurado');
             return new \WP_Error('not_configured', __('Mailchimp no está configurado.', 'mad-suite'));
         }
 
         $endpoint = "https://{$this->server_prefix}.api.mailchimp.com/3.0/ping";
+
+        $logger->info('Probando conexión con Mailchimp', [
+            'endpoint' => $endpoint,
+            'server_prefix' => $this->server_prefix,
+        ]);
 
         $response = wp_remote_get($endpoint, [
             'headers' => [
@@ -388,14 +396,26 @@ class MailchimpIntegration
         ]);
 
         $status_code = wp_remote_retrieve_response_code($response);
+        $response_body = wp_remote_retrieve_body($response);
+
+        $logger->debug('Respuesta del ping de Mailchimp', [
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
 
         if ($status_code === 200) {
+            $logger->success('Ping exitoso a Mailchimp');
             return true;
         }
 
+        $logger->error('Ping a Mailchimp falló', [
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
+
         return new \WP_Error(
             'connection_failed',
-            sprintf(__('Error de conexión: %s', 'mad-suite'), wp_remote_retrieve_body($response))
+            sprintf(__('Error de conexión (código %d): %s', 'mad-suite'), $status_code, $response_body)
         );
     }
 

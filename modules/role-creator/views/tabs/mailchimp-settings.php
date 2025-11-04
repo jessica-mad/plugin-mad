@@ -94,20 +94,23 @@ $is_configured = $mailchimp->is_configured();
             <div class="card" style="margin-top: 20px;">
                 <h3><?php esc_html_e('⚡ Acciones Rápidas', 'mad-suite'); ?></h3>
 
+                <!-- Estado de la última prueba -->
+                <div id="mailchimp-test-result" style="display: none; padding: 15px; margin: 15px 0; border-left: 4px solid #ddd; border-radius: 4px;"></div>
+
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <?php
                     $test_url = wp_nonce_url(
-                        admin_url('admin-post.php?action=mads_role_creator_mailchimp_test'),
+                        admin_url('admin-post.php?action=mads_role_creator_mailchimp_test&tab=mailchimp-settings'),
                         'mads_role_creator_mailchimp_test',
                         'mads_role_creator_nonce'
                     );
                     $sync_all_url = wp_nonce_url(
-                        admin_url('admin-post.php?action=mads_role_creator_mailchimp_sync_all'),
+                        admin_url('admin-post.php?action=mads_role_creator_mailchimp_sync_all&tab=mailchimp-settings'),
                         'mads_role_creator_mailchimp_sync_all',
                         'mads_role_creator_nonce'
                     );
                     ?>
-                    <a href="<?php echo esc_url($test_url); ?>" class="button button-secondary">
+                    <a href="<?php echo esc_url($test_url); ?>" class="button button-secondary" id="test-connection-btn">
                         <span class="dashicons dashicons-yes-alt" style="vertical-align: middle;"></span>
                         <?php esc_html_e('Probar Conexión', 'mad-suite'); ?>
                     </a>
@@ -117,6 +120,11 @@ $is_configured = $mailchimp->is_configured();
                         <?php esc_html_e('Sincronizar Todos los Usuarios', 'mad-suite'); ?>
                     </a>
                 </div>
+
+                <p style="margin-top: 15px; color: #666; font-size: 12px;">
+                    <strong><?php esc_html_e('💡 Consejo:', 'mad-suite'); ?></strong>
+                    <?php esc_html_e('Después de configurar tu API Key y Audience ID, haz clic en "Probar Conexión" para verificar que todo funciona correctamente. Luego revisa los Logs para ver los detalles.', 'mad-suite'); ?>
+                </p>
             </div>
             <?php endif; ?>
         </div>

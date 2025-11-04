@@ -855,12 +855,34 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $this->ensure_capability();
         check_admin_referer('mads_role_creator_mailchimp_test', 'mads_role_creator_nonce');
 
-        $result = MailchimpIntegration::instance()->test_connection();
+        $logger = Logger::instance();
+        $logger->info('Test de conexión Mailchimp solicitado desde UI');
+
+        $mailchimp = MailchimpIntegration::instance();
+
+        // Verificar configuración primero
+        if (! $mailchimp->is_configured()) {
+            $logger->error('Test fallido: Mailchimp no está configurado');
+            $this->add_notice('error', __('❌ Mailchimp no está configurado. Por favor configura tu API Key y Audience ID primero.', 'mad-suite'));
+            return $this->redirect_back();
+        }
+
+        $logger->info('Configuración de Mailchimp detectada, probando conexión...');
+
+        $result = $mailchimp->test_connection();
 
         if (is_wp_error($result)) {
-            $this->add_notice('error', $result->get_error_message());
+            $logger->error('Test de conexión falló', [
+                'error_code' => $result->get_error_code(),
+                'error_message' => $result->get_error_message(),
+            ]);
+            $this->add_notice('error', sprintf(
+                __('❌ Error al conectar con Mailchimp: %s', 'mad-suite'),
+                $result->get_error_message()
+            ));
         } else {
-            $this->add_notice('updated', __('Conexión con Mailchimp exitosa.', 'mad-suite'));
+            $logger->success('Test de conexión exitoso');
+            $this->add_notice('updated', __('✅ ¡Conexión con Mailchimp exitosa! Tu configuración es correcta. Revisa los Logs para ver más detalles.', 'mad-suite'));
         }
 
         return $this->redirect_back();
@@ -978,11 +1000,15 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     private function redirect_back()
     {
+        $args = ['page' => $this->menu_slug()];
+
+        // Preservar el tab actual si existe
+        if (isset($_GET['tab'])) {
+            $args['tab'] = sanitize_key($_GET['tab']);
+        }
+
         wp_safe_redirect(
-            add_query_arg(
-                ['page' => $this->menu_slug()],
-                admin_url('admin.php')
-            )
+            add_query_arg($args, admin_url('admin.php'))
         );
         exit;
     }
