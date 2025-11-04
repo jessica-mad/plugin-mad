@@ -75,7 +75,11 @@ class Module {
         
         // Visualización de precio con descuento
         add_filter('woocommerce_get_price_html', [$this, 'show_discount_preview'], 99, 2);
-        
+
+        // Visualización de precio en items del carrito
+        add_filter('woocommerce_cart_item_price', [$this, 'show_cart_item_discount_preview'], 99, 3);
+        add_filter('woocommerce_cart_item_subtotal', [$this, 'show_cart_item_subtotal_discount_preview'], 99, 3);
+
         // Estilos
         add_action('wp_head', [$this, 'add_frontend_styles']);
         
@@ -468,26 +472,30 @@ class Module {
     
     /**
      * Muestra preview de descuento en producto
+     * IMPORTANTE: Esta función SOLO muestra el descuento visualmente.
+     * El descuento real se aplica mediante cupón automático en el carrito.
      */
     public function show_discount_preview($price_html, $product) {
+        // Solo para usuarios logueados
         if (!is_user_logged_in()) {
             return $price_html;
         }
-        
+
         $user_id = get_current_user_id();
         $rule = $this->get_best_rule_for_user($user_id);
-        
+
+        // Si no hay regla aplicable, retornar precio normal
         if (!$rule) {
             return $price_html;
         }
-        
+
         // Verificar si este producto aplica a la regla
         $product_id = $product->get_id();
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
-        
+
         $applies = false;
-        
+
         if ($rule['apply_to'] === 'products') {
             $applies = in_array($check_id, $rule['target_ids']);
         } else if ($rule['apply_to'] === 'categories') {
@@ -497,59 +505,205 @@ class Module {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
             $applies = !empty(array_intersect($rule['target_ids'], $tags));
         }
-        
+
         if (!$applies) {
             return $price_html;
         }
-        
-        // Calcular precio con descuento
-        $regular_price = floatval($product->get_regular_price());
-        
-        if ($regular_price <= 0) {
+
+        // Obtener el precio actual del producto
+        $current_price = floatval($product->get_price());
+
+        // Si no hay precio, retornar HTML original
+        if ($current_price <= 0) {
             return $price_html;
         }
-        
+
+        // Calcular precio con descuento (solo para visualización)
         if ($rule['discount_type'] === 'percentage') {
-            $discounted_price = $regular_price * (1 - ($rule['discount_value'] / 100));
-            $badge = sprintf('-%.0f%%', $rule['discount_value']);
+            $discounted_price = $current_price * (1 - ($rule['discount_value'] / 100));
         } else {
-            $discounted_price = $regular_price - $rule['discount_value'];
-            $badge = '-' . wc_price($rule['discount_value']);
+            $discounted_price = $current_price - $rule['discount_value'];
         }
-        
+
+        // Asegurar que el precio con descuento no sea negativo
         $discounted_price = max(0, $discounted_price);
-        
+
+        // Usar formato nativo de WooCommerce (igual que productos en oferta)
         $price_html = sprintf(
-            '<del><span class="woocommerce-Price-amount amount">%s</span></del> ' .
-            '<ins><span class="woocommerce-Price-amount amount">%s</span></ins> ' .
-            '<span class="private-shop-badge">%s</span>',
-            wc_price($regular_price),
-            wc_price($discounted_price),
-            $badge
+            '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></del> ' .
+            '<ins><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></ins>',
+            wc_price($current_price),
+            wc_price($discounted_price)
         );
-        
+
         return $price_html;
     }
-    
+
     /**
-     * Estilos CSS
+     * Muestra preview de descuento en items del carrito
+     * IMPORTANTE: Esta función SOLO muestra el descuento visualmente en la columna de precio.
+     * El descuento real ya está aplicado mediante cupón automático.
+     */
+    public function show_cart_item_discount_preview($price_html, $cart_item, $cart_item_key) {
+        // Solo para usuarios logueados
+        if (!is_user_logged_in()) {
+            return $price_html;
+        }
+
+        $user_id = get_current_user_id();
+        $rule = $this->get_best_rule_for_user($user_id);
+
+        // Si no hay regla aplicable, retornar precio normal
+        if (!$rule) {
+            return $price_html;
+        }
+
+        // Obtener el producto del item del carrito
+        $product = $cart_item['data'];
+        if (!$product) {
+            return $price_html;
+        }
+
+        // Verificar si este producto aplica a la regla
+        $product_id = $product->get_id();
+        $parent_id = $product->get_parent_id();
+        $check_id = $parent_id > 0 ? $parent_id : $product_id;
+
+        $applies = false;
+
+        if ($rule['apply_to'] === 'products') {
+            $applies = in_array($check_id, $rule['target_ids']);
+        } else if ($rule['apply_to'] === 'categories') {
+            $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
+            $applies = !empty(array_intersect($rule['target_ids'], $categories));
+        } else if ($rule['apply_to'] === 'tags') {
+            $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
+            $applies = !empty(array_intersect($rule['target_ids'], $tags));
+        }
+
+        if (!$applies) {
+            return $price_html;
+        }
+
+        // Obtener el precio actual del producto (precio unitario)
+        $current_price = floatval($product->get_price());
+
+        // Si no hay precio, retornar HTML original
+        if ($current_price <= 0) {
+            return $price_html;
+        }
+
+        // Calcular precio con descuento (solo para visualización)
+        if ($rule['discount_type'] === 'percentage') {
+            $discounted_price = $current_price * (1 - ($rule['discount_value'] / 100));
+        } else {
+            $discounted_price = $current_price - $rule['discount_value'];
+        }
+
+        // Asegurar que el precio con descuento no sea negativo
+        $discounted_price = max(0, $discounted_price);
+
+        // Usar formato nativo de WooCommerce (igual que productos en oferta)
+        $price_html = sprintf(
+            '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></del> ' .
+            '<ins><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></ins>',
+            wc_price($current_price),
+            wc_price($discounted_price)
+        );
+
+        return $price_html;
+    }
+
+    /**
+     * Muestra preview de descuento en subtotal de items del carrito
+     * IMPORTANTE: Esta función SOLO muestra el descuento visualmente en la columna de subtotal.
+     * El descuento real ya está aplicado mediante cupón automático.
+     */
+    public function show_cart_item_subtotal_discount_preview($subtotal_html, $cart_item, $cart_item_key) {
+        // Solo para usuarios logueados
+        if (!is_user_logged_in()) {
+            return $subtotal_html;
+        }
+
+        $user_id = get_current_user_id();
+        $rule = $this->get_best_rule_for_user($user_id);
+
+        // Si no hay regla aplicable, retornar subtotal normal
+        if (!$rule) {
+            return $subtotal_html;
+        }
+
+        // Obtener el producto del item del carrito
+        $product = $cart_item['data'];
+        if (!$product) {
+            return $subtotal_html;
+        }
+
+        // Verificar si este producto aplica a la regla
+        $product_id = $product->get_id();
+        $parent_id = $product->get_parent_id();
+        $check_id = $parent_id > 0 ? $parent_id : $product_id;
+
+        $applies = false;
+
+        if ($rule['apply_to'] === 'products') {
+            $applies = in_array($check_id, $rule['target_ids']);
+        } else if ($rule['apply_to'] === 'categories') {
+            $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
+            $applies = !empty(array_intersect($rule['target_ids'], $categories));
+        } else if ($rule['apply_to'] === 'tags') {
+            $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
+            $applies = !empty(array_intersect($rule['target_ids'], $tags));
+        }
+
+        if (!$applies) {
+            return $subtotal_html;
+        }
+
+        // Obtener cantidad del item
+        $quantity = isset($cart_item['quantity']) ? intval($cart_item['quantity']) : 1;
+
+        // Obtener el precio actual del producto (precio unitario)
+        $current_price = floatval($product->get_price());
+
+        // Si no hay precio, retornar HTML original
+        if ($current_price <= 0) {
+            return $subtotal_html;
+        }
+
+        // Calcular subtotal original (precio unitario * cantidad)
+        $original_subtotal = $current_price * $quantity;
+
+        // Calcular precio unitario con descuento
+        if ($rule['discount_type'] === 'percentage') {
+            $discounted_unit_price = $current_price * (1 - ($rule['discount_value'] / 100));
+        } else {
+            $discounted_unit_price = $current_price - $rule['discount_value'];
+        }
+
+        // Asegurar que el precio con descuento no sea negativo
+        $discounted_unit_price = max(0, $discounted_unit_price);
+
+        // Calcular subtotal con descuento (precio unitario con descuento * cantidad)
+        $discounted_subtotal = $discounted_unit_price * $quantity;
+
+        // Usar formato nativo de WooCommerce (igual que productos en oferta)
+        $subtotal_html = sprintf(
+            '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></del> ' .
+            '<ins><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></ins>',
+            wc_price($original_subtotal),
+            wc_price($discounted_subtotal)
+        );
+
+        return $subtotal_html;
+    }
+
+    /**
+     * Estilos CSS - Usa estilos nativos de WooCommerce
      */
     public function add_frontend_styles() {
-        ?>
-        <style>
-        .private-shop-badge {
-            display: inline-block;
-            background: #4CAF50;
-            color: white;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 13px;
-            font-weight: bold;
-            margin-left: 8px;
-            vertical-align: middle;
-        }
-        </style>
-        <?php
+        // No se requieren estilos personalizados
+        // Se usa el formato nativo de WooCommerce para precios en oferta
     }
     
     /**
