@@ -120,13 +120,21 @@ $stats = [
     
     <!-- Tabs de navegación -->
     <nav class="nav-tab-wrapper" style="margin: 20px 0;">
-        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>" 
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>"
            class="nav-tab">
             📋 Reglas de Descuento
         </a>
-        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>" 
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>"
            class="nav-tab nav-tab-active">
             🎫 Cupones Generados
+        </a>
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'logs'], admin_url('admin.php')); ?>"
+           class="nav-tab">
+            🔍 Logs de Debug
+        </a>
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'test'], admin_url('admin.php')); ?>"
+           class="nav-tab">
+            🧪 Test & Diagnóstico
         </a>
     </nav>
     

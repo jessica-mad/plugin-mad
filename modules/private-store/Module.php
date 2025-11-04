@@ -42,11 +42,28 @@ class Module {
     }
     
     /**
-     * Log optimizado
+     * Log optimizado con más contexto
      */
-    private function log($message, $level = 'INFO') {
+    private function log($message, $level = 'INFO', $context = []) {
         $timestamp = date('Y-m-d H:i:s');
-        $formatted = sprintf("[%s] [%s] %s\n", $timestamp, $level, $message);
+
+        // Agregar información del usuario actual si está disponible
+        if (is_user_logged_in() && empty($context['user_id'])) {
+            $current_user = wp_get_current_user();
+            $context['user_id'] = $current_user->ID;
+            $context['user_login'] = $current_user->user_login;
+            $context['user_roles'] = $current_user->roles;
+        }
+
+        // Formatear mensaje con contexto
+        $formatted = sprintf("[%s] [%s] %s", $timestamp, $level, $message);
+
+        if (!empty($context)) {
+            $formatted .= " | Context: " . json_encode($context, JSON_UNESCAPED_UNICODE);
+        }
+
+        $formatted .= "\n";
+
         error_log($formatted, 3, $this->log_file);
     }
     
@@ -61,6 +78,13 @@ class Module {
         add_action('admin_post_toggle_private_shop_rule', [$this, 'toggle_discount_rule']);
         add_action('admin_post_regenerate_user_coupon', [$this, 'admin_regenerate_coupon']);
         add_action('admin_post_delete_user_coupon', [$this, 'admin_delete_coupon']);
+
+        // AJAX handlers para testing
+        add_action('wp_ajax_mad_test_user', [$this, 'ajax_test_user']);
+        add_action('wp_ajax_mad_test_product', [$this, 'ajax_test_product']);
+        add_action('wp_ajax_mad_simulate_login', [$this, 'ajax_simulate_login']);
+        add_action('wp_ajax_mad_full_diagnostic', [$this, 'ajax_full_diagnostic']);
+        add_action('wp_ajax_mad_clear_today_logs', [$this, 'ajax_clear_today_logs']);
         
         // Usuario Login/Logout
         add_action('wp_login', [$this, 'on_user_login'], 10, 2);
@@ -116,51 +140,114 @@ class Module {
     private function get_best_rule_for_user($user_id) {
         $user = get_userdata($user_id);
         if (!$user) {
+            $this->log("get_best_rule_for_user: Usuario no encontrado", 'ERROR', ['user_id' => $user_id]);
             return null;
         }
-        
+
         $user_roles = $user->roles;
         if (empty($user_roles)) {
+            $this->log("get_best_rule_for_user: Usuario sin roles", 'WARNING', [
+                'user_id' => $user_id,
+                'user_login' => $user->user_login
+            ]);
             return null;
         }
-        
+
         $user_role = $user_roles[0]; // Usuario tiene solo 1 rol
-        
+
+        $this->log("get_best_rule_for_user: Buscando regla", 'DEBUG', [
+            'user_id' => $user_id,
+            'user_login' => $user->user_login,
+            'user_role' => $user_role,
+            'all_roles' => $user_roles
+        ]);
+
         $rules = $this->get_discount_rules();
+        $this->log("get_best_rule_for_user: Total de reglas en sistema", 'DEBUG', [
+            'total_rules' => count($rules)
+        ]);
+
         $applicable_rules = [];
-        
+
         foreach ($rules as $rule) {
+            $rule_id = $rule['id'];
+            $rule_name = $rule['name'];
+
             // Solo reglas activas
             if (!isset($rule['enabled']) || !$rule['enabled']) {
+                $this->log("Regla NO aplica: Está desactivada", 'DEBUG', [
+                    'rule_id' => $rule_id,
+                    'rule_name' => $rule_name
+                ]);
                 continue;
             }
-            
+
             // Verificar fechas
-            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
+            $now = time();
+            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > $now) {
+                $this->log("Regla NO aplica: Aún no ha comenzado", 'DEBUG', [
+                    'rule_id' => $rule_id,
+                    'rule_name' => $rule_name,
+                    'date_from' => $rule['date_from'],
+                    'current_date' => date('Y-m-d H:i:s', $now)
+                ]);
                 continue;
             }
-            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
+            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < $now) {
+                $this->log("Regla NO aplica: Ya expiró", 'DEBUG', [
+                    'rule_id' => $rule_id,
+                    'rule_name' => $rule_name,
+                    'date_to' => $rule['date_to'],
+                    'current_date' => date('Y-m-d H:i:s', $now)
+                ]);
                 continue;
             }
-            
+
             // Verificar rol
             if (!empty($rule['roles']) && in_array($user_role, $rule['roles'])) {
+                $this->log("Regla SÍ APLICA: Usuario tiene rol requerido", 'SUCCESS', [
+                    'rule_id' => $rule_id,
+                    'rule_name' => $rule_name,
+                    'user_role' => $user_role,
+                    'required_roles' => $rule['roles'],
+                    'discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : ' fijo')
+                ]);
                 $applicable_rules[] = $rule;
+            } else {
+                $this->log("Regla NO aplica: Rol no coincide", 'DEBUG', [
+                    'rule_id' => $rule_id,
+                    'rule_name' => $rule_name,
+                    'user_role' => $user_role,
+                    'required_roles' => $rule['roles'] ?? []
+                ]);
             }
         }
-        
+
         if (empty($applicable_rules)) {
+            $this->log("get_best_rule_for_user: NINGUNA regla aplica para este usuario", 'WARNING', [
+                'user_id' => $user_id,
+                'user_login' => $user->user_login,
+                'user_role' => $user_role
+            ]);
             return null;
         }
-        
+
         // Ordenar por prioridad (menor = mayor prioridad)
         usort($applicable_rules, function($a, $b) {
             $priority_a = isset($a['priority']) ? intval($a['priority']) : 999;
             $priority_b = isset($b['priority']) ? intval($b['priority']) : 999;
             return $priority_a - $priority_b;
         });
-        
-        return $applicable_rules[0];
+
+        $best_rule = $applicable_rules[0];
+        $this->log("get_best_rule_for_user: Mejor regla seleccionada", 'SUCCESS', [
+            'rule_id' => $best_rule['id'],
+            'rule_name' => $best_rule['name'],
+            'priority' => $best_rule['priority'] ?? 10,
+            'total_applicable' => count($applicable_rules)
+        ]);
+
+        return $best_rule;
     }
     
     /**
@@ -485,15 +572,24 @@ class Module {
         }
 
         $user_id = get_current_user_id();
+        $product_id = $product->get_id();
+
+        $this->log("show_discount_preview: Intentando mostrar descuento", 'DEBUG', [
+            'product_id' => $product_id,
+            'product_name' => $product->get_name()
+        ]);
+
         $rule = $this->get_best_rule_for_user($user_id);
 
         // Si no hay regla aplicable, retornar precio normal
         if (!$rule) {
+            $this->log("show_discount_preview: No hay regla para el usuario", 'DEBUG', [
+                'product_id' => $product_id
+            ]);
             return $price_html;
         }
 
         // Verificar si este producto aplica a la regla
-        $product_id = $product->get_id();
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
@@ -501,17 +597,46 @@ class Module {
 
         if ($rule['apply_to'] === 'products') {
             $applies = in_array($check_id, $rule['target_ids']);
+            $this->log("show_discount_preview: Verificando por productos", 'DEBUG', [
+                'product_id' => $product_id,
+                'check_id' => $check_id,
+                'target_ids' => $rule['target_ids'],
+                'applies' => $applies
+            ]);
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
             $applies = !empty(array_intersect($rule['target_ids'], $categories));
+            $this->log("show_discount_preview: Verificando por categorías", 'DEBUG', [
+                'product_id' => $product_id,
+                'product_categories' => $categories,
+                'target_categories' => $rule['target_ids'],
+                'applies' => $applies
+            ]);
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
             $applies = !empty(array_intersect($rule['target_ids'], $tags));
+            $this->log("show_discount_preview: Verificando por tags", 'DEBUG', [
+                'product_id' => $product_id,
+                'product_tags' => $tags,
+                'target_tags' => $rule['target_ids'],
+                'applies' => $applies
+            ]);
         }
 
         if (!$applies) {
+            $this->log("show_discount_preview: Producto NO aplica a la regla", 'DEBUG', [
+                'product_id' => $product_id,
+                'rule_id' => $rule['id'],
+                'rule_name' => $rule['name']
+            ]);
             return $price_html;
         }
+
+        $this->log("show_discount_preview: Producto SÍ aplica - mostrando descuento", 'SUCCESS', [
+            'product_id' => $product_id,
+            'rule_id' => $rule['id'],
+            'discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : ' fijo')
+        ]);
 
         // Obtener el precio actual del producto
         $current_price = floatval($product->get_price());
@@ -817,7 +942,7 @@ class Module {
      */
     public function render_admin_page() {
         $action = isset($_GET['action']) ? $_GET['action'] : 'list';
-        
+
         switch ($action) {
             case 'edit':
             case 'new':
@@ -825,6 +950,12 @@ class Module {
                 break;
             case 'coupons':
                 include __DIR__ . '/views/coupons-list.php';
+                break;
+            case 'logs':
+                include __DIR__ . '/views/logs-viewer.php';
+                break;
+            case 'test':
+                include __DIR__ . '/views/test-diagnostics.php';
                 break;
             default:
                 include __DIR__ . '/views/rules-list.php';
@@ -1251,6 +1382,318 @@ class Module {
     public function get_log_url() {
         $upload_dir = wp_upload_dir();
         return $upload_dir['baseurl'] . '/mad-suite-logs/private-shop-' . date('Y-m-d') . '.log';
+    }
+
+    /**
+     * AJAX: Test de usuario
+     */
+    public function ajax_test_user() {
+        check_ajax_referer('mad_test', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+
+        $user_id = intval($_POST['user_id']);
+        $user = get_userdata($user_id);
+
+        if (!$user) {
+            wp_send_json_error('Usuario no encontrado');
+        }
+
+        $rule = $this->get_best_rule_for_user($user_id);
+        $coupon_code = $this->get_user_active_coupon($user_id);
+
+        $response = [
+            'user_id' => $user_id,
+            'user_login' => $user->user_login,
+            'roles' => $user->roles,
+            'has_rule' => !is_null($rule),
+            'has_coupon' => !is_null($coupon_code),
+        ];
+
+        if ($rule) {
+            $response['rule_name'] = $rule['name'];
+            $response['discount'] = $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : ' fijo');
+        } else {
+            $response['reason'] = 'No hay reglas activas que apliquen para los roles de este usuario';
+        }
+
+        if ($coupon_code) {
+            $response['coupon_code'] = $coupon_code;
+        }
+
+        wp_send_json_success($response);
+    }
+
+    /**
+     * AJAX: Test de producto
+     */
+    public function ajax_test_product() {
+        check_ajax_referer('mad_test', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+
+        $product_id = intval($_POST['product_id']);
+        $product = wc_get_product($product_id);
+
+        if (!$product) {
+            wp_send_json_error('Producto no encontrado');
+        }
+
+        $user_id = get_current_user_id();
+        $current_user = wp_get_current_user();
+        $rule = $this->get_best_rule_for_user($user_id);
+
+        $response = [
+            'product_id' => $product_id,
+            'product_name' => $product->get_name(),
+            'current_user' => $current_user->user_login,
+            'has_discount' => false,
+        ];
+
+        if (!$rule) {
+            $response['reason'] = 'El usuario actual no tiene reglas aplicables';
+            wp_send_json_success($response);
+            return;
+        }
+
+        // Verificar si el producto aplica
+        $parent_id = $product->get_parent_id();
+        $check_id = $parent_id > 0 ? $parent_id : $product_id;
+        $applies = false;
+
+        if ($rule['apply_to'] === 'products') {
+            $applies = in_array($check_id, $rule['target_ids']);
+        } else if ($rule['apply_to'] === 'categories') {
+            $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
+            $applies = !empty(array_intersect($rule['target_ids'], $categories));
+        } else if ($rule['apply_to'] === 'tags') {
+            $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
+            $applies = !empty(array_intersect($rule['target_ids'], $tags));
+        }
+
+        if (!$applies) {
+            $response['reason'] = 'El producto no está incluido en la regla aplicable';
+            wp_send_json_success($response);
+            return;
+        }
+
+        // Calcular descuento
+        $original_price = floatval($product->get_price());
+
+        if ($rule['discount_type'] === 'percentage') {
+            $discounted_price = $original_price * (1 - ($rule['discount_value'] / 100));
+        } else {
+            $discounted_price = $original_price - $rule['discount_value'];
+        }
+
+        $discounted_price = max(0, $discounted_price);
+
+        $response['has_discount'] = true;
+        $response['rule_name'] = $rule['name'];
+        $response['discount'] = $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : ' fijo');
+        $response['original_price'] = wc_price($original_price);
+        $response['discounted_price'] = wc_price($discounted_price);
+
+        wp_send_json_success($response);
+    }
+
+    /**
+     * AJAX: Simular login
+     */
+    public function ajax_simulate_login() {
+        check_ajax_referer('mad_test', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+
+        $user_id = intval($_POST['user_id']);
+        $user = get_userdata($user_id);
+
+        if (!$user) {
+            wp_send_json_error('Usuario no encontrado');
+        }
+
+        $this->log("AJAX: Simulando login para usuario", 'INFO', [
+            'user_id' => $user_id,
+            'user_login' => $user->user_login
+        ]);
+
+        // Llamar al handler de login
+        $this->on_user_login($user->user_login, $user);
+
+        // Verificar si se creó el cupón
+        $coupon_code = $this->get_user_active_coupon($user_id);
+
+        $response = [
+            'user_login' => $user->user_login,
+            'coupon_created' => !is_null($coupon_code),
+        ];
+
+        if ($coupon_code) {
+            $response['coupon_code'] = $coupon_code;
+            $response['message'] = 'Login simulado correctamente. Se generó el cupón: ' . $coupon_code;
+        } else {
+            $response['message'] = 'Login simulado. No se generó cupón (puede que ya tuviera uno o no tenga reglas aplicables).';
+        }
+
+        wp_send_json_success($response);
+    }
+
+    /**
+     * AJAX: Diagnóstico completo
+     */
+    public function ajax_full_diagnostic() {
+        check_ajax_referer('mad_test', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+
+        $checks = [];
+
+        // Check 1: WooCommerce activo
+        if (class_exists('WooCommerce')) {
+            $checks[] = [
+                'name' => 'WooCommerce',
+                'status' => 'ok',
+                'message' => 'WooCommerce está activo (versión ' . WC_VERSION . ')'
+            ];
+        } else {
+            $checks[] = [
+                'name' => 'WooCommerce',
+                'status' => 'error',
+                'message' => 'WooCommerce NO está activo. El Private Shop requiere WooCommerce.'
+            ];
+        }
+
+        // Check 2: Reglas activas
+        $rules = $this->get_discount_rules();
+        $active_rules = array_filter($rules, function($r) { return isset($r['enabled']) && $r['enabled']; });
+
+        if (count($active_rules) > 0) {
+            $checks[] = [
+                'name' => 'Reglas Activas',
+                'status' => 'ok',
+                'message' => 'Hay ' . count($active_rules) . ' reglas activas en el sistema.'
+            ];
+        } else {
+            $checks[] = [
+                'name' => 'Reglas Activas',
+                'status' => 'warning',
+                'message' => 'No hay reglas activas. Crea y activa al menos una regla para que el sistema funcione.'
+            ];
+        }
+
+        // Check 3: Cupones generados
+        $rule_coupons = $this->get_rule_coupons();
+        $total_coupons = 0;
+        foreach ($rule_coupons as $data) {
+            if (isset($data['user_coupons'])) {
+                $total_coupons += count($data['user_coupons']);
+            }
+        }
+
+        if ($total_coupons > 0) {
+            $checks[] = [
+                'name' => 'Cupones Generados',
+                'status' => 'ok',
+                'message' => 'Hay ' . $total_coupons . ' cupones generados en el sistema.'
+            ];
+        } else {
+            $checks[] = [
+                'name' => 'Cupones Generados',
+                'status' => 'warning',
+                'message' => 'No hay cupones generados aún. Los cupones se generan automáticamente cuando los usuarios hacen login.'
+            ];
+        }
+
+        // Check 4: Directorio de logs
+        $upload_dir = wp_upload_dir();
+        $log_dir = $upload_dir['basedir'] . '/mad-suite-logs';
+
+        if (is_writable($log_dir)) {
+            $checks[] = [
+                'name' => 'Directorio de Logs',
+                'status' => 'ok',
+                'message' => 'El directorio de logs existe y es escribible.'
+            ];
+        } else {
+            $checks[] = [
+                'name' => 'Directorio de Logs',
+                'status' => 'error',
+                'message' => 'El directorio de logs no es escribible. Los logs no se guardarán correctamente.'
+            ];
+        }
+
+        // Check 5: Hooks registrados
+        $hooks_ok = has_action('wp_login', [$this, 'on_user_login']);
+
+        if ($hooks_ok) {
+            $checks[] = [
+                'name' => 'Hooks de WordPress',
+                'status' => 'ok',
+                'message' => 'Los hooks de WordPress están correctamente registrados.'
+            ];
+        } else {
+            $checks[] = [
+                'name' => 'Hooks de WordPress',
+                'status' => 'error',
+                'message' => 'Los hooks de WordPress NO están registrados. Esto puede indicar un problema de inicialización.'
+            ];
+        }
+
+        // Check 6: Verificar que las reglas tienen configuración válida
+        $invalid_rules = [];
+        foreach ($active_rules as $rule) {
+            if (empty($rule['roles'])) {
+                $invalid_rules[] = $rule['name'] . ' (sin roles asignados)';
+            }
+            if (empty($rule['target_ids'])) {
+                $invalid_rules[] = $rule['name'] . ' (sin productos/categorías/tags)';
+            }
+        }
+
+        if (empty($invalid_rules)) {
+            $checks[] = [
+                'name' => 'Validación de Reglas',
+                'status' => 'ok',
+                'message' => 'Todas las reglas activas tienen configuración válida.'
+            ];
+        } else {
+            $checks[] = [
+                'name' => 'Validación de Reglas',
+                'status' => 'warning',
+                'message' => 'Algunas reglas tienen configuración incompleta: ' . implode(', ', $invalid_rules)
+            ];
+        }
+
+        wp_send_json_success(['checks' => $checks]);
+    }
+
+    /**
+     * AJAX: Limpiar logs de hoy
+     */
+    public function ajax_clear_today_logs() {
+        check_ajax_referer('mad_clear_logs', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+
+        $upload_dir = wp_upload_dir();
+        $log_file = $upload_dir['basedir'] . '/mad-suite-logs/private-shop-' . date('Y-m-d') . '.log';
+
+        if (file_exists($log_file)) {
+            unlink($log_file);
+            wp_send_json_success('Logs limpiados correctamente');
+        } else {
+            wp_send_json_error('No hay logs para limpiar');
+        }
     }
 }
 
