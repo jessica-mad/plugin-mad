@@ -41,18 +41,53 @@ if (! defined('ABSPATH')) {
                                 $replace_source = isset($rule['replace_source_role']) && $rule['replace_source_role'];
 
                                 $conditions_text = [];
-                                if (! empty($rule['conditions']['min_spent'])) {
-                                    $conditions_text[] = sprintf(
-                                        __('Gasto ≥ %s', 'mad-suite'),
-                                        wc_price($rule['conditions']['min_spent'])
-                                    );
+                                $min_spent = ! empty($rule['conditions']['min_spent']) ? $rule['conditions']['min_spent'] : 0;
+                                $max_spent = ! empty($rule['conditions']['max_spent']) ? $rule['conditions']['max_spent'] : 0;
+                                $min_orders = ! empty($rule['conditions']['min_orders']) ? $rule['conditions']['min_orders'] : 0;
+                                $max_orders = ! empty($rule['conditions']['max_orders']) ? $rule['conditions']['max_orders'] : 0;
+
+                                // Gasto
+                                if ($min_spent > 0 || $max_spent > 0) {
+                                    if ($min_spent > 0 && $max_spent > 0) {
+                                        $conditions_text[] = sprintf(
+                                            __('Gasto %s - %s', 'mad-suite'),
+                                            wc_price($min_spent),
+                                            wc_price($max_spent)
+                                        );
+                                    } elseif ($min_spent > 0) {
+                                        $conditions_text[] = sprintf(
+                                            __('Gasto ≥ %s', 'mad-suite'),
+                                            wc_price($min_spent)
+                                        );
+                                    } elseif ($max_spent > 0) {
+                                        $conditions_text[] = sprintf(
+                                            __('Gasto ≤ %s', 'mad-suite'),
+                                            wc_price($max_spent)
+                                        );
+                                    }
                                 }
-                                if (! empty($rule['conditions']['min_orders'])) {
-                                    $conditions_text[] = sprintf(
-                                        __('Pedidos ≥ %d', 'mad-suite'),
-                                        $rule['conditions']['min_orders']
-                                    );
+
+                                // Pedidos
+                                if ($min_orders > 0 || $max_orders > 0) {
+                                    if ($min_orders > 0 && $max_orders > 0) {
+                                        $conditions_text[] = sprintf(
+                                            __('Pedidos %d - %d', 'mad-suite'),
+                                            $min_orders,
+                                            $max_orders
+                                        );
+                                    } elseif ($min_orders > 0) {
+                                        $conditions_text[] = sprintf(
+                                            __('Pedidos ≥ %d', 'mad-suite'),
+                                            $min_orders
+                                        );
+                                    } elseif ($max_orders > 0) {
+                                        $conditions_text[] = sprintf(
+                                            __('Pedidos ≤ %d', 'mad-suite'),
+                                            $max_orders
+                                        );
+                                    }
                                 }
+
                                 $operator = isset($rule['conditions']['operator']) ? $rule['conditions']['operator'] : 'AND';
                                 ?>
                                 <tr>
@@ -104,6 +139,19 @@ if (! defined('ABSPATH')) {
                                             'mads_role_creator_nonce'
                                         );
                                         ?>
+                                        <button type="button" class="button button-small edit-rule-btn"
+                                                data-rule-id="<?php echo esc_attr($rule_id); ?>"
+                                                data-rule-name="<?php echo esc_attr($rule['name']); ?>"
+                                                data-rule-role="<?php echo esc_attr($rule['role']); ?>"
+                                                data-rule-source-role="<?php echo esc_attr($source_role ? $source_role : ''); ?>"
+                                                data-rule-replace-source="<?php echo esc_attr($replace_source ? '1' : '0'); ?>"
+                                                data-rule-min-spent="<?php echo esc_attr($min_spent); ?>"
+                                                data-rule-max-spent="<?php echo esc_attr($max_spent); ?>"
+                                                data-rule-min-orders="<?php echo esc_attr($min_orders); ?>"
+                                                data-rule-max-orders="<?php echo esc_attr($max_orders); ?>"
+                                                data-rule-operator="<?php echo esc_attr($operator); ?>">
+                                            <?php esc_html_e('Editar', 'mad-suite'); ?>
+                                        </button>
                                         <a href="<?php echo esc_url($toggle_url); ?>" class="button button-small">
                                             <?php echo $is_active ? esc_html__('Desactivar', 'mad-suite') : esc_html__('Activar', 'mad-suite'); ?>
                                         </a>
@@ -227,12 +275,34 @@ if (! defined('ABSPATH')) {
 
                             <tr>
                                 <th scope="row">
+                                    <label for="rule-max-spent"><?php esc_html_e('Gasto Máximo (Opcional)', 'mad-suite'); ?></label>
+                                </th>
+                                <td>
+                                    <input type="number" id="rule-max-spent" name="rule_max_spent" class="regular-text"
+                                           min="0" step="0.01" placeholder="0.00" />
+                                    <p class="description"><?php esc_html_e('Monto máximo que debe haber gastado el usuario (opcional, dejar en 0 para sin límite). Ejemplo: para usuarios entre $100-$500, usa mínimo=100 y máximo=500.', 'mad-suite'); ?></p>
+                                </td>
+                            </tr>
+
+                            <tr>
+                                <th scope="row">
                                     <label for="rule-min-orders"><?php esc_html_e('Cantidad Mínima de Pedidos', 'mad-suite'); ?></label>
                                 </th>
                                 <td>
                                     <input type="number" id="rule-min-orders" name="rule_min_orders" class="regular-text"
                                            min="0" step="1" placeholder="0" />
                                     <p class="description"><?php esc_html_e('Cantidad mínima de pedidos completados (dejar en 0 para no evaluar esta condición).', 'mad-suite'); ?></p>
+                                </td>
+                            </tr>
+
+                            <tr>
+                                <th scope="row">
+                                    <label for="rule-max-orders"><?php esc_html_e('Cantidad Máxima de Pedidos (Opcional)', 'mad-suite'); ?></label>
+                                </th>
+                                <td>
+                                    <input type="number" id="rule-max-orders" name="rule_max_orders" class="regular-text"
+                                           min="0" step="1" placeholder="0" />
+                                    <p class="description"><?php esc_html_e('Cantidad máxima de pedidos (opcional, dejar en 0 para sin límite). Ejemplo: para usuarios entre 5-10 pedidos, usa mínimo=5 y máximo=10.', 'mad-suite'); ?></p>
                                 </td>
                             </tr>
 
@@ -337,6 +407,135 @@ if (! defined('ABSPATH')) {
                 </ul>
             </div>
             <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- Modal para Editar Regla -->
+    <div id="edit-rule-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; overflow-y: auto;">
+        <div style="max-width: 800px; margin: 50px auto; background: white; padding: 30px; border-radius: 8px; position: relative;">
+            <button type="button" id="close-edit-modal" style="position: absolute; top: 15px; right: 15px; background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">&times;</button>
+
+            <h2><?php esc_html_e('Editar Regla Automática', 'mad-suite'); ?></h2>
+
+            <form method="post" action="<?php echo esc_url($import_action); ?>" id="edit-rule-form">
+                <?php wp_nonce_field('mads_role_creator_update_rule', 'mads_role_creator_nonce'); ?>
+                <input type="hidden" name="action" value="mads_role_creator_update_rule" />
+                <input type="hidden" name="rule_id" id="edit-rule-id" value="" />
+
+                <table class="form-table" role="presentation">
+                    <tbody>
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-name"><?php esc_html_e('Nombre de la Regla', 'mad-suite'); ?> <span class="required">*</span></label>
+                            </th>
+                            <td>
+                                <input type="text" id="edit-rule-name" name="rule_name" class="regular-text" required />
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-role"><?php esc_html_e('Rol Destino', 'mad-suite'); ?> <span class="required">*</span></label>
+                            </th>
+                            <td>
+                                <select id="edit-rule-role" name="rule_role" class="regular-text" required>
+                                    <option value=""><?php esc_html_e('Selecciona un rol…', 'mad-suite'); ?></option>
+                                    <?php foreach ($roles as $slug => $role_data) : ?>
+                                        <option value="<?php echo esc_attr($slug); ?>">
+                                            <?php echo esc_html($role_data['name']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-source-role"><?php esc_html_e('Rol de Origen (Opcional)', 'mad-suite'); ?></label>
+                            </th>
+                            <td>
+                                <select id="edit-rule-source-role" name="rule_source_role" class="regular-text">
+                                    <option value=""><?php esc_html_e('Cualquier rol', 'mad-suite'); ?></option>
+                                    <?php foreach ($roles as $slug => $role_data) : ?>
+                                        <option value="<?php echo esc_attr($slug); ?>">
+                                            <?php echo esc_html($role_data['name']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-replace-source-role"><?php esc_html_e('Modo de Asignación', 'mad-suite'); ?></label>
+                            </th>
+                            <td>
+                                <label for="edit-rule-replace-source-role">
+                                    <input type="checkbox" id="edit-rule-replace-source-role" name="rule_replace_source_role" value="1" />
+                                    <?php esc_html_e('Reemplazar el rol de origen', 'mad-suite'); ?>
+                                </label>
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-min-spent"><?php esc_html_e('Gasto Mínimo', 'mad-suite'); ?></label>
+                            </th>
+                            <td>
+                                <input type="number" id="edit-rule-min-spent" name="rule_min_spent" class="regular-text"
+                                       min="0" step="0.01" placeholder="0.00" />
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-max-spent"><?php esc_html_e('Gasto Máximo (Opcional)', 'mad-suite'); ?></label>
+                            </th>
+                            <td>
+                                <input type="number" id="edit-rule-max-spent" name="rule_max_spent" class="regular-text"
+                                       min="0" step="0.01" placeholder="0.00" />
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-min-orders"><?php esc_html_e('Cantidad Mínima de Pedidos', 'mad-suite'); ?></label>
+                            </th>
+                            <td>
+                                <input type="number" id="edit-rule-min-orders" name="rule_min_orders" class="regular-text"
+                                       min="0" step="1" placeholder="0" />
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-max-orders"><?php esc_html_e('Cantidad Máxima de Pedidos (Opcional)', 'mad-suite'); ?></label>
+                            </th>
+                            <td>
+                                <input type="number" id="edit-rule-max-orders" name="rule_max_orders" class="regular-text"
+                                       min="0" step="1" placeholder="0" />
+                            </td>
+                        </tr>
+
+                        <tr>
+                            <th scope="row">
+                                <label for="edit-rule-operator"><?php esc_html_e('Operador Lógico', 'mad-suite'); ?></label>
+                            </th>
+                            <td>
+                                <select id="edit-rule-operator" name="rule_operator" class="regular-text">
+                                    <option value="AND"><?php esc_html_e('Y (AND)', 'mad-suite'); ?></option>
+                                    <option value="OR"><?php esc_html_e('O (OR)', 'mad-suite'); ?></option>
+                                </select>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div style="margin-top: 20px; text-align: right;">
+                    <button type="button" id="cancel-edit-btn" class="button"><?php esc_html_e('Cancelar', 'mad-suite'); ?></button>
+                    <button type="submit" class="button button-primary"><?php esc_html_e('Guardar Cambios', 'mad-suite'); ?></button>
+                </div>
+            </form>
         </div>
     </div>
 </div>

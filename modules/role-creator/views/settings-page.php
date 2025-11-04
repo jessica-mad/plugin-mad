@@ -12,10 +12,11 @@ if (! defined('ABSPATH')) {
 /** @var string $current_tab */
 
 $tabs = [
-    'automatic-rules' => __('Reglas Automáticas', 'mad-suite'),
-    'manual-assign'   => __('Asignación Manual', 'mad-suite'),
-    'csv-import'      => __('Importación CSV', 'mad-suite'),
-    'role-management' => __('Gestión de Roles', 'mad-suite'),
+    'automatic-rules'    => __('Reglas Automáticas', 'mad-suite'),
+    'manual-assign'      => __('Asignación Manual', 'mad-suite'),
+    'csv-import'         => __('Importación CSV', 'mad-suite'),
+    'role-management'    => __('Gestión de Roles', 'mad-suite'),
+    'mailchimp-settings' => __('Mailchimp', 'mad-suite'),
 ];
 
 $base_url = add_query_arg(['page' => $module->menu_slug()], admin_url('admin.php'));
@@ -59,6 +60,10 @@ $base_url = add_query_arg(['page' => $module->menu_slug()], admin_url('admin.php
 
             case 'role-management':
                 include __DIR__ . '/tabs/role-management.php';
+                break;
+
+            case 'mailchimp-settings':
+                include __DIR__ . '/tabs/mailchimp-settings.php';
                 break;
 
             default:

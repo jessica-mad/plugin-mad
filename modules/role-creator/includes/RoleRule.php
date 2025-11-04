@@ -94,10 +94,20 @@ class RoleRule
         // Validar condiciones
         $conditions = isset($rule_data['conditions']) ? $rule_data['conditions'] : [];
         $min_spent  = isset($conditions['min_spent']) ? (float) $conditions['min_spent'] : 0;
+        $max_spent  = isset($conditions['max_spent']) ? (float) $conditions['max_spent'] : 0;
         $min_orders = isset($conditions['min_orders']) ? (int) $conditions['min_orders'] : 0;
+        $max_orders = isset($conditions['max_orders']) ? (int) $conditions['max_orders'] : 0;
 
         if ($min_spent <= 0 && $min_orders <= 0) {
-            return new WP_Error('invalid_conditions', __('Debes especificar al menos una condición válida (monto o cantidad de pedidos).', 'mad-suite'));
+            return new WP_Error('invalid_conditions', __('Debes especificar al menos una condición mínima válida (monto o cantidad de pedidos).', 'mad-suite'));
+        }
+
+        // Validar rangos (máximo debe ser mayor que mínimo si está especificado)
+        if ($max_spent > 0 && $max_spent < $min_spent) {
+            return new WP_Error('invalid_range', __('El monto máximo debe ser mayor que el monto mínimo.', 'mad-suite'));
+        }
+        if ($max_orders > 0 && $max_orders < $min_orders) {
+            return new WP_Error('invalid_range', __('La cantidad máxima de pedidos debe ser mayor que la mínima.', 'mad-suite'));
         }
 
         // Crear la regla
@@ -109,7 +119,9 @@ class RoleRule
             'replace_source_role' => isset($rule_data['replace_source_role']) ? (bool) $rule_data['replace_source_role'] : false,
             'conditions'          => [
                 'min_spent'  => $min_spent,
+                'max_spent'  => $max_spent,
                 'min_orders' => $min_orders,
+                'max_orders' => $max_orders,
                 'operator'   => isset($conditions['operator']) ? strtoupper($conditions['operator']) : 'AND',
             ],
             'active'              => isset($rule_data['active']) ? (bool) $rule_data['active'] : true,

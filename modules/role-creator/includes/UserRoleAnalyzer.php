@@ -55,7 +55,7 @@ class UserRoleAnalyzer
      * Verifica si un usuario cumple con condiciones específicas
      *
      * @param int   $user_id
-     * @param array $conditions ['min_spent' => float, 'min_orders' => int, 'operator' => 'AND'|'OR']
+     * @param array $conditions ['min_spent' => float, 'max_spent' => float, 'min_orders' => int, 'max_orders' => int, 'operator' => 'AND'|'OR']
      * @return bool
      */
     public function user_meets_conditions($user_id, $conditions)
@@ -65,10 +65,12 @@ class UserRoleAnalyzer
         }
 
         $min_spent  = isset($conditions['min_spent']) ? (float) $conditions['min_spent'] : 0;
+        $max_spent  = isset($conditions['max_spent']) ? (float) $conditions['max_spent'] : 0;
         $min_orders = isset($conditions['min_orders']) ? (int) $conditions['min_orders'] : 0;
+        $max_orders = isset($conditions['max_orders']) ? (int) $conditions['max_orders'] : 0;
         $operator   = isset($conditions['operator']) ? strtoupper($conditions['operator']) : 'AND';
 
-        // Si ambas condiciones son 0, no tiene sentido evaluarlas
+        // Si ambas condiciones mínimas son 0, no tiene sentido evaluarlas
         if ($min_spent <= 0 && $min_orders <= 0) {
             return false;
         }
@@ -76,16 +78,36 @@ class UserRoleAnalyzer
         $meets_spent  = true;
         $meets_orders = true;
 
-        // Evaluar condición de gasto mínimo
-        if ($min_spent > 0) {
-            $total_spent  = $this->get_user_total_spent($user_id);
-            $meets_spent  = $total_spent >= $min_spent;
+        // Evaluar condición de gasto (rango o solo mínimo)
+        if ($min_spent > 0 || $max_spent > 0) {
+            $total_spent = $this->get_user_total_spent($user_id);
+
+            if ($min_spent > 0 && $max_spent > 0) {
+                // Rango: entre mínimo y máximo
+                $meets_spent = $total_spent >= $min_spent && $total_spent <= $max_spent;
+            } elseif ($min_spent > 0) {
+                // Solo mínimo: mayor o igual
+                $meets_spent = $total_spent >= $min_spent;
+            } elseif ($max_spent > 0) {
+                // Solo máximo: menor o igual
+                $meets_spent = $total_spent <= $max_spent;
+            }
         }
 
-        // Evaluar condición de pedidos mínimos
-        if ($min_orders > 0) {
-            $order_count  = $this->get_user_order_count($user_id);
-            $meets_orders = $order_count >= $min_orders;
+        // Evaluar condición de pedidos (rango o solo mínimo)
+        if ($min_orders > 0 || $max_orders > 0) {
+            $order_count = $this->get_user_order_count($user_id);
+
+            if ($min_orders > 0 && $max_orders > 0) {
+                // Rango: entre mínimo y máximo
+                $meets_orders = $order_count >= $min_orders && $order_count <= $max_orders;
+            } elseif ($min_orders > 0) {
+                // Solo mínimo: mayor o igual
+                $meets_orders = $order_count >= $min_orders;
+            } elseif ($max_orders > 0) {
+                // Solo máximo: menor o igual
+                $meets_orders = $order_count <= $max_orders;
+            }
         }
 
         // Aplicar operador lógico

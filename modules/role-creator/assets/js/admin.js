@@ -14,6 +14,9 @@
 
         // Inicializar vista previa de reglas
         initRulePreview();
+
+        // Inicializar modal de edición
+        initEditModal();
     });
 
     /**
@@ -154,13 +157,15 @@
 
             // Obtener valores del formulario
             var minSpent = parseFloat($('#rule-min-spent').val()) || 0;
+            var maxSpent = parseFloat($('#rule-max-spent').val()) || 0;
             var minOrders = parseInt($('#rule-min-orders').val()) || 0;
+            var maxOrders = parseInt($('#rule-max-orders').val()) || 0;
             var operator = $('#rule-operator').val() || 'AND';
             var sourceRole = $('#rule-source-role').val() || '';
 
             // Validar que al menos una condición esté especificada
-            if (minSpent <= 0 && minOrders <= 0) {
-                alert('Debes especificar al menos una condición (gasto mínimo o cantidad de pedidos).');
+            if (minSpent <= 0 && minOrders <= 0 && maxSpent <= 0 && maxOrders <= 0) {
+                alert('Debes especificar al menos una condición (gasto o cantidad de pedidos).');
                 return;
             }
 
@@ -179,7 +184,9 @@
                     action: 'mads_role_creator_preview_rule',
                     nonce: madsRoleCreatorL10n.previewNonce,
                     min_spent: minSpent,
+                    max_spent: maxSpent,
                     min_orders: minOrders,
+                    max_orders: maxOrders,
                     operator: operator,
                     source_role: sourceRole
                 },
@@ -266,6 +273,54 @@
     $('.mad-role-creator form').on('submit', function() {
         showFormLoading($(this));
     });
+
+    /**
+     * Inicializa el modal de edición de reglas
+     */
+    function initEditModal() {
+        var $modal = $('#edit-rule-modal');
+
+        if ($modal.length === 0) {
+            return;
+        }
+
+        // Abrir modal al hacer clic en botón editar
+        $('.edit-rule-btn').on('click', function() {
+            var $btn = $(this);
+
+            // Poblar el formulario con los datos de la regla
+            $('#edit-rule-id').val($btn.data('rule-id'));
+            $('#edit-rule-name').val($btn.data('rule-name'));
+            $('#edit-rule-role').val($btn.data('rule-role'));
+            $('#edit-rule-source-role').val($btn.data('rule-source-role'));
+            $('#edit-rule-replace-source-role').prop('checked', $btn.data('rule-replace-source') === '1' || $btn.data('rule-replace-source') === 1);
+            $('#edit-rule-min-spent').val($btn.data('rule-min-spent') || '');
+            $('#edit-rule-max-spent').val($btn.data('rule-max-spent') || '');
+            $('#edit-rule-min-orders').val($btn.data('rule-min-orders') || '');
+            $('#edit-rule-max-orders').val($btn.data('rule-max-orders') || '');
+            $('#edit-rule-operator').val($btn.data('rule-operator') || 'AND');
+
+            // Mostrar modal
+            $modal.fadeIn(200);
+        });
+
+        // Cerrar modal con botón X
+        $('#close-edit-modal').on('click', function() {
+            $modal.fadeOut(200);
+        });
+
+        // Cerrar modal con botón cancelar
+        $('#cancel-edit-btn').on('click', function() {
+            $modal.fadeOut(200);
+        });
+
+        // Cerrar modal al hacer clic fuera del contenido
+        $modal.on('click', function(e) {
+            if ($(e.target).is('#edit-rule-modal')) {
+                $modal.fadeOut(200);
+            }
+        });
+    }
 
 })(jQuery);
 

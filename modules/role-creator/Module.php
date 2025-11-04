@@ -9,6 +9,7 @@ require_once __DIR__ . '/includes/RoleManager.php';
 require_once __DIR__ . '/includes/UserRoleAnalyzer.php';
 require_once __DIR__ . '/includes/RoleRule.php';
 require_once __DIR__ . '/includes/RoleAssigner.php';
+require_once __DIR__ . '/includes/MailchimpIntegration.php';
 
 use MAD_Suite\Modules\RoleCreator\ContactImporter;
 use MAD_Suite\Modules\RoleCreator\ContactManager;
@@ -16,6 +17,7 @@ use MAD_Suite\Modules\RoleCreator\RoleManager;
 use MAD_Suite\Modules\RoleCreator\UserRoleAnalyzer;
 use MAD_Suite\Modules\RoleCreator\RoleRule;
 use MAD_Suite\Modules\RoleCreator\RoleAssigner;
+use MAD_Suite\Modules\RoleCreator\MailchimpIntegration;
 
 return new class ($core ?? null) implements MAD_Suite_Module {
     private $core;
@@ -64,6 +66,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         // Nuevas acciones para reglas automáticas
         add_action('admin_post_mads_role_creator_create_rule', [$this, 'handle_create_rule']);
+        add_action('admin_post_mads_role_creator_update_rule', [$this, 'handle_update_rule']);
         add_action('admin_post_mads_role_creator_delete_rule', [$this, 'handle_delete_rule']);
         add_action('admin_post_mads_role_creator_toggle_rule', [$this, 'handle_toggle_rule']);
         add_action('admin_post_mads_role_creator_apply_rule', [$this, 'handle_apply_rule']);
@@ -74,6 +77,11 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         // Acciones para gestión de roles
         add_action('admin_post_mads_role_creator_delete_role', [$this, 'handle_role_deletion']);
+
+        // Acciones para Mailchimp
+        add_action('admin_post_mads_role_creator_mailchimp_save', [$this, 'handle_mailchimp_save']);
+        add_action('admin_post_mads_role_creator_mailchimp_test', [$this, 'handle_mailchimp_test']);
+        add_action('admin_post_mads_role_creator_mailchimp_sync_all', [$this, 'handle_mailchimp_sync_all']);
 
         // Registrar AJAX para búsqueda de usuarios
         add_action('wp_ajax_mads_role_creator_search_users', [$this, 'ajax_search_users']);
@@ -223,7 +231,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $source_role         = isset($_POST['rule_source_role']) && ! empty($_POST['rule_source_role']) ? sanitize_key(wp_unslash($_POST['rule_source_role'])) : null;
         $replace_source_role = isset($_POST['rule_replace_source_role']) && $_POST['rule_replace_source_role'] === '1';
         $min_spent           = isset($_POST['rule_min_spent']) ? floatval($_POST['rule_min_spent']) : 0;
+        $max_spent           = isset($_POST['rule_max_spent']) ? floatval($_POST['rule_max_spent']) : 0;
         $min_orders          = isset($_POST['rule_min_orders']) ? intval($_POST['rule_min_orders']) : 0;
+        $max_orders          = isset($_POST['rule_max_orders']) ? intval($_POST['rule_max_orders']) : 0;
         $operator            = isset($_POST['rule_operator']) ? sanitize_key(wp_unslash($_POST['rule_operator'])) : 'AND';
 
         $result = RoleRule::instance()->create_rule([
@@ -233,7 +243,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             'replace_source_role' => $replace_source_role,
             'conditions'          => [
                 'min_spent'  => $min_spent,
+                'max_spent'  => $max_spent,
                 'min_orders' => $min_orders,
+                'max_orders' => $max_orders,
                 'operator'   => $operator,
             ],
             'active'              => true,
@@ -243,6 +255,53 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             $this->add_notice('error', $result->get_error_message());
         } else {
             $this->add_notice('updated', __('La regla se creó correctamente.', 'mad-suite'));
+        }
+
+        return $this->redirect_back();
+    }
+
+    /**
+     * Handler para actualizar una regla existente
+     */
+    public function handle_update_rule()
+    {
+        $this->ensure_capability();
+        check_admin_referer('mads_role_creator_update_rule', 'mads_role_creator_nonce');
+
+        $rule_id             = isset($_POST['rule_id']) ? sanitize_text_field(wp_unslash($_POST['rule_id'])) : '';
+        $name                = isset($_POST['rule_name']) ? sanitize_text_field(wp_unslash($_POST['rule_name'])) : '';
+        $role                = isset($_POST['rule_role']) ? sanitize_key(wp_unslash($_POST['rule_role'])) : '';
+        $source_role         = isset($_POST['rule_source_role']) && ! empty($_POST['rule_source_role']) ? sanitize_key(wp_unslash($_POST['rule_source_role'])) : null;
+        $replace_source_role = isset($_POST['rule_replace_source_role']) && $_POST['rule_replace_source_role'] === '1';
+        $min_spent           = isset($_POST['rule_min_spent']) ? floatval($_POST['rule_min_spent']) : 0;
+        $max_spent           = isset($_POST['rule_max_spent']) ? floatval($_POST['rule_max_spent']) : 0;
+        $min_orders          = isset($_POST['rule_min_orders']) ? intval($_POST['rule_min_orders']) : 0;
+        $max_orders          = isset($_POST['rule_max_orders']) ? intval($_POST['rule_max_orders']) : 0;
+        $operator            = isset($_POST['rule_operator']) ? sanitize_key(wp_unslash($_POST['rule_operator'])) : 'AND';
+
+        if (empty($rule_id)) {
+            $this->add_notice('error', __('ID de regla no válido.', 'mad-suite'));
+            return $this->redirect_back();
+        }
+
+        $result = RoleRule::instance()->update_rule($rule_id, [
+            'name'                => $name,
+            'role'                => $role,
+            'source_role'         => $source_role,
+            'replace_source_role' => $replace_source_role,
+            'conditions'          => [
+                'min_spent'  => $min_spent,
+                'max_spent'  => $max_spent,
+                'min_orders' => $min_orders,
+                'max_orders' => $max_orders,
+                'operator'   => $operator,
+            ],
+        ]);
+
+        if (is_wp_error($result)) {
+            $this->add_notice('error', $result->get_error_message());
+        } else {
+            $this->add_notice('updated', __('La regla se actualizó correctamente.', 'mad-suite'));
         }
 
         return $this->redirect_back();
@@ -447,12 +506,14 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         // Obtener parámetros
         $min_spent   = isset($_POST['min_spent']) ? floatval($_POST['min_spent']) : 0;
+        $max_spent   = isset($_POST['max_spent']) ? floatval($_POST['max_spent']) : 0;
         $min_orders  = isset($_POST['min_orders']) ? intval($_POST['min_orders']) : 0;
+        $max_orders  = isset($_POST['max_orders']) ? intval($_POST['max_orders']) : 0;
         $operator    = isset($_POST['operator']) ? sanitize_key(wp_unslash($_POST['operator'])) : 'AND';
         $source_role = isset($_POST['source_role']) && ! empty($_POST['source_role']) ? sanitize_key(wp_unslash($_POST['source_role'])) : null;
 
         // Validar que al menos una condición esté especificada
-        if ($min_spent <= 0 && $min_orders <= 0) {
+        if ($min_spent <= 0 && $min_orders <= 0 && $max_spent <= 0 && $max_orders <= 0) {
             wp_send_json_error(['message' => __('Debes especificar al menos una condición (gasto o pedidos).', 'mad-suite')]);
             return;
         }
@@ -460,7 +521,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         // Construir condiciones
         $conditions = [
             'min_spent'  => $min_spent,
+            'max_spent'  => $max_spent,
             'min_orders' => $min_orders,
+            'max_orders' => $max_orders,
             'operator'   => strtoupper($operator),
         ];
 
@@ -530,14 +593,114 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $analyzer     = UserRoleAnalyzer::instance();
         $assigner     = RoleAssigner::instance();
 
+        $roles_changed = false;
+
         foreach ($active_rules as $rule) {
             if ($analyzer->user_meets_conditions($user_id, $rule['conditions'])) {
                 // Verificar si el usuario ya tiene el rol
                 if (! $assigner->user_has_role($user_id, $rule['role'])) {
                     $assigner->assign_role_to_users($user_id, $rule['role'], false);
+                    $roles_changed = true;
                 }
             }
         }
+
+        // Sincronizar con Mailchimp si los roles cambiaron
+        if ($roles_changed) {
+            $this->sync_user_to_mailchimp($user_id);
+        }
+    }
+
+    /**
+     * Sincroniza un usuario con Mailchimp
+     */
+    private function sync_user_to_mailchimp($user_id)
+    {
+        $mailchimp = MailchimpIntegration::instance();
+
+        if (! $mailchimp->is_configured()) {
+            return;
+        }
+
+        $mailchimp->sync_user($user_id);
+    }
+
+    /**
+     * Handler para guardar configuración de Mailchimp
+     */
+    public function handle_mailchimp_save()
+    {
+        $this->ensure_capability();
+        check_admin_referer('mads_role_creator_mailchimp_save', 'mads_role_creator_nonce');
+
+        $api_key     = isset($_POST['mailchimp_api_key']) ? sanitize_text_field(wp_unslash($_POST['mailchimp_api_key'])) : '';
+        $audience_id = isset($_POST['mailchimp_audience_id']) ? sanitize_text_field(wp_unslash($_POST['mailchimp_audience_id'])) : '';
+        $auto_sync   = isset($_POST['mailchimp_auto_sync']) && $_POST['mailchimp_auto_sync'] === '1';
+
+        $settings = [
+            'api_key'     => $api_key,
+            'audience_id' => $audience_id,
+            'auto_sync'   => $auto_sync,
+        ];
+
+        MailchimpIntegration::instance()->save_settings($settings);
+
+        $this->add_notice('updated', __('Configuración de Mailchimp guardada correctamente.', 'mad-suite'));
+
+        return $this->redirect_back();
+    }
+
+    /**
+     * Handler para probar conexión de Mailchimp
+     */
+    public function handle_mailchimp_test()
+    {
+        $this->ensure_capability();
+        check_admin_referer('mads_role_creator_mailchimp_test', 'mads_role_creator_nonce');
+
+        $result = MailchimpIntegration::instance()->test_connection();
+
+        if (is_wp_error($result)) {
+            $this->add_notice('error', $result->get_error_message());
+        } else {
+            $this->add_notice('updated', __('Conexión con Mailchimp exitosa.', 'mad-suite'));
+        }
+
+        return $this->redirect_back();
+    }
+
+    /**
+     * Handler para sincronizar todos los usuarios con Mailchimp
+     */
+    public function handle_mailchimp_sync_all()
+    {
+        $this->ensure_capability();
+        check_admin_referer('mads_role_creator_mailchimp_sync_all', 'mads_role_creator_nonce');
+
+        // Obtener todos los usuarios
+        $users = get_users(['fields' => 'ID']);
+        $user_ids = array_map(function($user) {
+            return is_object($user) ? $user->ID : $user;
+        }, $users);
+
+        $result = MailchimpIntegration::instance()->sync_users_bulk($user_ids);
+
+        $message = sprintf(
+            __('Se sincronizaron %d usuarios con Mailchimp correctamente.', 'mad-suite'),
+            $result['success']
+        );
+
+        $this->add_notice('updated', $message);
+
+        if (! empty($result['errors'])) {
+            $error_summary = sprintf(
+                __('Errores encontrados: %d', 'mad-suite'),
+                count($result['errors'])
+            );
+            $this->add_notice('error', $error_summary);
+        }
+
+        return $this->redirect_back();
     }
 
     /**
