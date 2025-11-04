@@ -54,9 +54,22 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function init()
     {
+        $logger = Logger::instance();
+        $logger->info('Módulo Role Creator inicializado');
+
         // Hooks de WooCommerce para evaluación automática
         add_action('woocommerce_order_status_completed', [$this, 'on_order_completed']);
         add_action('woocommerce_payment_complete', [$this, 'on_payment_complete']);
+
+        // Hooks de WordPress para detectar cambios de roles
+        add_action('set_user_role', [$this, 'on_user_role_changed'], 10, 3);
+        add_action('add_user_role', [$this, 'on_user_role_added'], 10, 2);
+        add_action('remove_user_role', [$this, 'on_user_role_removed'], 10, 2);
+
+        $logger->debug('Hooks de WooCommerce y WordPress registrados', [
+            'woocommerce_hooks' => ['woocommerce_order_status_completed', 'woocommerce_payment_complete'],
+            'wordpress_hooks' => ['set_user_role', 'add_user_role', 'remove_user_role'],
+        ]);
     }
 
     public function admin_init()
@@ -93,6 +106,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         // Registrar AJAX para previsualización de reglas
         add_action('wp_ajax_mads_role_creator_preview_rule', [$this, 'ajax_preview_rule']);
+
+        // Registrar AJAX para sincronización manual de Mailchimp
+        add_action('wp_ajax_mads_role_creator_sync_user', [$this, 'ajax_sync_user']);
     }
 
     public function render_settings_page()
@@ -413,9 +429,17 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $this->ensure_capability();
         check_admin_referer('mads_role_creator_assign_manual', 'mads_role_creator_nonce');
 
+        $logger = Logger::instance();
+
         $user_ids = isset($_POST['user_ids']) ? array_map('intval', (array) $_POST['user_ids']) : [];
         $role     = isset($_POST['assign_role']) ? sanitize_key(wp_unslash($_POST['assign_role'])) : '';
         $remove   = isset($_POST['remove_existing']) && $_POST['remove_existing'] === '1';
+
+        $logger->info('Asignación manual de rol solicitada', [
+            'user_ids' => $user_ids,
+            'role' => $role,
+            'remove_existing' => $remove,
+        ]);
 
         if (empty($user_ids)) {
             $this->add_notice('error', __('Debes seleccionar al menos un usuario.', 'mad-suite'));
@@ -429,10 +453,25 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         $result = RoleAssigner::instance()->assign_role_to_users($user_ids, $role, $remove);
 
+        // Log de cada usuario asignado
+        foreach ($user_ids as $user_id) {
+            Logger::instance()->log_role_assignment($user_id, $role, 'manual');
+        }
+
+        // Sincronizar cada usuario con Mailchimp
+        foreach ($user_ids as $user_id) {
+            $this->sync_user_to_mailchimp($user_id);
+        }
+
         $message = sprintf(
             __('Se asignó el rol a %d usuarios correctamente.', 'mad-suite'),
             $result['success']
         );
+
+        $logger->success('Asignación manual completada', [
+            'success' => $result['success'],
+            'errors' => count($result['errors']),
+        ]);
 
         $this->add_notice('updated', $message);
 
@@ -554,20 +593,62 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     }
 
     /**
+     * AJAX handler para sincronizar un usuario específico con Mailchimp
+     */
+    public function ajax_sync_user()
+    {
+        $this->ensure_capability();
+
+        // Verificar nonce
+        if (! isset($_POST['nonce']) || ! wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nonce'])), 'mads_role_creator_sync')) {
+            wp_send_json_error(['message' => __('Verificación de seguridad fallida.', 'mad-suite')]);
+            return;
+        }
+
+        $user_id = isset($_POST['user_id']) ? intval($_POST['user_id']) : 0;
+
+        if (! $user_id) {
+            wp_send_json_error(['message' => __('ID de usuario inválido.', 'mad-suite')]);
+            return;
+        }
+
+        $logger = Logger::instance();
+        $logger->info('Sincronización manual solicitada desde AJAX', ['user_id' => $user_id]);
+
+        $result = $this->sync_user_to_mailchimp($user_id);
+
+        if (is_wp_error($result)) {
+            wp_send_json_error(['message' => $result->get_error_message()]);
+        } else {
+            wp_send_json_success(['message' => __('Usuario sincronizado exitosamente con Mailchimp.', 'mad-suite')]);
+        }
+    }
+
+    /**
      * Hook cuando un pedido se completa
      */
     public function on_order_completed($order_id)
     {
+        $logger = Logger::instance();
+        $logger->debug('Hook on_order_completed ejecutado', ['order_id' => $order_id]);
+
         $order = wc_get_order($order_id);
 
         if (! $order) {
+            $logger->warning('Pedido no encontrado', ['order_id' => $order_id]);
             return;
         }
 
         $user_id = $order->get_user_id();
 
         if ($user_id) {
+            $logger->info('Pedido completado, evaluando reglas para usuario', [
+                'order_id' => $order_id,
+                'user_id' => $user_id,
+            ]);
             $this->evaluate_user_rules($user_id);
+        } else {
+            $logger->debug('Pedido sin usuario asociado', ['order_id' => $order_id]);
         }
     }
 
@@ -576,17 +657,73 @@ return new class ($core ?? null) implements MAD_Suite_Module {
      */
     public function on_payment_complete($order_id)
     {
+        $logger = Logger::instance();
+        $logger->debug('Hook on_payment_complete ejecutado', ['order_id' => $order_id]);
+
         $order = wc_get_order($order_id);
 
         if (! $order) {
+            $logger->warning('Pedido no encontrado', ['order_id' => $order_id]);
             return;
         }
 
         $user_id = $order->get_user_id();
 
         if ($user_id) {
+            $logger->info('Pago completado, evaluando reglas para usuario', [
+                'order_id' => $order_id,
+                'user_id' => $user_id,
+            ]);
             $this->evaluate_user_rules($user_id);
+        } else {
+            $logger->debug('Pedido sin usuario asociado', ['order_id' => $order_id]);
         }
+    }
+
+    /**
+     * Hook cuando un rol de usuario cambia
+     */
+    public function on_user_role_changed($user_id, $role, $old_roles)
+    {
+        $logger = Logger::instance();
+        $logger->info('Rol de usuario cambiado (set_user_role)', [
+            'user_id' => $user_id,
+            'new_role' => $role,
+            'old_roles' => $old_roles,
+        ]);
+
+        // Sincronizar con Mailchimp
+        $this->sync_user_to_mailchimp($user_id);
+    }
+
+    /**
+     * Hook cuando se agrega un rol a un usuario
+     */
+    public function on_user_role_added($user_id, $role)
+    {
+        $logger = Logger::instance();
+        $logger->info('Rol agregado a usuario (add_user_role)', [
+            'user_id' => $user_id,
+            'role' => $role,
+        ]);
+
+        // Sincronizar con Mailchimp
+        $this->sync_user_to_mailchimp($user_id);
+    }
+
+    /**
+     * Hook cuando se remueve un rol de un usuario
+     */
+    public function on_user_role_removed($user_id, $role)
+    {
+        $logger = Logger::instance();
+        $logger->info('Rol removido de usuario (remove_user_role)', [
+            'user_id' => $user_id,
+            'role' => $role,
+        ]);
+
+        // Sincronizar con Mailchimp
+        $this->sync_user_to_mailchimp($user_id);
     }
 
     /**
@@ -657,6 +794,8 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     /**
      * Sincroniza un usuario con Mailchimp
+     *
+     * @return bool|WP_Error
      */
     private function sync_user_to_mailchimp($user_id)
     {
@@ -665,7 +804,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         if (! $mailchimp->is_configured()) {
             $logger->warning('Mailchimp no está configurado, sincronización omitida', ['user_id' => $user_id]);
-            return;
+            return new \WP_Error('not_configured', __('Mailchimp no está configurado.', 'mad-suite'));
         }
 
         $logger->info('Iniciando sincronización con Mailchimp', ['user_id' => $user_id]);
@@ -679,6 +818,8 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         } else {
             $logger->log_mailchimp_sync($user_id, true, 'Sincronización exitosa');
         }
+
+        return $result;
     }
 
     /**
@@ -813,6 +954,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             'noResults'         => __('No se encontraron usuarios', 'mad-suite'),
             'errorLoading'      => __('No se pudieron cargar los resultados', 'mad-suite'),
             'previewNonce'      => wp_create_nonce('mads_role_creator_preview'),
+            'syncNonce'         => wp_create_nonce('mads_role_creator_sync'),
             'ajaxUrl'           => admin_url('admin-ajax.php'),
         ]);
     }
