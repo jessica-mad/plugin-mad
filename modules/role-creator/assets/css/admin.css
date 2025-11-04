@@ -1,0 +1,186 @@
+/**
+ * Estilos para el Gestor de Roles - MAD Suite
+ */
+
+/* Grid Layout Global */
+.mad-role-creator__grid,
+.mad-role-creator__automatic-rules .mad-role-creator__grid,
+.mad-role-creator__role-management .mad-role-creator__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 24px;
+    margin-top: 24px;
+}
+
+/* Cards */
+.mad-role-creator .card,
+.mad-role-creator__column .card {
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.mad-role-creator .card h2,
+.mad-role-creator .card h3 {
+    margin-top: 0;
+}
+
+/* Forms */
+.mad-role-creator__form {
+    margin-top: 16px;
+}
+
+.mad-role-creator__label {
+    display: block;
+    margin-top: 12px;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.mad-role-creator__label .required {
+    color: #dc3232;
+}
+
+.mad-role-creator__form .button {
+    margin-top: 12px;
+}
+
+.mad-role-creator__form .form-table th {
+    padding-left: 0;
+    padding-right: 20px;
+    width: 200px;
+    font-weight: 600;
+}
+
+.mad-role-creator__form .form-table td {
+    padding-left: 0;
+}
+
+/* Tabs */
+.mad-role-creator .nav-tab-wrapper {
+    margin-bottom: 0;
+}
+
+.mad-role-creator .tab-content {
+    background: #fff;
+    padding: 20px;
+    border: 1px solid #c3c4c7;
+    border-top: none;
+}
+
+/* Tables */
+.mad-role-creator table.widefat {
+    margin-top: 16px;
+}
+
+.mad-role-creator table.widefat thead th {
+    font-weight: 600;
+}
+
+.mad-role-creator table.widefat .button {
+    margin: 2px;
+}
+
+/* Status Indicators */
+.mad-role-creator .dashicons {
+    vertical-align: middle;
+    margin-right: 4px;
+}
+
+/* Responsive */
+@media screen and (max-width: 782px) {
+    .mad-role-creator__grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mad-role-creator table.widefat {
+        font-size: 12px;
+    }
+
+    .mad-role-creator table.widefat .button {
+        font-size: 11px;
+        padding: 2px 8px;
+    }
+}
+
+/* Select2 Override para mejorar apariencia */
+.mad-role-creator .select2-container {
+    min-width: 300px;
+}
+
+.mad-role-creator .select2-container .select2-selection--multiple {
+    min-height: 100px;
+}
+
+.mad-role-creator .select2-container--default .select2-selection--multiple .select2-selection__choice {
+    background-color: #2271b1;
+    border-color: #135e96;
+    color: #fff;
+    padding: 4px 8px;
+}
+
+.mad-role-creator .select2-container--default .select2-selection--multiple .select2-selection__choice__remove {
+    color: #fff;
+    margin-right: 6px;
+}
+
+.mad-role-creator .select2-container--default .select2-selection--multiple .select2-selection__choice__remove:hover {
+    color: #f0f0f1;
+}
+
+/* Info boxes */
+.mad-role-creator .card ul {
+    margin-left: 20px;
+}
+
+.mad-role-creator .card ul li {
+    margin-bottom: 8px;
+}
+
+.mad-role-creator .card details {
+    margin-top: 16px;
+}
+
+.mad-role-creator .card details summary {
+    cursor: pointer;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: #2271b1;
+}
+
+.mad-role-creator .card details summary:hover {
+    color: #135e96;
+}
+
+/* Buttons */
+.mad-role-creator .button-link-delete {
+    color: #b32d2e;
+}
+
+.mad-role-creator .button-link-delete:hover {
+    color: #dc3232;
+}
+
+/* Description text */
+.mad-role-creator p.description {
+    font-style: italic;
+    color: #646970;
+}
+
+/* Loading state */
+.mad-role-creator .loading {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Empty state */
+.mad-role-creator em {
+    color: #646970;
+}
+
+/* Code blocks */
+.mad-role-creator code {
+    background: #f0f0f1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+}
