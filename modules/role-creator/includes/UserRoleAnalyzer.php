@@ -138,4 +138,63 @@ class UserRoleAnalyzer
             'user_id'      => $user_id,
         ];
     }
+
+    /**
+     * Previsualiza cuántos usuarios cumplirían con una regla antes de crearla
+     *
+     * @param array       $conditions ['min_spent' => float, 'min_orders' => int, 'operator' => 'AND'|'OR']
+     * @param string|null $source_role Rol de origen requerido (opcional)
+     * @param int         $limit Límite de usuarios de ejemplo a retornar
+     * @return array ['total' => int, 'eligible' => int, 'sample_users' => array]
+     */
+    public function preview_rule_impact($conditions, $source_role = null, $limit = 10)
+    {
+        // Obtener todos los usuarios que cumplen las condiciones
+        $matching_users = $this->get_users_meeting_conditions($conditions);
+        $total_matching = count($matching_users);
+
+        // Si no hay rol de origen, todos los que cumplen son elegibles
+        if (empty($source_role)) {
+            $eligible_users = $matching_users;
+        } else {
+            // Filtrar por rol de origen
+            $eligible_users = [];
+            $assigner = RoleAssigner::instance();
+
+            foreach ($matching_users as $user_id) {
+                if ($assigner->user_has_role($user_id, $source_role)) {
+                    $eligible_users[] = $user_id;
+                }
+            }
+        }
+
+        $total_eligible = count($eligible_users);
+
+        // Obtener muestra de usuarios con sus datos
+        $sample_users = [];
+        $sample_ids = array_slice($eligible_users, 0, $limit);
+
+        foreach ($sample_ids as $user_id) {
+            $user = get_user_by('id', $user_id);
+            if ($user) {
+                $stats = $this->get_user_stats($user_id);
+                $sample_users[] = [
+                    'id'           => $user_id,
+                    'display_name' => $user->display_name,
+                    'email'        => $user->user_email,
+                    'roles'        => $user->roles,
+                    'total_spent'  => $stats['total_spent'],
+                    'order_count'  => $stats['order_count'],
+                ];
+            }
+        }
+
+        return [
+            'total'        => $total_matching,
+            'eligible'     => $total_eligible,
+            'sample_users' => $sample_users,
+            'has_filter'   => ! empty($source_role),
+            'source_role'  => $source_role,
+        ];
+    }
 }

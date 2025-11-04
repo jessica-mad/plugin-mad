@@ -77,6 +77,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         // Registrar AJAX para búsqueda de usuarios
         add_action('wp_ajax_mads_role_creator_search_users', [$this, 'ajax_search_users']);
+
+        // Registrar AJAX para previsualización de reglas
+        add_action('wp_ajax_mads_role_creator_preview_rule', [$this, 'ajax_preview_rule']);
     }
 
     public function render_settings_page()
@@ -430,6 +433,59 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     }
 
     /**
+     * AJAX handler para previsualizar impacto de una regla
+     */
+    public function ajax_preview_rule()
+    {
+        $this->ensure_capability();
+
+        // Verificar nonce
+        if (! isset($_POST['nonce']) || ! wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nonce'])), 'mads_role_creator_preview')) {
+            wp_send_json_error(['message' => __('Verificación de seguridad fallida.', 'mad-suite')]);
+            return;
+        }
+
+        // Obtener parámetros
+        $min_spent   = isset($_POST['min_spent']) ? floatval($_POST['min_spent']) : 0;
+        $min_orders  = isset($_POST['min_orders']) ? intval($_POST['min_orders']) : 0;
+        $operator    = isset($_POST['operator']) ? sanitize_key(wp_unslash($_POST['operator'])) : 'AND';
+        $source_role = isset($_POST['source_role']) && ! empty($_POST['source_role']) ? sanitize_key(wp_unslash($_POST['source_role'])) : null;
+
+        // Validar que al menos una condición esté especificada
+        if ($min_spent <= 0 && $min_orders <= 0) {
+            wp_send_json_error(['message' => __('Debes especificar al menos una condición (gasto o pedidos).', 'mad-suite')]);
+            return;
+        }
+
+        // Construir condiciones
+        $conditions = [
+            'min_spent'  => $min_spent,
+            'min_orders' => $min_orders,
+            'operator'   => strtoupper($operator),
+        ];
+
+        // Obtener preview
+        $analyzer = UserRoleAnalyzer::instance();
+        $preview  = $analyzer->preview_rule_impact($conditions, $source_role, 10);
+
+        // Agregar información formateada para mostrar
+        $preview['formatted'] = [
+            'total_text'    => sprintf(
+                _n('%d usuario cumple las condiciones', '%d usuarios cumplen las condiciones', $preview['total'], 'mad-suite'),
+                $preview['total']
+            ),
+            'eligible_text' => $source_role
+                ? sprintf(
+                    _n('%d usuario tiene el rol de origen requerido', '%d usuarios tienen el rol de origen requerido', $preview['eligible'], 'mad-suite'),
+                    $preview['eligible']
+                )
+                : '',
+        ];
+
+        wp_send_json_success($preview);
+    }
+
+    /**
      * Hook cuando un pedido se completa
      */
     public function on_order_completed($order_id)
@@ -522,6 +578,8 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             'searching'         => __('Buscando...', 'mad-suite'),
             'noResults'         => __('No se encontraron usuarios', 'mad-suite'),
             'errorLoading'      => __('No se pudieron cargar los resultados', 'mad-suite'),
+            'previewNonce'      => wp_create_nonce('mads_role_creator_preview'),
+            'ajaxUrl'           => admin_url('admin-ajax.php'),
         ]);
     }
 

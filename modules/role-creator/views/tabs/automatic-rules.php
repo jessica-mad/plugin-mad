@@ -251,7 +251,24 @@ if (! defined('ABSPATH')) {
                         </tbody>
                     </table>
 
-                    <?php submit_button(__('Crear Regla', 'mad-suite'), 'primary'); ?>
+                    <!-- Área de Vista Previa -->
+                    <div id="rule-preview-container" style="margin: 20px 0; padding: 15px; background: #f0f9ff; border-left: 4px solid #2271b1; border-radius: 4px; display: none;">
+                        <h4 style="margin-top: 0; color: #2271b1;">
+                            <span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span>
+                            <?php esc_html_e('Vista Previa de la Regla', 'mad-suite'); ?>
+                        </h4>
+                        <div id="rule-preview-content">
+                            <!-- El contenido se cargará dinámicamente via AJAX -->
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button type="button" id="preview-rule-btn" class="button button-secondary">
+                            <span class="dashicons dashicons-visibility" style="vertical-align: middle;"></span>
+                            <?php esc_html_e('Vista Previa', 'mad-suite'); ?>
+                        </button>
+                        <?php submit_button(__('Crear Regla', 'mad-suite'), 'primary', 'submit', false); ?>
+                    </div>
                 </form>
             </div>
 
