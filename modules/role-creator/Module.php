@@ -10,6 +10,7 @@ require_once __DIR__ . '/includes/UserRoleAnalyzer.php';
 require_once __DIR__ . '/includes/RoleRule.php';
 require_once __DIR__ . '/includes/RoleAssigner.php';
 require_once __DIR__ . '/includes/MailchimpIntegration.php';
+require_once __DIR__ . '/includes/Logger.php';
 
 use MAD_Suite\Modules\RoleCreator\ContactImporter;
 use MAD_Suite\Modules\RoleCreator\ContactManager;
@@ -18,6 +19,7 @@ use MAD_Suite\Modules\RoleCreator\UserRoleAnalyzer;
 use MAD_Suite\Modules\RoleCreator\RoleRule;
 use MAD_Suite\Modules\RoleCreator\RoleAssigner;
 use MAD_Suite\Modules\RoleCreator\MailchimpIntegration;
+use MAD_Suite\Modules\RoleCreator\Logger;
 
 return new class ($core ?? null) implements MAD_Suite_Module {
     private $core;
@@ -82,6 +84,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         add_action('admin_post_mads_role_creator_mailchimp_save', [$this, 'handle_mailchimp_save']);
         add_action('admin_post_mads_role_creator_mailchimp_test', [$this, 'handle_mailchimp_test']);
         add_action('admin_post_mads_role_creator_mailchimp_sync_all', [$this, 'handle_mailchimp_sync_all']);
+
+        // Acciones para logs
+        add_action('admin_post_mads_role_creator_clear_logs', [$this, 'handle_clear_logs']);
 
         // Registrar AJAX para búsqueda de usuarios
         add_action('wp_ajax_mads_role_creator_search_users', [$this, 'ajax_search_users']);
@@ -589,25 +594,64 @@ return new class ($core ?? null) implements MAD_Suite_Module {
      */
     private function evaluate_user_rules($user_id)
     {
+        $logger = Logger::instance();
+        $logger->debug('Evaluando reglas para usuario', ['user_id' => $user_id]);
+
         $active_rules = RoleRule::instance()->get_active_rules();
         $analyzer     = UserRoleAnalyzer::instance();
         $assigner     = RoleAssigner::instance();
 
+        $logger->info(sprintf('Encontradas %d reglas activas para evaluar', count($active_rules)), ['user_id' => $user_id]);
+
         $roles_changed = false;
 
         foreach ($active_rules as $rule) {
+            $rule_id = isset($rule['id']) ? $rule['id'] : 'unknown';
+            $rule_name = isset($rule['name']) ? $rule['name'] : 'unknown';
+
+            $logger->debug(sprintf('Evaluando regla "%s" (ID: %s)', $rule_name, $rule_id), [
+                'user_id' => $user_id,
+                'rule_id' => $rule_id,
+                'conditions' => $rule['conditions'],
+            ]);
+
             if ($analyzer->user_meets_conditions($user_id, $rule['conditions'])) {
+                $logger->info(sprintf('Usuario cumple condiciones de regla "%s"', $rule_name), [
+                    'user_id' => $user_id,
+                    'rule_id' => $rule_id,
+                ]);
+
                 // Verificar si el usuario ya tiene el rol
                 if (! $assigner->user_has_role($user_id, $rule['role'])) {
+                    $logger->info(sprintf('Asignando rol "%s" a usuario', $rule['role']), [
+                        'user_id' => $user_id,
+                        'rule_id' => $rule_id,
+                        'role' => $rule['role'],
+                    ]);
+
                     $assigner->assign_role_to_users($user_id, $rule['role'], false);
+                    $logger->log_role_assignment($user_id, $rule['role'], 'automatic', $rule_id);
                     $roles_changed = true;
+                } else {
+                    $logger->debug(sprintf('Usuario ya tiene el rol "%s", no se asigna nuevamente', $rule['role']), [
+                        'user_id' => $user_id,
+                        'role' => $rule['role'],
+                    ]);
                 }
+            } else {
+                $logger->debug(sprintf('Usuario NO cumple condiciones de regla "%s"', $rule_name), [
+                    'user_id' => $user_id,
+                    'rule_id' => $rule_id,
+                ]);
             }
         }
 
         // Sincronizar con Mailchimp si los roles cambiaron
         if ($roles_changed) {
+            $logger->info('Roles cambiados, iniciando sincronización con Mailchimp', ['user_id' => $user_id]);
             $this->sync_user_to_mailchimp($user_id);
+        } else {
+            $logger->debug('No hubo cambios de roles, no se sincroniza con Mailchimp', ['user_id' => $user_id]);
         }
     }
 
@@ -616,13 +660,25 @@ return new class ($core ?? null) implements MAD_Suite_Module {
      */
     private function sync_user_to_mailchimp($user_id)
     {
+        $logger = Logger::instance();
         $mailchimp = MailchimpIntegration::instance();
 
         if (! $mailchimp->is_configured()) {
+            $logger->warning('Mailchimp no está configurado, sincronización omitida', ['user_id' => $user_id]);
             return;
         }
 
-        $mailchimp->sync_user($user_id);
+        $logger->info('Iniciando sincronización con Mailchimp', ['user_id' => $user_id]);
+
+        $result = $mailchimp->sync_user($user_id);
+
+        if (is_wp_error($result)) {
+            $logger->log_mailchimp_sync($user_id, false, $result->get_error_message(), [
+                'error_code' => $result->get_error_code(),
+            ]);
+        } else {
+            $logger->log_mailchimp_sync($user_id, true, 'Sincronización exitosa');
+        }
     }
 
     /**
@@ -699,6 +755,21 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             );
             $this->add_notice('error', $error_summary);
         }
+
+        return $this->redirect_back();
+    }
+
+    /**
+     * Handler para limpiar logs
+     */
+    public function handle_clear_logs()
+    {
+        $this->ensure_capability();
+        check_admin_referer('mads_role_creator_clear_logs', 'mads_role_creator_nonce');
+
+        Logger::instance()->clear_logs();
+
+        $this->add_notice('updated', __('Logs limpiados correctamente.', 'mad-suite'));
 
         return $this->redirect_back();
     }

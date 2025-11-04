@@ -65,12 +65,30 @@ class MailchimpIntegration
      */
     public function sync_user($user_id, $roles = null)
     {
+        $logger = Logger::instance();
+
+        $logger->debug('sync_user() llamado', [
+            'user_id' => $user_id,
+            'roles_provided' => $roles,
+        ]);
+
         if (! $this->is_configured()) {
+            $logger->error('Mailchimp no está configurado', [
+                'api_key_empty' => empty($this->api_key),
+                'audience_id_empty' => empty($this->audience_id),
+                'server_prefix_empty' => empty($this->server_prefix),
+            ]);
             return new \WP_Error('not_configured', __('Mailchimp no está configurado.', 'mad-suite'));
         }
 
+        $logger->info('Mailchimp configurado correctamente', [
+            'server_prefix' => $this->server_prefix,
+            'audience_id' => $this->audience_id,
+        ]);
+
         $user = get_user_by('id', $user_id);
         if (! $user) {
+            $logger->error('Usuario no encontrado', ['user_id' => $user_id]);
             return new \WP_Error('invalid_user', __('Usuario no encontrado.', 'mad-suite'));
         }
 
@@ -79,6 +97,12 @@ class MailchimpIntegration
             $roles = $user->roles;
         }
 
+        $logger->info('Sincronizando usuario con Mailchimp', [
+            'user_id' => $user_id,
+            'email' => $user->user_email,
+            'roles' => $roles,
+        ]);
+
         $email = $user->user_email;
         $subscriber_hash = md5(strtolower($email));
 
@@ -86,11 +110,33 @@ class MailchimpIntegration
         $member = $this->get_or_create_member($email, $user);
 
         if (is_wp_error($member)) {
+            $logger->error('Error al obtener/crear miembro en Mailchimp', [
+                'user_id' => $user_id,
+                'error_message' => $member->get_error_message(),
+                'error_code' => $member->get_error_code(),
+            ]);
             return $member;
         }
 
+        $logger->success('Miembro obtenido/creado en Mailchimp', [
+            'user_id' => $user_id,
+            'member_id' => isset($member['id']) ? $member['id'] : 'unknown',
+        ]);
+
         // Actualizar tags con roles
         $result = $this->update_member_tags($subscriber_hash, $roles);
+
+        if (is_wp_error($result)) {
+            $logger->error('Error al actualizar tags en Mailchimp', [
+                'user_id' => $user_id,
+                'error_message' => $result->get_error_message(),
+            ]);
+        } else {
+            $logger->success('Tags actualizados exitosamente en Mailchimp', [
+                'user_id' => $user_id,
+                'roles' => $roles,
+            ]);
+        }
 
         return $result;
     }
@@ -104,8 +150,14 @@ class MailchimpIntegration
      */
     private function get_or_create_member($email, $user)
     {
+        $logger = Logger::instance();
         $subscriber_hash = md5(strtolower($email));
         $endpoint = "https://{$this->server_prefix}.api.mailchimp.com/3.0/lists/{$this->audience_id}/members/{$subscriber_hash}";
+
+        $logger->debug('Intentando obtener miembro de Mailchimp', [
+            'email' => $email,
+            'endpoint' => $endpoint,
+        ]);
 
         // Intentar obtener miembro existente
         $response = wp_remote_get($endpoint, [
@@ -117,21 +169,35 @@ class MailchimpIntegration
         ]);
 
         $status_code = wp_remote_retrieve_response_code($response);
+        $response_body = wp_remote_retrieve_body($response);
+
+        $logger->debug('Respuesta de Mailchimp GET member', [
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
 
         // Si existe, retornar
         if ($status_code === 200) {
-            return json_decode(wp_remote_retrieve_body($response), true);
+            $logger->info('Miembro ya existe en Mailchimp', ['email' => $email]);
+            return json_decode($response_body, true);
         }
 
         // Si no existe (404), crear sin suscripción
         if ($status_code === 404) {
+            $logger->info('Miembro no existe en Mailchimp, creando nuevo', ['email' => $email]);
             return $this->create_member($email, $user);
         }
 
         // Otro error
+        $logger->error('Error al obtener miembro de Mailchimp', [
+            'email' => $email,
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
+
         return new \WP_Error(
             'mailchimp_error',
-            sprintf(__('Error al obtener miembro de Mailchimp: %s', 'mad-suite'), wp_remote_retrieve_body($response))
+            sprintf(__('Error al obtener miembro de Mailchimp (código %d): %s', 'mad-suite'), $status_code, $response_body)
         );
     }
 
@@ -144,6 +210,7 @@ class MailchimpIntegration
      */
     private function create_member($email, $user)
     {
+        $logger = Logger::instance();
         $endpoint = "https://{$this->server_prefix}.api.mailchimp.com/3.0/lists/{$this->audience_id}/members";
 
         $data = [
@@ -155,6 +222,12 @@ class MailchimpIntegration
             ],
         ];
 
+        $logger->info('Creando nuevo miembro en Mailchimp', [
+            'email' => $email,
+            'data' => $data,
+            'endpoint' => $endpoint,
+        ]);
+
         $response = wp_remote_post($endpoint, [
             'headers' => [
                 'Authorization' => 'Bearer ' . $this->api_key,
@@ -165,14 +238,27 @@ class MailchimpIntegration
         ]);
 
         $status_code = wp_remote_retrieve_response_code($response);
+        $response_body = wp_remote_retrieve_body($response);
+
+        $logger->debug('Respuesta de Mailchimp POST member', [
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
 
         if ($status_code === 200 || $status_code === 201) {
-            return json_decode(wp_remote_retrieve_body($response), true);
+            $logger->success('Miembro creado exitosamente en Mailchimp', ['email' => $email]);
+            return json_decode($response_body, true);
         }
+
+        $logger->error('Error al crear miembro en Mailchimp', [
+            'email' => $email,
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
 
         return new \WP_Error(
             'mailchimp_create_error',
-            sprintf(__('Error al crear miembro en Mailchimp: %s', 'mad-suite'), wp_remote_retrieve_body($response))
+            sprintf(__('Error al crear miembro en Mailchimp (código %d): %s', 'mad-suite'), $status_code, $response_body)
         );
     }
 
@@ -185,6 +271,7 @@ class MailchimpIntegration
      */
     private function update_member_tags($subscriber_hash, $roles)
     {
+        $logger = Logger::instance();
         $endpoint = "https://{$this->server_prefix}.api.mailchimp.com/3.0/lists/{$this->audience_id}/members/{$subscriber_hash}/tags";
 
         // Obtener todos los roles disponibles para remover tags antiguos
@@ -212,6 +299,14 @@ class MailchimpIntegration
 
         $data = ['tags' => $tags];
 
+        $logger->info('Actualizando tags en Mailchimp', [
+            'subscriber_hash' => $subscriber_hash,
+            'roles_to_add' => $roles,
+            'roles_to_remove' => $roles_to_remove,
+            'tags_data' => $data,
+            'endpoint' => $endpoint,
+        ]);
+
         $response = wp_remote_post($endpoint, [
             'headers' => [
                 'Authorization' => 'Bearer ' . $this->api_key,
@@ -222,14 +317,26 @@ class MailchimpIntegration
         ]);
 
         $status_code = wp_remote_retrieve_response_code($response);
+        $response_body = wp_remote_retrieve_body($response);
+
+        $logger->debug('Respuesta de Mailchimp POST tags', [
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
 
         if ($status_code === 204) {
+            $logger->success('Tags actualizados exitosamente', ['roles' => $roles]);
             return true;
         }
 
+        $logger->error('Error al actualizar tags en Mailchimp', [
+            'status_code' => $status_code,
+            'response_body' => $response_body,
+        ]);
+
         return new \WP_Error(
             'mailchimp_tags_error',
-            sprintf(__('Error al actualizar tags en Mailchimp: %s', 'mad-suite'), wp_remote_retrieve_body($response))
+            sprintf(__('Error al actualizar tags en Mailchimp (código %d): %s', 'mad-suite'), $status_code, $response_body)
         );
     }
 

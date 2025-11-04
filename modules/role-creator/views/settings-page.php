@@ -17,6 +17,7 @@ $tabs = [
     'csv-import'         => __('Importación CSV', 'mad-suite'),
     'role-management'    => __('Gestión de Roles', 'mad-suite'),
     'mailchimp-settings' => __('Mailchimp', 'mad-suite'),
+    'logs'               => __('Logs', 'mad-suite'),
 ];
 
 $base_url = add_query_arg(['page' => $module->menu_slug()], admin_url('admin.php'));
@@ -64,6 +65,10 @@ $base_url = add_query_arg(['page' => $module->menu_slug()], admin_url('admin.php
 
             case 'mailchimp-settings':
                 include __DIR__ . '/tabs/mailchimp-settings.php';
+                break;
+
+            case 'logs':
+                include __DIR__ . '/tabs/logs.php';
                 break;
 
             default:
