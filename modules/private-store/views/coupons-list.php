@@ -17,36 +17,49 @@ if (isset($_GET['deleted_coupon'])) {
 $rules = get_option('mad_private_shop_rules', []);
 $rule_coupons = get_option('mad_private_shop_rule_coupons', []);
 
+// DEBUG - comentar después de verificar
+// echo '<pre>Rules: '; print_r($rules); echo '</pre>';
+// echo '<pre>Rule Coupons: '; print_r($rule_coupons); echo '</pre>';
+
 // Filtros
 $filter_rule = isset($_GET['filter_rule']) ? sanitize_text_field($_GET['filter_rule']) : '';
 
 // Recopilar todos los cupones
 $all_coupons = [];
-foreach ($rule_coupons as $rule_id => $data) {
-    if (!isset($rules[$rule_id])) {
-        continue; // Regla eliminada
-    }
-    
-    $rule = $rules[$rule_id];
-    
-    if (!empty($filter_rule) && $filter_rule !== $rule_id) {
-        continue; // Filtro aplicado
-    }
-    
-    if (isset($data['user_coupons']) && is_array($data['user_coupons'])) {
+
+if (!empty($rule_coupons) && is_array($rule_coupons)) {
+    foreach ($rule_coupons as $rule_id => $data) {
+        if (!isset($rules[$rule_id])) {
+            continue; // Regla eliminada
+        }
+        
+        $rule = $rules[$rule_id];
+        
+        if (!empty($filter_rule) && $filter_rule !== $rule_id) {
+            continue; // Filtro aplicado
+        }
+        
+        if (!isset($data['user_coupons']) || !is_array($data['user_coupons'])) {
+            continue;
+        }
+        
         foreach ($data['user_coupons'] as $user_id => $coupon_code) {
             $user = get_userdata($user_id);
             if (!$user) {
                 continue;
             }
             
-            // Buscar cupón en WooCommerce
+            // Buscar cupón en WooCommerce - método compatible
             $coupon_post = get_page_by_title($coupon_code, OBJECT, 'shop_coupon');
             if (!$coupon_post) {
-                continue; // Cupón eliminado
+                // Intentar búsqueda alternativa
+                $coupon_id = wc_get_coupon_id_by_code($coupon_code);
+                if (!$coupon_id) {
+                    continue; // Cupón eliminado
+                }
+            } else {
+                $coupon_id = $coupon_post->ID;
             }
-            
-            $coupon_id = $coupon_post->ID;
             
             try {
                 $coupon = new WC_Coupon($coupon_id);
@@ -57,15 +70,17 @@ foreach ($rule_coupons as $rule_id => $data) {
                 $usage_count = $coupon->get_usage_count();
                 
                 // Calcular valor de compras
-                $orders = wc_get_orders([
-                    'limit' => -1,
-                    'coupon' => $coupon_code,
-                    'status' => ['completed', 'processing']
-                ]);
-                
                 $total_value = 0;
-                foreach ($orders as $order) {
-                    $total_value += $order->get_total();
+                if (function_exists('wc_get_orders')) {
+                    $orders = wc_get_orders([
+                        'limit' => -1,
+                        'coupon' => $coupon_code,
+                        'status' => ['completed', 'processing']
+                    ]);
+                    
+                    foreach ($orders as $order) {
+                        $total_value += $order->get_total();
+                    }
                 }
                 
                 $all_coupons[] = [
@@ -82,7 +97,8 @@ foreach ($rule_coupons as $rule_id => $data) {
                     'created' => get_post_meta($coupon_id, '_mad_ps_created', true),
                 ];
             } catch (Exception $e) {
-                continue; // Error al cargar cupón
+                // Error al cargar cupón - continuar
+                continue;
             }
         }
     }

@@ -19,53 +19,6 @@ use MAD_Suite\Modules\PrivateStore\Logger;
 $vip_count = UserRole::instance()->count_vip_users();
 $vip_users = UserRole::instance()->get_vip_users(['number' => 50]);
 
-add_action('admin_enqueue_scripts', function($hook) {
-    // Solo cargar en nuestra página del módulo
-    $page  = isset($_GET['page']) ? sanitize_text_field($_GET['page']) : '';
-    $tab   = isset($_GET['tab'])  ? sanitize_text_field($_GET['tab'])  : '';
-
-    if ($page !== 'mads-private-store') {
-        return;
-    }
-
-    // CSS/JS comunes del admin del módulo
-    wp_enqueue_style(
-        'mads-private-store-admin',
-        $this->module_url . 'assets/admin.css',
-        [],
-        MAD_SUITE_VERSION
-    );
-
-    wp_enqueue_script(
-        'mads-private-store-admin',
-        $this->module_url . 'assets/admin.js',
-        ['jquery', 'wp-util'],
-        MAD_SUITE_VERSION,
-        true
-    );
-
-    // Solo en la pestaña de usuarios, carga users-tab.js
-    if ($tab === 'users') {
-        wp_enqueue_script(
-            'mads-private-store-users-tab',
-            $this->module_url . 'assets/users-tab.js',
-            ['jquery', 'wp-util'],
-            MAD_SUITE_VERSION,
-            true
-        );
-
-        wp_localize_script('mads-private-store-users-tab', 'madsPrivateStore', [
-            'ajaxUrl' => admin_url('admin-ajax.php'),
-            'nonce'   => wp_create_nonce('mads_private_store'),
-            'i18n'    => [
-                'importing' => __('Importando…', 'mad-suite'),
-                'done'      => __('Listo', 'mad-suite'),
-            ],
-        ]);
-    }
-});
-
-
 ?>
 
 <div class="mads-ps-users-tab">
@@ -97,92 +50,67 @@ add_action('admin_enqueue_scripts', function($hook) {
         <p>
             <span class="dashicons dashicons-info"></span>
             <?php printf(__('Hay %d usuarios VIP activos.', 'mad-suite'), $vip_count); ?>
-            <a href="<?php echo admin_url('users.php'); ?>" class="button button-small">
-                <?php _e('Ver todos los usuarios', 'mad-suite'); ?>
-            </a>
+            <?php if ($vip_count > 0): ?>
+               <a href="<?php echo admin_url('users.php?role=vip_customer'); ?>">
+                   <?php _e('Ver todos', 'mad-suite'); ?>
+               </a>
+            <?php endif; ?>
         </p>
     </div>
     
     <!-- Tabla de usuarios VIP -->
-    <table class="wp-list-table widefat fixed striped users-vip-table">
-        <thead>
-            <tr>
-                <th class="column-avatar"><?php _e('Avatar', 'mad-suite'); ?></th>
-                <th class="column-user"><?php _e('Usuario', 'mad-suite'); ?></th>
-                <th class="column-email"><?php _e('Email', 'mad-suite'); ?></th>
-                <th class="column-vip-since"><?php _e('VIP desde', 'mad-suite'); ?></th>
-                <th class="column-registered"><?php _e('Registro', 'mad-suite'); ?></th>
-                <th class="column-actions"><?php _e('Acciones', 'mad-suite'); ?></th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php if (empty($vip_users)): ?>
-                <tr>
-                    <td colspan="6" class="empty-state">
-                        <span class="dashicons dashicons-star-empty"></span>
-                        <p><?php _e('No hay usuarios VIP todavía', 'mad-suite'); ?></p>
-                        <button type="button" class="button button-primary" id="add-first-user-btn">
-                            <?php _e('Agregar primer usuario VIP', 'mad-suite'); ?>
-                        </button>
-                    </td>
-                </tr>
-            <?php else: ?>
-                <?php foreach ($vip_users as $user): 
-                    $vip_since = get_user_meta($user->ID, '_mads_ps_vip_since', true);
-                ?>
-                    <tr data-user-id="<?php echo esc_attr($user->ID); ?>">
-                        <td class="column-avatar">
-                            <?php echo get_avatar($user->ID, 40); ?>
-                        </td>
-                        <td class="column-user">
-                            <strong><?php echo esc_html($user->display_name); ?></strong>
-                            <br><small class="username">@<?php echo esc_html($user->user_login); ?></small>
-                        </td>
-                        <td class="column-email">
-                            <a href="mailto:<?php echo esc_attr($user->user_email); ?>">
-                                <?php echo esc_html($user->user_email); ?>
-                            </a>
-                        </td>
-                        <td class="column-vip-since">
-                            <?php if ($vip_since): ?>
-                                <span class="vip-badge">
-                                    <span class="dashicons dashicons-star-filled"></span>
-                                    <?php echo date_i18n(get_option('date_format'), $vip_since); ?>
-                                </span>
-                            <?php else: ?>
-                                <span class="no-date">—</span>
-                            <?php endif; ?>
-                        </td>
-                        <td class="column-registered">
-                            <?php echo date_i18n(get_option('date_format'), strtotime($user->user_registered)); ?>
-                        </td>
-                        <td class="column-actions">
-                            <a href="<?php echo admin_url('user-edit.php?user_id=' . $user->ID); ?>" 
-                               class="button button-small" 
-                               title="<?php esc_attr_e('Editar usuario', 'mad-suite'); ?>">
-                                <span class="dashicons dashicons-edit"></span>
-                            </a>
-                            <button type="button" 
-                                    class="button button-small button-link-delete remove-vip-user" 
-                                    data-user-id="<?php echo esc_attr($user->ID); ?>"
-                                    data-username="<?php echo esc_attr($user->display_name); ?>"
-                                    title="<?php esc_attr_e('Quitar acceso VIP', 'mad-suite'); ?>">
-                                <span class="dashicons dashicons-dismiss"></span>
-                            </button>
-                        </td>
+    <?php if ($vip_count > 0): ?>
+        <div class="mads-ps-users-table-wrapper">
+            <table class="wp-list-table widefat fixed striped">
+                <thead>
+                    <tr>
+                        <th><?php _e('Usuario', 'mad-suite'); ?></th>
+                        <th><?php _e('Email', 'mad-suite'); ?></th>
+                        <th><?php _e('VIP desde', 'mad-suite'); ?></th>
+                        <th><?php _e('Acciones', 'mad-suite'); ?></th>
                     </tr>
-                <?php endforeach; ?>
-            <?php endif; ?>
-        </tbody>
-    </table>
-    
-    <?php if (count($vip_users) >= 50): ?>
-        <div class="users-footer">
-            <p><?php _e('Mostrando los primeros 50 usuarios VIP.', 'mad-suite'); ?>
-               <a href="<?php echo admin_url('users.php?role=vip_customer'); ?>">
-                   <?php _e('Ver todos', 'mad-suite'); ?>
-               </a>
-            </p>
+                </thead>
+                <tbody>
+                    <?php foreach ($vip_users as $user): 
+                        $vip_since = get_user_meta($user->ID, '_mads_ps_vip_since', true);
+                        $vip_date = $vip_since ? date_i18n(get_option('date_format'), $vip_since) : __('N/A', 'mad-suite');
+                    ?>
+                        <tr>
+                            <td>
+                                <strong><?php echo esc_html($user->display_name); ?></strong><br>
+                                <small><?php echo esc_html($user->user_login); ?></small>
+                            </td>
+                            <td><?php echo esc_html($user->user_email); ?></td>
+                            <td><?php echo esc_html($vip_date); ?></td>
+                            <td>
+                                <a href="<?php echo get_edit_user_link($user->ID); ?>" class="button button-small">
+                                    <?php _e('Editar', 'mad-suite'); ?>
+                                </a>
+                                <a href="<?php 
+                                    echo wp_nonce_url(
+                                        admin_url('admin-post.php?action=mads_toggle_vip_access&user_id=' . $user->ID . '&toggle=remove'),
+                                        'mads_toggle_vip_' . $user->ID
+                                    ); 
+                                ?>" class="button button-small button-link-delete">
+                                    <?php _e('Quitar VIP', 'mad-suite'); ?>
+                                </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php else: ?>
+        <div class="mads-ps-empty-state">
+            <div class="empty-icon">
+                <span class="dashicons dashicons-groups"></span>
+            </div>
+            <h3><?php _e('No hay usuarios VIP todavía', 'mad-suite'); ?></h3>
+            <p><?php _e('Agrega tu primer usuario VIP para comenzar', 'mad-suite'); ?></p>
+            <button type="button" class="button button-primary" id="add-first-user-btn">
+                <span class="dashicons dashicons-plus"></span>
+                <?php _e('Agregar Primer Usuario VIP', 'mad-suite'); ?>
+            </button>
         </div>
     <?php endif; ?>
     
@@ -283,27 +211,18 @@ nombreusuario3</pre>
     </div>
 </div>
 
+<!-- Estilos inline para los modales y tabla -->
 <style>
-/* ==========================================
-   USERS TAB STYLES
-   ========================================== */
-
+/* Estilos básicos */
 .mads-ps-users-tab {
-    margin: 20px 0;
+    max-width: 1200px;
 }
 
-/* Header */
 .users-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 20px;
-    padding-bottom: 15px;
-    border-bottom: 2px solid #f0f0f1;
-}
-
-.users-header h2 {
-    margin: 0;
 }
 
 .users-actions {
@@ -311,179 +230,101 @@ nombreusuario3</pre>
     gap: 10px;
 }
 
-/* Info box */
 .mads-ps-users-info {
-    background: #e7f3ff;
-    border-left: 4px solid #2196F3;
-    padding: 15px;
+    background: #fff;
+    border-left: 4px solid #2271b1;
+    padding: 12px;
     margin-bottom: 20px;
-    border-radius: 4px;
 }
 
 .mads-ps-users-info p {
     margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.mads-ps-users-info .dashicons {
-    color: #2196F3;
-}
-
-/* Tabla */
-.users-vip-table {
-    border: 1px solid #ddd;
-    border-radius: 8px;
-    overflow: hidden;
-}
-
-.users-vip-table thead {
-    background: #f9f9f9;
-}
-
-.users-vip-table th {
-    font-weight: 600;
-    text-transform: uppercase;
-    font-size: 11px;
-    letter-spacing: 0.5px;
-    padding: 12px;
-}
-
-.users-vip-table td {
-    padding: 12px;
-    vertical-align: middle;
-}
-
-/* Columnas */
-.column-avatar {
-    width: 60px;
-    text-align: center;
-}
-
-.column-avatar img {
-    border-radius: 50%;
-}
-
-.column-user {
-    width: auto;
-}
-
-.column-user .username {
-    color: #666;
-    font-size: 12px;
-}
-
-.column-email {
-    width: 250px;
-}
-
-.column-vip-since,
-.column-registered {
-    width: 140px;
-}
-
-.column-actions {
-    width: 100px;
-    text-align: right;
-}
-
-/* VIP Badge */
-.vip-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: #fff3cd;
-    color: #856404;
-    padding: 4px 10px;
-    border-radius: 12px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.vip-badge .dashicons {
-    color: #FFD700;
-    font-size: 14px;
-    width: 14px;
-    height: 14px;
-}
-
-.no-date {
-    color: #ccc;
 }
 
 /* Empty state */
-.empty-state {
+.mads-ps-empty-state {
     text-align: center;
-    padding: 60px 20px !important;
+    padding: 60px 20px;
+    background: #fff;
+    border: 2px dashed #ddd;
+    border-radius: 8px;
 }
 
-.empty-state .dashicons {
+.empty-icon .dashicons {
     font-size: 64px;
     width: 64px;
     height: 64px;
-    color: #ccc;
-    margin-bottom: 15px;
+    color: #ddd;
 }
 
-.empty-state p {
+.mads-ps-empty-state h3 {
+    margin: 20px 0 10px;
     color: #666;
-    font-size: 16px;
-    margin: 0 0 20px 0;
 }
 
-/* Actions */
-.column-actions .button-small {
-    padding: 4px 8px;
-    margin-right: 5px;
+/* Modal general */
+.mads-ps-modal {
+    display: none;
+    position: fixed;
+    z-index: 100000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5);
 }
 
-.column-actions .dashicons {
-    font-size: 16px;
-    width: 16px;
-    height: 16px;
+.mads-ps-modal-content {
+    position: relative;
+    background-color: #fff;
+    margin: 5% auto;
+    padding: 0;
+    border-radius: 8px;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
 }
 
-/* Footer */
-.users-footer {
-    text-align: center;
-    padding: 15px;
-    background: #f9f9f9;
-    border: 1px solid #ddd;
-    border-top: none;
-    border-radius: 0 0 8px 8px;
+.mads-ps-modal-close {
+    position: absolute;
+    right: 15px;
+    top: 15px;
+    font-size: 28px;
+    font-weight: bold;
+    color: #aaa;
+    cursor: pointer;
+    z-index: 1;
 }
 
-.users-footer p {
+.mads-ps-modal-close:hover {
+    color: #000;
+}
+
+.mads-ps-modal-content h2 {
     margin: 0;
+    padding: 20px;
+    border-bottom: 1px solid #f0f0f1;
 }
-
-/* ==========================================
-   MODAL ESPECÍFICO
-   ========================================== */
 
 .modal-body {
-    min-height: 200px;
-    max-height: 500px;
+    padding: 20px;
     overflow-y: auto;
+    flex: 1;
 }
 
 .modal-footer {
-    margin-top: 20px;
-    padding-top: 20px;
+    padding: 15px 20px;
     border-top: 1px solid #f0f0f1;
-    text-align: right;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
 }
 
 /* User search */
 .user-search-wrapper {
     position: relative;
     margin-bottom: 15px;
-}
-
-.user-search-wrapper input {
-    width: 100%;
-    padding-right: 40px;
 }
 
 .search-loading {
@@ -502,45 +343,31 @@ nombreusuario3</pre>
     to { transform: rotate(360deg); }
 }
 
-/* Search results */
 .user-search-results {
-    margin-top: 15px;
     max-height: 300px;
     overflow-y: auto;
     border: 1px solid #ddd;
     border-radius: 4px;
+    background: #fff;
 }
 
 .user-result-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px;
+    padding: 12px;
     border-bottom: 1px solid #f0f0f1;
     cursor: pointer;
-    transition: background 0.2s ease;
+    transition: background 0.2s;
 }
 
 .user-result-item:hover {
     background: #f9f9f9;
 }
 
-.user-result-item:last-child {
-    border-bottom: none;
+.user-result-item.selected {
+    background: #e3f2fd;
 }
 
 .user-result-item.is-vip {
     background: #fff3cd;
-    opacity: 0.6;
-    cursor: not-allowed;
-}
-
-.user-result-item img {
-    border-radius: 50%;
-}
-
-.user-result-info {
-    flex: 1;
 }
 
 .user-result-name {
