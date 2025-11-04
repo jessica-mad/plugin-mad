@@ -66,9 +66,12 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         add_action('add_user_role', [$this, 'on_user_role_added'], 10, 2);
         add_action('remove_user_role', [$this, 'on_user_role_removed'], 10, 2);
 
+        // Hook para detectar nuevos usuarios registrados
+        add_action('user_register', [$this, 'on_user_registered'], 10, 1);
+
         $logger->debug('Hooks de WooCommerce y WordPress registrados', [
             'woocommerce_hooks' => ['woocommerce_order_status_completed', 'woocommerce_payment_complete'],
-            'wordpress_hooks' => ['set_user_role', 'add_user_role', 'remove_user_role'],
+            'wordpress_hooks' => ['set_user_role', 'add_user_role', 'remove_user_role', 'user_register'],
         ]);
     }
 
@@ -723,6 +726,31 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         ]);
 
         // Sincronizar con Mailchimp
+        $this->sync_user_to_mailchimp($user_id);
+    }
+
+    /**
+     * Hook cuando se registra un nuevo usuario
+     */
+    public function on_user_registered($user_id)
+    {
+        $logger = Logger::instance();
+
+        $user = get_userdata($user_id);
+
+        if (! $user) {
+            $logger->warning('Usuario recién registrado no encontrado', ['user_id' => $user_id]);
+            return;
+        }
+
+        $logger->info('Nuevo usuario registrado, sincronizando con Mailchimp', [
+            'user_id' => $user_id,
+            'email' => $user->user_email,
+            'roles' => $user->roles,
+            'username' => $user->user_login,
+        ]);
+
+        // Sincronizar con Mailchimp (se creará como subscribed)
         $this->sync_user_to_mailchimp($user_id);
     }
 

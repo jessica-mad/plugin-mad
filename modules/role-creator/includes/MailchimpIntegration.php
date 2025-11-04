@@ -202,7 +202,7 @@ class MailchimpIntegration
     }
 
     /**
-     * Crea un nuevo miembro en Mailchimp (sin suscripción)
+     * Crea un nuevo miembro en Mailchimp (como suscriptor)
      *
      * @param string $email
      * @param WP_User $user
@@ -215,15 +215,16 @@ class MailchimpIntegration
 
         $data = [
             'email_address' => $email,
-            'status'        => 'transactional', // Sin suscripción pero disponible para tags
+            'status'        => 'subscribed', // Suscrito para recibir campañas
             'merge_fields'  => [
                 'FNAME' => $user->first_name ?: '',
                 'LNAME' => $user->last_name ?: '',
             ],
         ];
 
-        $logger->info('Creando nuevo miembro en Mailchimp', [
+        $logger->info('Creando nuevo miembro en Mailchimp como SUSCRITO', [
             'email' => $email,
+            'status' => 'subscribed',
             'data' => $data,
             'endpoint' => $endpoint,
         ]);
@@ -246,7 +247,7 @@ class MailchimpIntegration
         ]);
 
         if ($status_code === 200 || $status_code === 201) {
-            $logger->success('Miembro creado exitosamente en Mailchimp', ['email' => $email]);
+            $logger->success('Miembro creado exitosamente en Mailchimp como SUSCRITO', ['email' => $email]);
             return json_decode($response_body, true);
         }
 

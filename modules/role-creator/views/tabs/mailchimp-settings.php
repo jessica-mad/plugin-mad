@@ -134,10 +134,11 @@ $is_configured = $mailchimp->is_configured();
             <div class="card">
                 <h2><?php esc_html_e('ℹ️ Cómo Funciona la Integración', 'mad-suite'); ?></h2>
                 <ol style="line-height: 1.8;">
-                    <li><?php esc_html_e('Los usuarios se crean en Mailchimp con estado "transactional" (sin suscripción automática).', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('Los usuarios nuevos se crean en Mailchimp con estado "subscribed" (suscritos para recibir campañas).', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Los roles de WordPress se sincronizan como tags en Mailchimp con el prefijo "role_".', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Ejemplo: Un usuario con el rol "vip1" tendrá el tag "role_vip1" en Mailchimp.', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Cuando un usuario cambia de rol, los tags antiguos se eliminan y los nuevos se agregan.', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('La sincronización ocurre automáticamente al registrar usuarios, cambiar roles o completar pedidos.', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Puedes usar estos tags en Mailchimp para crear segmentos y automatizaciones personalizadas.', 'mad-suite'); ?></li>
                 </ol>
             </div>
