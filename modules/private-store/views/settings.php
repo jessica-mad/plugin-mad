@@ -1,144 +1,329 @@
 <?php
 /**
- * Vista de configuración de Private Shop
- * Formulario estándar sin AJAX
+ * Settings Page - Panel de administración completo
+ * 
+ * Panel principal con todas las tabs integradas
+ *
+ * @package MAD_Suite
+ * @subpackage Private_Store
  */
 
-defined('ABSPATH') || exit;
-
-// Mensaje de éxito
-if (isset($_GET['saved']) && $_GET['saved'] === 'true') {
-    echo '<div class="notice notice-success is-dismissible">';
-    echo '<p><strong>✓ Descuentos guardados correctamente</strong></p>';
-    echo '</div>';
+if (!defined('ABSPATH')) {
+    exit;
 }
+
+use MAD_Suite\Modules\PrivateStore\UserRole;
+use MAD_Suite\Modules\PrivateStore\ProductVisibility;
+use MAD_Suite\Modules\PrivateStore\PricingEngine;
+use MAD_Suite\Modules\PrivateStore\Logger;
+
+// Variables globales
+$active_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'general';
+
+// Configuración
+$role_name = get_option('mads_ps_role_name', __('Cliente VIP', 'mad-suite'));
+$enable_logging = get_option('mads_ps_enable_logging', 1);
+$redirect_after_login = get_option('mads_ps_redirect_after_login', 0);
+$show_vip_badge = get_option('mads_ps_show_vip_badge', 1);
+$custom_css = get_option('mads_ps_custom_css', '');
+
+// Estadísticas
+$vip_count = UserRole::instance()->count_vip_users();
+$vip_products_count = ProductVisibility::instance()->count_vip_products();
+$discounts = get_option('mads_ps_discounts', []);
+
+// Logs
+$logger = new Logger('private-store');
+$log_stats = $logger->get_log_stats();
+$available_logs = Logger::get_available_logs();
+
+// Usuarios VIP
+$vip_users = UserRole::instance()->get_vip_users(['number' => 20]);
+
+// Productos VIP
+$vip_products = ProductVisibility::instance()->get_vip_products(['posts_per_page' => 20]);
+
+// Categorías y etiquetas para descuentos
+$categories = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+$tags = get_terms(['taxonomy' => 'product_tag', 'hide_empty' => false]);
+
 ?>
 
-<div class="wrap">
-    <h1>🔒 Private Shop - Configuración de Descuentos</h1>
+<div class="wrap mads-private-store-settings">
+    <h1><?php _e('Tienda Privada - Configuración', 'mad-suite'); ?></h1>
     
-    <!-- Link a logs -->
-    <div class="notice notice-info" style="margin: 20px 0;">
-        <p>
-            📋 <strong>Logs del sistema:</strong> 
-            <a href="<?php echo esc_url($this->get_log_url()); ?>" target="_blank">
-                Ver log de hoy
-            </a>
-            <span style="color: #666; margin-left: 10px;">
-                (Descarga el archivo para ver el contenido completo)
-            </span>
-        </p>
-    </div>
-    
-    <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" id="private-shop-form">
-        <?php wp_nonce_field('save_private_shop_discounts', 'private_shop_nonce'); ?>
-        <input type="hidden" name="action" value="save_private_shop_discounts">
+    <!-- Estadísticas rápidas -->
+    <div class="mads-ps-stats-cards">
         
-        <!-- Sección de roles -->
-        <div class="card" style="max-width: 100%; margin-top: 20px;">
-            <h2>👥 Roles con Acceso a Descuentos</h2>
-            <p>Selecciona los roles de usuario que podrán ver y beneficiarse de los descuentos:</p>
-            
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin: 15px 0;">
-                <?php foreach ($all_roles as $role_key => $role_data): ?>
-                    <label style="display: flex; align-items: center; padding: 8px; background: #f9f9f9; border-radius: 4px;">
-                        <input 
-                            type="checkbox" 
-                            name="private_shop_roles[]" 
-                            value="<?php echo esc_attr($role_key); ?>"
-                            <?php checked(in_array($role_key, $selected_roles)); ?>
-                            style="margin-right: 8px;"
-                        >
-                        <span><?php echo esc_html($role_data['name']); ?></span>
-                    </label>
-                <?php endforeach; ?>
+        <div class="mads-ps-stat-card stat-vip">
+            <div class="stat-content">
+                <span class="dashicons dashicons-star-filled"></span>
+                <div class="stat-info">
+                    <div class="stat-number"><?php echo esc_html($vip_count); ?></div>
+                    <div class="stat-label"><?php _e('Clientes VIP', 'mad-suite'); ?></div>
+                </div>
             </div>
         </div>
         
-        <!-- Tabla de descuentos -->
-        <div class="card" style="max-width: 100%; margin-top: 20px;">
-            <h2>💰 Descuentos por Producto</h2>
-            <p>Define el porcentaje de descuento para cada producto. Los cambios se guardan al hacer clic en "Guardar Descuentos".</p>
+        <div class="mads-ps-stat-card stat-products">
+            <div class="stat-content">
+                <span class="dashicons dashicons-products"></span>
+                <div class="stat-info">
+                    <div class="stat-number"><?php echo esc_html($vip_products_count); ?></div>
+                    <div class="stat-label"><?php _e('Productos Exclusivos', 'mad-suite'); ?></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mads-ps-stat-card stat-discounts">
+            <div class="stat-content">
+                <span class="dashicons dashicons-tag"></span>
+                <div class="stat-info">
+                    <div class="stat-number"><?php echo esc_html(count($discounts)); ?></div>
+                    <div class="stat-label"><?php _e('Descuentos Activos', 'mad-suite'); ?></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mads-ps-stat-card stat-logs">
+            <div class="stat-content">
+                <span class="dashicons dashicons-admin-settings"></span>
+                <div class="stat-info">
+                    <div class="stat-number-small"><?php echo esc_html($log_stats['size_formatted'] ?? '0 KB'); ?></div>
+                    <div class="stat-label"><?php _e('Tamaño de Logs', 'mad-suite'); ?></div>
+                </div>
+            </div>
+        </div>
+        
+    </div>
+    
+    <!-- Tabs -->
+    <nav class="nav-tab-wrapper woo-nav-tab-wrapper">
+        <a href="?page=mad-suite-private-store&tab=general" class="nav-tab <?php echo $active_tab === 'general' ? 'nav-tab-active' : ''; ?>">
+            <span class="dashicons dashicons-admin-settings"></span>
+            <?php _e('General', 'mad-suite'); ?>
+        </a>
+        <a href="?page=mad-suite-private-store&tab=discounts" class="nav-tab <?php echo $active_tab === 'discounts' ? 'nav-tab-active' : ''; ?>">
+            <span class="dashicons dashicons-tag"></span>
+            <?php _e('Descuentos', 'mad-suite'); ?>
+        </a>
+        <a href="?page=mad-suite-private-store&tab=users" class="nav-tab <?php echo $active_tab === 'users' ? 'nav-tab-active' : ''; ?>">
+            <span class="dashicons dashicons-groups"></span>
+            <?php _e('Usuarios VIP', 'mad-suite'); ?>
+        </a>
+        <a href="?page=mad-suite-private-store&tab=products" class="nav-tab <?php echo $active_tab === 'products' ? 'nav-tab-active' : ''; ?>">
+            <span class="dashicons dashicons-products"></span>
+            <?php _e('Productos', 'mad-suite'); ?>
+        </a>
+        <a href="?page=mad-suite-private-store&tab=logs" class="nav-tab <?php echo $active_tab === 'logs' ? 'nav-tab-active' : ''; ?>">
+            <span class="dashicons dashicons-media-text"></span>
+            <?php _e('Logs', 'mad-suite'); ?>
+            <?php if (($log_stats['errors'] ?? 0) > 0): ?>
+                <span class="mads-ps-badge-error"><?php echo esc_html($log_stats['errors']); ?></span>
+            <?php endif; ?>
+        </a>
+    </nav>
+    
+    <div class="mads-ps-tab-content">
+        
+        <?php
+        // ==========================================
+        // TAB: GENERAL
+        // ==========================================
+        if ($active_tab === 'general'): ?>
+        
+        <h2><?php _e('Configuración General', 'mad-suite'); ?></h2>
+        
+        <form id="mads-ps-general-form">
+            <table class="form-table">
+                
+                <tr>
+                    <th scope="row">
+                        <label for="role_name">
+                            <?php _e('Nombre del rol VIP', 'mad-suite'); ?>
+                            <span class="dashicons dashicons-info-outline tooltip" title="<?php esc_attr_e('Este nombre aparecerá en el menú de Mi Cuenta', 'mad-suite'); ?>"></span>
+                        </label>
+                    </th>
+                    <td>
+                        <input type="text" id="role_name" name="role_name" value="<?php echo esc_attr($role_name); ?>" class="regular-text">
+                        <p class="description">
+                            <?php _e('Ejemplo: "Tienda VIP", "Acceso Exclusivo", "Club Premium"', 'mad-suite'); ?>
+                        </p>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row"><?php _e('Redirección automática', 'mad-suite'); ?></th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="redirect_after_login" value="1" <?php checked($redirect_after_login, 1); ?>>
+                            <?php _e('Redirigir usuarios VIP a la tienda privada después de iniciar sesión', 'mad-suite'); ?>
+                        </label>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row"><?php _e('Badges visuales', 'mad-suite'); ?></th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="show_vip_badge" value="1" <?php checked($show_vip_badge, 1); ?>>
+                            <?php _e('Mostrar badges de "Producto VIP" y "Descuento VIP" en productos', 'mad-suite'); ?>
+                        </label>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row"><?php _e('Sistema de Logs', 'mad-suite'); ?></th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="enable_logging" value="1" <?php checked($enable_logging, 1); ?>>
+                            <?php _e('Habilitar sistema de logs', 'mad-suite'); ?>
+                        </label>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row">
+                        <label for="custom_css"><?php _e('CSS Personalizado', 'mad-suite'); ?></label>
+                    </th>
+                    <td>
+                        <textarea id="custom_css" name="custom_css" rows="8" class="large-text code"><?php echo esc_textarea($custom_css); ?></textarea>
+                        <p class="description"><?php _e('CSS que se aplicará solo en la tienda privada', 'mad-suite'); ?></p>
+                    </td>
+                </tr>
+                
+            </table>
             
-            <!-- Buscador de productos -->
-            <div style="margin: 15px 0;">
-                <input 
-                    type="text" 
-                    id="product-search" 
-                    placeholder="🔍 Buscar producto por nombre o SKU..." 
-                    style="width: 100%; max-width: 500px; padding: 8px;"
-                >
+            <hr>
+            
+            <h3><?php _e('Información del Sistema', 'mad-suite'); ?></h3>
+            <table class="form-table">
+                <tr>
+                    <th><?php _e('Endpoint de tienda privada', 'mad-suite'); ?></th>
+                    <td>
+                        <code><?php echo esc_html(home_url('/my-account/private-store/')); ?></code>
+                        <a href="<?php echo esc_url(home_url('/my-account/private-store/')); ?>" target="_blank" class="button button-small">
+                            <?php _e('Probar', 'mad-suite'); ?>
+                        </a>
+                    </td>
+                </tr>
+                <tr>
+                    <th><?php _e('Directorio de logs', 'mad-suite'); ?></th>
+                    <td><code><?php echo esc_html(wp_upload_dir()['basedir'] . '/mad-suite-logs/'); ?></code></td>
+                </tr>
+            </table>
+            
+            <hr>
+            
+            <h3 class="danger-title">
+                <span class="dashicons dashicons-warning"></span>
+                <?php _e('Zona Peligrosa', 'mad-suite'); ?>
+            </h3>
+            <table class="form-table">
+                <tr>
+                    <th><?php _e('Limpiar datos', 'mad-suite'); ?></th>
+                    <td>
+                        <button type="button" class="button" id="clear-discounts">
+                            <?php _e('Eliminar todos los descuentos', 'mad-suite'); ?>
+                        </button>
+                        <button type="button" class="button" id="reset-settings">
+                            <?php _e('Restablecer configuración', 'mad-suite'); ?>
+                        </button>
+                    </td>
+                </tr>
+            </table>
+            
+            <p class="submit">
+                <button type="submit" class="button button-primary button-hero">
+                    <span class="dashicons dashicons-yes"></span>
+                    <?php _e('Guardar Configuración', 'mad-suite'); ?>
+                </button>
+            </p>
+        </form>
+        
+        <?php
+        // ==========================================
+        // TAB: DESCUENTOS
+        // ==========================================
+        elseif ($active_tab === 'discounts'): ?>
+        
+        <div class="mads-ps-discounts-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2><?php _e('Gestión de Descuentos VIP', 'mad-suite'); ?></h2>
+                <button type="button" class="button button-primary" id="add-discount-btn">
+                    <span class="dashicons dashicons-plus-alt"></span>
+                    <?php _e('Agregar Descuento', 'mad-suite'); ?>
+                </button>
             </div>
             
-            <!-- Contador de productos con descuento -->
-            <div id="discount-counter" style="margin: 10px 0; padding: 10px; background: #e7f3ff; border-left: 4px solid #2196F3; display: none;">
-                <strong>Productos con descuento:</strong> <span id="count-value">0</span>
-            </div>
-            
-            <table class="wp-list-table widefat fixed striped" id="discounts-table">
+            <!-- Tabla de descuentos -->
+            <table class="wp-list-table widefat fixed striped">
                 <thead>
                     <tr>
-                        <th style="width: 80px;">ID</th>
-                        <th style="width: 120px;">Imagen</th>
-                        <th>Producto</th>
-                        <th style="width: 150px;">SKU</th>
-                        <th style="width: 120px;">Precio</th>
-                        <th style="width: 150px;">Descuento (%)</th>
-                        <th style="width: 120px;">Precio Final</th>
+                        <th><?php _e('Tipo', 'mad-suite'); ?></th>
+                        <th><?php _e('Aplica a', 'mad-suite'); ?></th>
+                        <th><?php _e('Descuento', 'mad-suite'); ?></th>
+                        <th><?php _e('Productos afectados', 'mad-suite'); ?></th>
+                        <th><?php _e('Acciones', 'mad-suite'); ?></th>
                     </tr>
                 </thead>
-                <tbody>
-                    <?php if (empty($products)): ?>
+                <tbody id="discounts-list">
+                    <?php if (empty($discounts)): ?>
                         <tr>
-                            <td colspan="7" style="text-align: center; padding: 40px;">
-                                <p>No hay productos disponibles</p>
+                            <td colspan="5" style="text-align: center; padding: 40px;">
+                                <span class="dashicons dashicons-tag" style="font-size: 48px; color: #ccc;"></span>
+                                <p><?php _e('No hay descuentos configurados', 'mad-suite'); ?></p>
                             </td>
                         </tr>
                     <?php else: ?>
-                        <?php foreach ($products as $product): 
-                            $product_id = $product->get_id();
-                            $current_discount = isset($discounts[$product_id]) ? $discounts[$product_id] : 0;
-                            $price = $product->get_regular_price();
-                            $image = $product->get_image('thumbnail');
-                        ?>
-                            <tr class="product-row" data-product-name="<?php echo esc_attr(strtolower($product->get_name())); ?>" data-product-sku="<?php echo esc_attr(strtolower($product->get_sku())); ?>">
-                                <td><?php echo $product_id; ?></td>
-                                <td><?php echo $image; ?></td>
+                        <?php foreach ($discounts as $index => $discount): ?>
+                            <tr data-discount-id="<?php echo esc_attr($index); ?>">
                                 <td>
-                                    <strong><?php echo esc_html($product->get_name()); ?></strong>
-                                    <div style="color: #666; font-size: 12px;">
-                                        <a href="<?php echo get_edit_post_link($product_id); ?>" target="_blank">Editar</a> |
-                                        <a href="<?php echo get_permalink($product_id); ?>" target="_blank">Ver</a>
-                                    </div>
-                                </td>
-                                <td><?php echo $product->get_sku() ?: '—'; ?></td>
-                                <td class="original-price">
-                                    <?php echo wc_price($price); ?>
+                                    <strong>
+                                        <?php 
+                                        if ($discount['type'] === 'category') {
+                                            echo '<span class="dashicons dashicons-category"></span> ' . __('Categoría', 'mad-suite');
+                                        } else {
+                                            echo '<span class="dashicons dashicons-tag"></span> ' . __('Etiqueta', 'mad-suite');
+                                        }
+                                        ?>
+                                    </strong>
                                 </td>
                                 <td>
-                                    <input 
-                                        type="number" 
-                                        name="discounts[<?php echo $product_id; ?>]" 
-                                        value="<?php echo esc_attr($current_discount); ?>" 
-                                        min="0" 
-                                        max="100" 
-                                        step="0.01"
-                                        class="discount-input"
-                                        data-product-id="<?php echo $product_id; ?>"
-                                        data-price="<?php echo esc_attr($price); ?>"
-                                        style="width: 100%;"
-                                        placeholder="0"
-                                    >
-                                </td>
-                                <td class="final-price">
-                                    <?php 
-                                    if ($current_discount > 0) {
-                                        $final_price = $price * (1 - ($current_discount / 100));
-                                        echo wc_price($final_price);
-                                    } else {
-                                        echo '—';
-                                    }
+                                    <?php
+                                    $term = get_term($discount['target']);
+                                    echo $term && !is_wp_error($term) ? esc_html($term->name) : __('(Eliminado)', 'mad-suite');
                                     ?>
+                                </td>
+                                <td>
+                                    <span class="discount-amount">
+                                        <?php 
+                                        if ($discount['amount_type'] === 'percentage') {
+                                            echo esc_html($discount['amount']) . '%';
+                                        } else {
+                                            echo wc_price($discount['amount']);
+                                        }
+                                        ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <?php
+                                    $count = 0;
+                                    if ($discount['type'] === 'category') {
+                                        $count = get_term($discount['target'])->count ?? 0;
+                                    } else {
+                                        $count = get_term($discount['target'])->count ?? 0;
+                                    }
+                                    printf(_n('%d producto', '%d productos', $count, 'mad-suite'), $count);
+                                    ?>
+                                </td>
+                                <td>
+                                    <button type="button" class="button button-small edit-discount" data-discount-id="<?php echo esc_attr($index); ?>">
+                                        <?php _e('Editar', 'mad-suite'); ?>
+                                    </button>
+                                    <button type="button" class="button button-small button-link-delete delete-discount" data-discount-id="<?php echo esc_attr($index); ?>">
+                                        <?php _e('Eliminar', 'mad-suite'); ?>
+                                    </button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -147,139 +332,215 @@ if (isset($_GET['saved']) && $_GET['saved'] === 'true') {
             </table>
         </div>
         
-        <!-- Botón de guardar -->
-        <p class="submit">
-            <button type="submit" class="button button-primary button-large" id="save-discounts-btn">
-                💾 Guardar Descuentos
-            </button>
-            <span id="save-status" style="margin-left: 15px; display: none;">
-                Guardando cambios...
-            </span>
-        </p>
-    </form>
+        <!-- Modal para agregar/editar descuento -->
+        <div id="discount-modal" class="mads-ps-modal" style="display: none;">
+            <div class="mads-ps-modal-content">
+                <span class="mads-ps-modal-close">&times;</span>
+                <h2 id="modal-title"><?php _e('Agregar Descuento', 'mad-suite'); ?></h2>
+                
+                <form id="discount-form">
+                    <input type="hidden" id="discount-id" name="discount_id" value="">
+                    
+                    <p>
+                        <label><?php _e('Tipo de descuento', 'mad-suite'); ?></label>
+                        <select name="type" id="discount-type" class="regular-text">
+                            <option value="category"><?php _e('Por Categoría', 'mad-suite'); ?></option>
+                            <option value="tag"><?php _e('Por Etiqueta', 'mad-suite'); ?></option>
+                        </select>
+                    </p>
+                    
+                    <p id="category-select-wrapper">
+                        <label><?php _e('Categoría', 'mad-suite'); ?></label>
+                        <select name="target_category" id="target-category" class="regular-text">
+                            <option value=""><?php _e('Selecciona una categoría', 'mad-suite'); ?></option>
+                            <?php foreach ($categories as $cat): ?>
+                                <option value="<?php echo esc_attr($cat->term_id); ?>">
+                                    <?php echo esc_html($cat->name); ?> (<?php echo esc_html($cat->count); ?> productos)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </p>
+                    
+                    <p id="tag-select-wrapper" style="display: none;">
+                        <label><?php _e('Etiqueta', 'mad-suite'); ?></label>
+                        <select name="target_tag" id="target-tag" class="regular-text">
+                            <option value=""><?php _e('Selecciona una etiqueta', 'mad-suite'); ?></option>
+                            <?php foreach ($tags as $tag): ?>
+                                <option value="<?php echo esc_attr($tag->term_id); ?>">
+                                    <?php echo esc_html($tag->name); ?> (<?php echo esc_html($tag->count); ?> productos)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </p>
+                    
+                    <p>
+                        <label><?php _e('Cantidad de descuento', 'mad-suite'); ?></label>
+                        <div style="display: flex; gap: 10px;">
+                            <input type="number" name="amount" id="discount-amount" value="" step="0.01" min="0" style="width: 120px;" required>
+                            <select name="amount_type" id="discount-amount-type" style="width: auto;">
+                                <option value="percentage">%</option>
+                                <option value="fixed"><?php echo get_woocommerce_currency_symbol(); ?></option>
+                            </select>
+                        </div>
+                    </p>
+                    
+                    <p class="submit">
+                        <button type="submit" class="button button-primary">
+                            <?php _e('Guardar Descuento', 'mad-suite'); ?>
+                        </button>
+                        <button type="button" class="button cancel-discount">
+                            <?php _e('Cancelar', 'mad-suite'); ?>
+                        </button>
+                    </p>
+                </form>
+            </div>
+        </div>
+        
+      <?php
+elseif ($active_tab === 'users'): 
+    echo "TEST: Tab usuarios cargando...";
+    if (file_exists(__DIR__ . '/users-tab.php')) {
+        echo "Archivo existe!";
+        include __DIR__ . '/users-tab.php';
+    } else {
+        echo "ERROR: Archivo NO existe en: " . __DIR__ . '/users-tab.php';
+    }
+?>
+        
+        <?php
+        // ==========================================
+        // TAB: PRODUCTOS
+        // ==========================================
+        elseif ($active_tab === 'products'): ?>
+        
+        <h2><?php _e('Productos Exclusivos VIP', 'mad-suite'); ?></h2>
+        
+        <div class="mads-ps-products-info">
+            <p><?php printf(__('Hay %d productos exclusivos VIP.', 'mad-suite'), $vip_products_count); ?>
+               <a href="<?php echo admin_url('edit.php?post_type=product&vip_visibility=vip_only'); ?>" class="button button-small">
+                   <?php _e('Ver todos los productos VIP', 'mad-suite'); ?>
+               </a>
+            </p>
+        </div>
+        
+        <table class="wp-list-table widefat fixed striped">
+            <thead>
+                <tr>
+                    <th><?php _e('Producto', 'mad-suite'); ?></th>
+                    <th><?php _e('Precio', 'mad-suite'); ?></th>
+                    <th><?php _e('Stock', 'mad-suite'); ?></th>
+                    <th><?php _e('Acciones', 'mad-suite'); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (empty($vip_products)): ?>
+                    <tr>
+                        <td colspan="4" style="text-align: center; padding: 40px;">
+                            <span class="dashicons dashicons-products" style="font-size: 48px; color: #ccc;"></span>
+                            <p><?php _e('No hay productos exclusivos VIP', 'mad-suite'); ?></p>
+                        </td>
+                    </tr>
+                <?php else: ?>
+                    <?php foreach ($vip_products as $product_post): 
+                        $product = wc_get_product($product_post->ID);
+                        if (!$product) continue;
+                    ?>
+                        <tr>
+                            <td>
+                                <strong><?php echo esc_html($product->get_name()); ?></strong>
+                                <br><small>ID: <?php echo esc_html($product->get_id()); ?></small>
+                            </td>
+                            <td><?php echo $product->get_price_html(); ?></td>
+                            <td>
+                                <?php 
+                                if ($product->is_in_stock()) {
+                                    echo '<span style="color: #27ae60;">✓ ' . __('En stock', 'mad-suite') . '</span>';
+                                } else {
+                                    echo '<span style="color: #e74c3c;">✗ ' . __('Agotado', 'mad-suite') . '</span>';
+                                }
+                                ?>
+                            </td>
+                            <td>
+                                <a href="<?php echo get_edit_post_link($product->get_id()); ?>" class="button button-small">
+                                    <?php _e('Editar', 'mad-suite'); ?>
+                                </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+        
+        <?php
+        // ==========================================
+        // TAB: LOGS
+        // ==========================================
+        elseif ($active_tab === 'logs'): ?>
+        
+        <h2><?php _e('Sistema de Logs', 'mad-suite'); ?></h2>
+        
+        <div class="mads-ps-log-stats">
+            <div class="log-stat-box">
+                <h3><?php _e('Estadísticas del Log Actual', 'mad-suite'); ?></h3>
+                <ul>
+                    <li><strong><?php _e('Tamaño:', 'mad-suite'); ?></strong> <?php echo esc_html($log_stats['size_formatted'] ?? '0 KB'); ?></li>
+                    <li><strong><?php _e('Líneas:', 'mad-suite'); ?></strong> <?php echo esc_html($log_stats['lines'] ?? 0); ?></li>
+                    <li class="error-count"><strong><?php _e('Errores:', 'mad-suite'); ?></strong> <?php echo esc_html($log_stats['errors'] ?? 0); ?></li>
+                    <li class="warning-count"><strong><?php _e('Advertencias:', 'mad-suite'); ?></strong> <?php echo esc_html($log_stats['warnings'] ?? 0); ?></li>
+                    <li class="info-count"><strong><?php _e('Info:', 'mad-suite'); ?></strong> <?php echo esc_html($log_stats['info'] ?? 0); ?></li>
+                </ul>
+                
+                <p>
+                    <button type="button" class="button" id="download-log"><?php _e('Descargar Log', 'mad-suite'); ?></button>
+                    <button type="button" class="button" id="clear-log"><?php _e('Limpiar Log', 'mad-suite'); ?></button>
+                </p>
+            </div>
+        </div>
+        
+        <h3><?php _e('Logs Disponibles', 'mad-suite'); ?></h3>
+        <table class="wp-list-table widefat fixed striped">
+            <thead>
+                <tr>
+                    <th><?php _e('Archivo', 'mad-suite'); ?></th>
+                    <th><?php _e('Fecha', 'mad-suite'); ?></th>
+                    <th><?php _e('Tamaño', 'mad-suite'); ?></th>
+                    <th><?php _e('Acciones', 'mad-suite'); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (empty($available_logs)): ?>
+                    <tr>
+                        <td colspan="4" style="text-align: center; padding: 40px;">
+                            <span class="dashicons dashicons-media-text" style="font-size: 48px; color: #ccc;"></span>
+                            <p><?php _e('No hay logs disponibles', 'mad-suite'); ?></p>
+                        </td>
+                    </tr>
+                <?php else: ?>
+                    <?php foreach ($available_logs as $log): ?>
+                        <tr>
+                            <td><code><?php echo esc_html($log['filename']); ?></code></td>
+                            <td><?php echo esc_html($log['date_formatted']); ?></td>
+                            <td><?php echo esc_html($log['size_formatted']); ?></td>
+                            <td>
+                                <a href="<?php echo esc_url($log['url']); ?>" target="_blank" class="button button-small">
+                                    <?php _e('Ver', 'mad-suite'); ?>
+                                </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+        
+        <h3><?php _e('Últimas Entradas', 'mad-suite'); ?></h3>
+        <div class="mads-ps-log-viewer">
+            <pre><?php echo esc_html($logger->read_last_lines(50)); ?></pre>
+        </div>
+        
+        <?php endif; ?>
+        
+    </div>
 </div>
 
-<style>
-#discounts-table {
-    margin-top: 15px;
-}
-
-#discounts-table th {
-    font-weight: 600;
-}
-
-#discounts-table td {
-    vertical-align: middle;
-}
-
-.discount-input {
-    padding: 6px 8px;
-    border: 1px solid #ddd;
-    border-radius: 3px;
-}
-
-.discount-input:focus {
-    border-color: #2196F3;
-    outline: none;
-    box-shadow: 0 0 0 1px #2196F3;
-}
-
-.product-row.has-discount {
-    background-color: #f0f9ff !important;
-}
-
-.private-shop-badge {
-    background: #4CAF50;
-    color: white;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 12px;
-    font-weight: bold;
-    margin-left: 5px;
-}
-
-.product-row.hidden {
-    display: none;
-}
-</style>
-
-<script>
-jQuery(document).ready(function($) {
-    
-    // Calcular precio final en tiempo real
-    $('.discount-input').on('input', function() {
-        const $input = $(this);
-        const $row = $input.closest('tr');
-        const discount = parseFloat($input.val()) || 0;
-        const originalPrice = parseFloat($input.data('price'));
-        const $finalPriceCell = $row.find('.final-price');
-        
-        if (discount > 0 && discount <= 100) {
-            const finalPrice = originalPrice * (1 - (discount / 100));
-            $finalPriceCell.html('<?php echo get_woocommerce_currency_symbol(); ?>' + finalPrice.toFixed(2));
-            $row.addClass('has-discount');
-        } else {
-            $finalPriceCell.html('—');
-            $row.removeClass('has-discount');
-        }
-        
-        updateDiscountCounter();
-    });
-    
-    // Contador de productos con descuento
-    function updateDiscountCounter() {
-        const count = $('.discount-input').filter(function() {
-            return parseFloat($(this).val()) > 0;
-        }).length;
-        
-        if (count > 0) {
-            $('#discount-counter').show();
-            $('#count-value').text(count);
-        } else {
-            $('#discount-counter').hide();
-        }
-    }
-    
-    // Inicializar contador
-    updateDiscountCounter();
-    
-    // Buscador de productos
-    $('#product-search').on('keyup', function() {
-        const searchTerm = $(this).val().toLowerCase();
-        
-        $('.product-row').each(function() {
-            const $row = $(this);
-            const productName = $row.data('product-name') || '';
-            const productSku = $row.data('product-sku') || '';
-            
-            if (productName.includes(searchTerm) || productSku.includes(searchTerm)) {
-                $row.removeClass('hidden');
-            } else {
-                $row.addClass('hidden');
-            }
-        });
-    });
-    
-    // Indicador visual al guardar
-    $('#private-shop-form').on('submit', function() {
-        $('#save-discounts-btn').prop('disabled', true).text('⏳ Guardando...');
-        $('#save-status').show();
-    });
-    
-    // Mensaje de confirmación si hay cambios sin guardar
-    let formModified = false;
-    $('.discount-input, input[name="private_shop_roles[]"]').on('change', function() {
-        formModified = true;
-    });
-    
-    $(window).on('beforeunload', function() {
-        if (formModified) {
-            return '¿Estás seguro? Hay cambios sin guardar.';
-        }
-    });
-    
-    $('#private-shop-form').on('submit', function() {
-        formModified = false;
-    });
-});
-</script>
+<?php include __DIR__ . '/settings-style.php'; ?>
+<?php include __DIR__ . '/settings-scripts.php'; ?>
