@@ -157,80 +157,32 @@ class Module {
         $user_roles_values = array_values($user_roles);
         $user_role = $user_roles_values[0];
 
-        $this->log("get_best_rule_for_user: Buscando regla", 'DEBUG', [
-            'user_id' => $user_id,
-            'user_login' => $user->user_login,
-            'user_role' => $user_role,
-            'all_roles' => $user_roles
-        ]);
-
         $rules = $this->get_discount_rules();
-        $this->log("get_best_rule_for_user: Total de reglas en sistema", 'DEBUG', [
-            'total_rules' => count($rules)
-        ]);
-
         $applicable_rules = [];
 
         foreach ($rules as $rule) {
-            $rule_id = $rule['id'];
-            $rule_name = $rule['name'];
-
             // Solo reglas activas
             if (!isset($rule['enabled']) || !$rule['enabled']) {
-                $this->log("Regla NO aplica: Está desactivada", 'DEBUG', [
-                    'rule_id' => $rule_id,
-                    'rule_name' => $rule_name
-                ]);
                 continue;
             }
 
             // Verificar fechas
             $now = time();
             if (!empty($rule['date_from']) && strtotime($rule['date_from']) > $now) {
-                $this->log("Regla NO aplica: Aún no ha comenzado", 'DEBUG', [
-                    'rule_id' => $rule_id,
-                    'rule_name' => $rule_name,
-                    'date_from' => $rule['date_from'],
-                    'current_date' => date('Y-m-d H:i:s', $now)
-                ]);
                 continue;
             }
             if (!empty($rule['date_to']) && strtotime($rule['date_to']) < $now) {
-                $this->log("Regla NO aplica: Ya expiró", 'DEBUG', [
-                    'rule_id' => $rule_id,
-                    'rule_name' => $rule_name,
-                    'date_to' => $rule['date_to'],
-                    'current_date' => date('Y-m-d H:i:s', $now)
-                ]);
                 continue;
             }
 
             // Verificar rol
             if (!empty($rule['roles']) && in_array($user_role, $rule['roles'])) {
-                $this->log("Regla SÍ APLICA: Usuario tiene rol requerido", 'SUCCESS', [
-                    'rule_id' => $rule_id,
-                    'rule_name' => $rule_name,
-                    'user_role' => $user_role,
-                    'required_roles' => $rule['roles'],
-                    'discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : ' fijo')
-                ]);
                 $applicable_rules[] = $rule;
-            } else {
-                $this->log("Regla NO aplica: Rol no coincide", 'DEBUG', [
-                    'rule_id' => $rule_id,
-                    'rule_name' => $rule_name,
-                    'user_role' => $user_role,
-                    'required_roles' => $rule['roles'] ?? []
-                ]);
             }
         }
 
         if (empty($applicable_rules)) {
-            $this->log("get_best_rule_for_user: NINGUNA regla aplica para este usuario", 'WARNING', [
-                'user_id' => $user_id,
-                'user_login' => $user->user_login,
-                'user_role' => $user_role
-            ]);
+            // Solo loguear en operaciones específicas (login, test), no en cada carga de página
             return null;
         }
 
@@ -241,15 +193,7 @@ class Module {
             return $priority_a - $priority_b;
         });
 
-        $best_rule = $applicable_rules[0];
-        $this->log("get_best_rule_for_user: Mejor regla seleccionada", 'SUCCESS', [
-            'rule_id' => $best_rule['id'],
-            'rule_name' => $best_rule['name'],
-            'priority' => $best_rule['priority'] ?? 10,
-            'total_applicable' => count($applicable_rules)
-        ]);
-
-        return $best_rule;
+        return $applicable_rules[0];
     }
     
     /**
@@ -410,14 +354,30 @@ class Module {
      */
     public function on_user_login($user_login, $user) {
         $user_id = $user->ID;
-        
+
+        $this->log("on_user_login: Evento de login", 'INFO', [
+            'user_id' => $user_id,
+            'user_login' => $user_login,
+            'user_roles' => $user->roles
+        ]);
+
         // Obtener mejor regla para este usuario
         $rule = $this->get_best_rule_for_user($user_id);
-        
+
         if (!$rule) {
-            $this->log("Usuario {$user_login} sin reglas aplicables");
+            $this->log("on_user_login: Usuario sin reglas aplicables", 'WARNING', [
+                'user_id' => $user_id,
+                'user_login' => $user_login,
+                'user_roles' => $user->roles
+            ]);
             return;
         }
+
+        $this->log("on_user_login: Regla encontrada", 'SUCCESS', [
+            'rule_id' => $rule['id'],
+            'rule_name' => $rule['name'],
+            'discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : '')
+        ]);
         
         // Verificar si ya tiene cupón
         $existing_coupon = $this->get_user_active_coupon($user_id);
@@ -576,18 +536,10 @@ class Module {
         $user_id = get_current_user_id();
         $product_id = $product->get_id();
 
-        $this->log("show_discount_preview: Intentando mostrar descuento", 'DEBUG', [
-            'product_id' => $product_id,
-            'product_name' => $product->get_name()
-        ]);
-
         $rule = $this->get_best_rule_for_user($user_id);
 
         // Si no hay regla aplicable, retornar precio normal
         if (!$rule) {
-            $this->log("show_discount_preview: No hay regla para el usuario", 'DEBUG', [
-                'product_id' => $product_id
-            ]);
             return $price_html;
         }
 
@@ -599,46 +551,17 @@ class Module {
 
         if ($rule['apply_to'] === 'products') {
             $applies = in_array($check_id, $rule['target_ids']);
-            $this->log("show_discount_preview: Verificando por productos", 'DEBUG', [
-                'product_id' => $product_id,
-                'check_id' => $check_id,
-                'target_ids' => $rule['target_ids'],
-                'applies' => $applies
-            ]);
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
             $applies = !empty(array_intersect($rule['target_ids'], $categories));
-            $this->log("show_discount_preview: Verificando por categorías", 'DEBUG', [
-                'product_id' => $product_id,
-                'product_categories' => $categories,
-                'target_categories' => $rule['target_ids'],
-                'applies' => $applies
-            ]);
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
             $applies = !empty(array_intersect($rule['target_ids'], $tags));
-            $this->log("show_discount_preview: Verificando por tags", 'DEBUG', [
-                'product_id' => $product_id,
-                'product_tags' => $tags,
-                'target_tags' => $rule['target_ids'],
-                'applies' => $applies
-            ]);
         }
 
         if (!$applies) {
-            $this->log("show_discount_preview: Producto NO aplica a la regla", 'DEBUG', [
-                'product_id' => $product_id,
-                'rule_id' => $rule['id'],
-                'rule_name' => $rule['name']
-            ]);
             return $price_html;
         }
-
-        $this->log("show_discount_preview: Producto SÍ aplica - mostrando descuento", 'SUCCESS', [
-            'product_id' => $product_id,
-            'rule_id' => $rule['id'],
-            'discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : ' fijo')
-        ]);
 
         // Obtener el precio actual del producto
         $current_price = floatval($product->get_price());
