@@ -153,7 +153,9 @@ class Module {
             return null;
         }
 
-        $user_role = $user_roles[0]; // Usuario tiene solo 1 rol
+        // Obtener el primer rol (usar array_values para resetear índices)
+        $user_roles_values = array_values($user_roles);
+        $user_role = $user_roles_values[0];
 
         $this->log("get_best_rule_for_user: Buscando regla", 'DEBUG', [
             'user_id' => $user_id,
