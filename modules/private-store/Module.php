@@ -82,7 +82,10 @@ class Module {
 
         // Estilos
         add_action('wp_head', [$this, 'add_frontend_styles']);
-        
+
+        // Shortcodes
+        add_shortcode('mi_cupon', [$this, 'render_my_coupon_shortcode']);
+
         $this->log('Module initialized', 'SUCCESS');
     }
     
@@ -1010,6 +1013,241 @@ class Module {
         exit;
     }
     
+    /**
+     * Shortcode [mi_cupon] - Muestra el cupón activo del usuario
+     */
+    public function render_my_coupon_shortcode($atts) {
+        // Verificar que el usuario esté logueado
+        if (!is_user_logged_in()) {
+            return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
+                <p style="margin: 0; font-size: 16px;">Debes iniciar sesión para ver tu cupón</p>
+            </div>';
+        }
+
+        $user_id = get_current_user_id();
+
+        // Obtener cupón activo del usuario
+        $coupon_code = $this->get_user_active_coupon($user_id);
+
+        if (!$coupon_code) {
+            return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
+                <p style="margin: 0; font-size: 16px;">No tienes cupones activos en este momento</p>
+            </div>';
+        }
+
+        // Obtener información del cupón de WooCommerce
+        $coupon_id = wc_get_coupon_id_by_code($coupon_code);
+        if (!$coupon_id) {
+            return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
+                <p style="margin: 0; font-size: 16px;">Error al cargar información del cupón</p>
+            </div>';
+        }
+
+        try {
+            $coupon = new \WC_Coupon($coupon_id);
+
+            // Obtener información del cupón
+            $discount_type = $coupon->get_discount_type();
+            $discount_amount = $coupon->get_amount();
+            $date_expires = $coupon->get_date_expires();
+            $usage_count = $coupon->get_usage_count();
+            $usage_limit = $coupon->get_usage_limit();
+
+            // Formatear descuento
+            if ($discount_type === 'percent') {
+                $discount_text = $discount_amount . '% de descuento';
+            } else {
+                $discount_text = wc_price($discount_amount) . ' de descuento';
+            }
+
+            // Formatear fechas
+            $date_from = get_post_meta($coupon_id, '_mad_ps_created', true);
+            $date_from_text = $date_from ? date_i18n('d/m/Y', strtotime($date_from)) : 'N/A';
+
+            if ($date_expires) {
+                $date_expires_text = date_i18n('d/m/Y', $date_expires->getTimestamp());
+                $days_remaining = ceil(($date_expires->getTimestamp() - time()) / DAY_IN_SECONDS);
+            } else {
+                $date_expires_text = 'Sin fecha de expiración';
+                $days_remaining = null;
+            }
+
+            // Usos restantes
+            if ($usage_limit) {
+                $uses_remaining = max(0, $usage_limit - $usage_count);
+                $uses_text = $uses_remaining > 0 ? "Te quedan {$uses_remaining} usos" : "Has usado todos los usos disponibles";
+            } else {
+                $uses_text = "Usos ilimitados";
+            }
+
+            // URL del carrito
+            $cart_url = wc_get_cart_url();
+
+            // Generar HTML del cupón
+            ob_start();
+            ?>
+            <div class="mad-coupon-box" style="
+                max-width: 600px;
+                margin: 0 auto;
+                border: 3px solid #000;
+                background: #fff;
+                color: #000;
+                font-family: inherit;
+            ">
+                <!-- Header -->
+                <div class="mad-coupon-header" style="
+                    background: #000;
+                    color: #fff;
+                    padding: 20px;
+                    text-align: center;
+                ">
+                    <h3 style="margin: 0 0 5px 0; font-size: 24px; font-weight: bold;">TU CUPÓN EXCLUSIVO</h3>
+                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">Private Store Member</p>
+                </div>
+
+                <!-- Código del cupón -->
+                <div class="mad-coupon-code" style="
+                    padding: 30px 20px;
+                    text-align: center;
+                    background: #f5f5f5;
+                    border-bottom: 2px dashed #000;
+                ">
+                    <p style="margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Código del Cupón</p>
+                    <div style="
+                        font-family: 'Courier New', monospace;
+                        font-size: 32px;
+                        font-weight: bold;
+                        letter-spacing: 3px;
+                        padding: 15px;
+                        background: #fff;
+                        border: 2px solid #000;
+                        display: inline-block;
+                    "><?php echo esc_html($coupon_code); ?></div>
+                </div>
+
+                <!-- Beneficios -->
+                <div class="mad-coupon-benefits" style="padding: 30px 20px; text-align: center;">
+                    <div style="margin-bottom: 20px;">
+                        <p style="margin: 0 0 5px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #666;">Tu Descuento</p>
+                        <p style="margin: 0; font-size: 36px; font-weight: bold;"><?php echo esc_html($discount_text); ?></p>
+                    </div>
+
+                    <!-- Información adicional -->
+                    <div style="
+                        display: grid;
+                        grid-template-columns: 1fr 1fr;
+                        gap: 20px;
+                        margin-top: 25px;
+                        padding-top: 25px;
+                        border-top: 1px solid #ddd;
+                    ">
+                        <div>
+                            <p style="margin: 0 0 5px 0; font-size: 12px; text-transform: uppercase; color: #666;">Válido desde</p>
+                            <p style="margin: 0; font-size: 16px; font-weight: bold;"><?php echo esc_html($date_from_text); ?></p>
+                        </div>
+                        <div>
+                            <p style="margin: 0 0 5px 0; font-size: 12px; text-transform: uppercase; color: #666;">Válido hasta</p>
+                            <p style="margin: 0; font-size: 16px; font-weight: bold;"><?php echo esc_html($date_expires_text); ?></p>
+                        </div>
+                    </div>
+
+                    <?php if ($days_remaining !== null && $days_remaining > 0 && $days_remaining <= 7): ?>
+                    <div style="
+                        margin-top: 20px;
+                        padding: 10px;
+                        background: #000;
+                        color: #fff;
+                        border-radius: 4px;
+                    ">
+                        <p style="margin: 0; font-size: 13px;">⏰ ¡Quedan solo <?php echo $days_remaining; ?> días para usar este cupón!</p>
+                    </div>
+                    <?php endif; ?>
+
+                    <div style="margin-top: 15px;">
+                        <p style="margin: 0; font-size: 13px; color: #666;"><?php echo esc_html($uses_text); ?></p>
+                    </div>
+                </div>
+
+                <!-- Botón de acción -->
+                <div class="mad-coupon-action" style="padding: 0 20px 30px;">
+                    <button
+                        onclick="madApplyCoupon('<?php echo esc_js($coupon_code); ?>')"
+                        style="
+                            width: 100%;
+                            padding: 18px;
+                            background: #000;
+                            color: #fff;
+                            border: none;
+                            font-size: 16px;
+                            font-weight: bold;
+                            text-transform: uppercase;
+                            letter-spacing: 1px;
+                            cursor: pointer;
+                            transition: all 0.3s ease;
+                        "
+                        onmouseover="this.style.background='#333'"
+                        onmouseout="this.style.background='#000'"
+                    >
+                        Aplicar a mi Próxima Compra →
+                    </button>
+                </div>
+
+                <!-- Footer info -->
+                <div style="
+                    padding: 15px 20px;
+                    background: #f5f5f5;
+                    text-align: center;
+                    font-size: 12px;
+                    color: #666;
+                    border-top: 1px solid #ddd;
+                ">
+                    <p style="margin: 0;">El cupón se aplicará automáticamente en el carrito</p>
+                </div>
+            </div>
+
+            <script>
+            function madApplyCoupon(couponCode) {
+                // Mostrar mensaje de carga
+                var button = event.target;
+                var originalText = button.innerHTML;
+                button.innerHTML = 'Aplicando...';
+                button.disabled = true;
+
+                // Aplicar cupón vía AJAX
+                jQuery.ajax({
+                    url: wc_add_to_cart_params.ajax_url,
+                    type: 'POST',
+                    data: {
+                        action: 'woocommerce_apply_coupon',
+                        security: wc_checkout_params ? wc_checkout_params.apply_coupon_nonce : '',
+                        coupon_code: couponCode
+                    },
+                    success: function(response) {
+                        button.innerHTML = '✓ Cupón Aplicado';
+                        button.style.background = '#4CAF50';
+
+                        // Redirigir al carrito después de 1 segundo
+                        setTimeout(function() {
+                            window.location.href = '<?php echo esc_js($cart_url); ?>';
+                        }, 1000);
+                    },
+                    error: function() {
+                        // Si falla AJAX, redirigir al carrito con el cupón en la URL
+                        window.location.href = '<?php echo esc_js(add_query_arg('apply_coupon', $coupon_code, $cart_url)); ?>';
+                    }
+                });
+            }
+            </script>
+            <?php
+            return ob_get_clean();
+
+        } catch (\Exception $e) {
+            return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
+                <p style="margin: 0; font-size: 16px;">Error al cargar el cupón: ' . esc_html($e->getMessage()) . '</p>
+            </div>';
+        }
+    }
+
     public function get_log_url() {
         $upload_dir = wp_upload_dir();
         return $upload_dir['baseurl'] . '/mad-suite-logs/private-shop-' . date('Y-m-d') . '.log';

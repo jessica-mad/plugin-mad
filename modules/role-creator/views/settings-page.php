@@ -8,172 +8,73 @@ if (! defined('ABSPATH')) {
 /** @var string $download_url */
 /** @var string $import_action */
 /** @var object $module */
+/** @var array  $all_rules */
+/** @var string $current_tab */
+
+$tabs = [
+    'automatic-rules'    => __('Reglas Automáticas', 'mad-suite'),
+    'manual-assign'      => __('Asignación Manual', 'mad-suite'),
+    'csv-import'         => __('Importación CSV', 'mad-suite'),
+    'role-management'    => __('Gestión de Roles', 'mad-suite'),
+    'mailchimp-settings' => __('Mailchimp', 'mad-suite'),
+    'logs'               => __('Logs', 'mad-suite'),
+];
+
+$base_url = add_query_arg(['page' => $module->menu_slug()], admin_url('admin.php'));
 ?>
-<div class="wrap mad-contact-importer">
+
+<div class="wrap mad-role-creator">
     <h1><?php echo esc_html($module->title()); ?></h1>
     <p class="description">
-        <?php esc_html_e('Carga contactos desde un archivo CSV para crear nuevos usuarios o actualizar los existentes asignándoles un rol común.', 'mad-suite'); ?>
+        <?php esc_html_e('Gestiona roles de usuarios de forma automática o manual, crea nuevos roles y asigna usuarios mediante reglas, selección individual o importación masiva.', 'mad-suite'); ?>
     </p>
 
-    <div class="mad-contact-importer__grid">
-        <div class="mad-contact-importer__column">
-            <div class="card">
-                <h2><?php esc_html_e('Importar contactos desde CSV', 'mad-suite'); ?></h2>
-                <p><?php esc_html_e('El CSV debe contener al menos la columna email. Puedes incluir first_name, last_name, display_name, user_login, user_pass o columnas meta_* para metadatos personalizados.', 'mad-suite'); ?></p>
+    <!-- Tabs Navigation -->
+    <nav class="nav-tab-wrapper wp-clearfix" aria-label="<?php esc_attr_e('Pestañas', 'mad-suite'); ?>">
+        <?php foreach ($tabs as $tab_key => $tab_label) : ?>
+            <?php
+            $tab_url = add_query_arg(['tab' => $tab_key], $base_url);
+            $is_active = $current_tab === $tab_key;
+            ?>
+            <a href="<?php echo esc_url($tab_url); ?>"
+               class="nav-tab <?php echo $is_active ? 'nav-tab-active' : ''; ?>">
+                <?php echo esc_html($tab_label); ?>
+            </a>
+        <?php endforeach; ?>
+    </nav>
 
-                <p>
-                    <a class="button button-secondary" href="<?php echo esc_url($download_url); ?>">
-                        <?php esc_html_e('Descargar plantilla CSV', 'mad-suite'); ?>
-                    </a>
-                </p>
+    <!-- Tab Content -->
+    <div class="tab-content" style="margin-top: 24px;">
+        <?php
+        switch ($current_tab) {
+            case 'automatic-rules':
+                include __DIR__ . '/tabs/automatic-rules.php';
+                break;
 
-                <form method="post" enctype="multipart/form-data" action="<?php echo esc_url($import_action); ?>" class="mad-contact-importer__form">
-                    <?php wp_nonce_field('mads_role_creator_import', 'mads_role_creator_nonce'); ?>
-                    <input type="hidden" name="action" value="mads_role_creator_import" />
+            case 'manual-assign':
+                include __DIR__ . '/tabs/manual-assign.php';
+                break;
 
-                    <label for="mad-contact-importer-role" class="mad-contact-importer__label">
-                        <?php esc_html_e('Rol para los contactos importados', 'mad-suite'); ?>
-                    </label>
-                    <select id="mad-contact-importer-role" name="mads_role_creator_role" class="regular-text" required>
-                        <option value=""><?php esc_html_e('Selecciona un rol…', 'mad-suite'); ?></option>
-                        <?php foreach ($roles as $slug => $role_data) : ?>
-                            <option value="<?php echo esc_attr($slug); ?>"><?php echo esc_html($role_data['name']); ?></option>
-                        <?php endforeach; ?>
-                    </select>
+            case 'csv-import':
+                include __DIR__ . '/tabs/csv-import.php';
+                break;
 
-                    <label for="mad-contact-importer-file" class="mad-contact-importer__label">
-                        <?php esc_html_e('Selecciona el archivo CSV', 'mad-suite'); ?>
-                    </label>
-                    <input type="file" id="mad-contact-importer-file" name="mads_role_creator_csv" accept=".csv" class="regular-text" required />
+            case 'role-management':
+                include __DIR__ . '/tabs/role-management.php';
+                break;
 
-                    <p class="description">
-                        <?php esc_html_e('Los contactos existentes se actualizarán por email; los nuevos se crearán automáticamente.', 'mad-suite'); ?>
-                    </p>
+            case 'mailchimp-settings':
+                include __DIR__ . '/tabs/mailchimp-settings.php';
+                break;
 
-                    <?php submit_button(__('Importar contactos', 'mad-suite')); ?>
-                </form>
-            </div>
+            case 'logs':
+                include __DIR__ . '/tabs/logs.php';
+                break;
 
-            <div class="card">
-                <h2><?php esc_html_e('Formato esperado', 'mad-suite'); ?></h2>
-                <table class="widefat striped">
-                    <thead>
-                        <tr>
-                            <th><?php esc_html_e('email', 'mad-suite'); ?></th>
-                            <th><?php esc_html_e('first_name', 'mad-suite'); ?></th>
-                            <th><?php esc_html_e('last_name', 'mad-suite'); ?></th>
-                            <th><?php esc_html_e('display_name', 'mad-suite'); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($sample_rows as $sample) : ?>
-                            <tr>
-                                <td><code><?php echo esc_html($sample['email']); ?></code></td>
-                                <td><?php echo esc_html($sample['first_name']); ?></td>
-                                <td><?php echo esc_html($sample['last_name']); ?></td>
-                                <td><?php echo esc_html($sample['display_name']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="mad-contact-importer__column">
-            <div class="card">
-                <h2><?php esc_html_e('Crear un nuevo rol', 'mad-suite'); ?></h2>
-                <p class="description">
-                    <?php esc_html_e('Genera un rol personalizado antes de asignarlo en la importación. Las capacidades deben separarse por comas, punto y coma o barras verticales.', 'mad-suite'); ?>
-                </p>
-
-                <form method="post" action="<?php echo esc_url($import_action); ?>" class="mad-contact-importer__form">
-                    <?php wp_nonce_field('mads_role_creator_create_role', 'mads_role_creator_nonce'); ?>
-                    <input type="hidden" name="action" value="mads_role_creator_create_role" />
-
-                    <label for="mad-contact-importer-new-role" class="mad-contact-importer__label">
-                        <?php esc_html_e('Slug del rol', 'mad-suite'); ?>
-                    </label>
-                    <input type="text" id="mad-contact-importer-new-role" name="mads_role_creator_new_role" class="regular-text" required />
-
-                    <label for="mad-contact-importer-new-role-name" class="mad-contact-importer__label">
-                        <?php esc_html_e('Nombre visible', 'mad-suite'); ?>
-                    </label>
-                    <input type="text" id="mad-contact-importer-new-role-name" name="mads_role_creator_new_role_name" class="regular-text" required />
-
-                    <label for="mad-contact-importer-new-role-caps" class="mad-contact-importer__label">
-                        <?php esc_html_e('Capacidades', 'mad-suite'); ?>
-                    </label>
-                    <textarea id="mad-contact-importer-new-role-caps" name="mads_role_creator_new_role_caps" rows="4" class="large-text" placeholder="read, edit_posts, manage_woocommerce"></textarea>
-
-                    <?php submit_button(__('Crear rol', 'mad-suite'), 'secondary'); ?>
-                </form>
-            </div>
-
-            <div class="card">
-                <h2><?php esc_html_e('Roles disponibles actualmente', 'mad-suite'); ?></h2>
-                <p class="description">
-                    <?php esc_html_e('Verifica los roles existentes antes de importar. Puedes crear uno nuevo con el formulario anterior.', 'mad-suite'); ?>
-                </p>
-
-                <table class="widefat fixed">
-                    <thead>
-                        <tr>
-                            <th><?php esc_html_e('Slug', 'mad-suite'); ?></th>
-                            <th><?php esc_html_e('Nombre visible', 'mad-suite'); ?></th>
-                            <th><?php esc_html_e('Capacidades', 'mad-suite'); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($roles as $slug => $role_data) : ?>
-                            <tr>
-                                <td><code><?php echo esc_html($slug); ?></code></td>
-                                <td><?php echo esc_html($role_data['name']); ?></td>
-                                <td>
-                                    <?php
-                                    $caps = array_keys(array_filter($role_data['capabilities']));
-                                    if (empty($caps)) {
-                                        esc_html_e('Sin capacidades registradas.', 'mad-suite');
-                                    } else {
-                                        echo esc_html(implode(', ', array_slice($caps, 0, 6)));
-                                        if (count($caps) > 6) {
-                                            printf(' <span class="description">(+%d)</span>', count($caps) - 6);
-                                        }
-                                    }
-                                    ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+            default:
+                include __DIR__ . '/tabs/automatic-rules.php';
+                break;
+        }
+        ?>
     </div>
 </div>
-
-<style>
-    .mad-contact-importer__grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-        gap: 24px;
-        margin-top: 24px;
-    }
-
-    .mad-contact-importer__column .card {
-        padding: 20px;
-    }
-
-    .mad-contact-importer__form {
-        margin-top: 16px;
-    }
-
-    .mad-contact-importer__label {
-        display: block;
-        margin-top: 12px;
-        margin-bottom: 4px;
-        font-weight: 600;
-    }
-
-    .mad-contact-importer__form .button {
-        margin-top: 12px;
-    }
-</style>
