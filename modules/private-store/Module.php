@@ -468,26 +468,30 @@ class Module {
     
     /**
      * Muestra preview de descuento en producto
+     * IMPORTANTE: Esta función SOLO muestra el descuento visualmente.
+     * El descuento real se aplica mediante cupón automático en el carrito.
      */
     public function show_discount_preview($price_html, $product) {
+        // Solo para usuarios logueados
         if (!is_user_logged_in()) {
             return $price_html;
         }
-        
+
         $user_id = get_current_user_id();
         $rule = $this->get_best_rule_for_user($user_id);
-        
+
+        // Si no hay regla aplicable, retornar precio normal
         if (!$rule) {
             return $price_html;
         }
-        
+
         // Verificar si este producto aplica a la regla
         $product_id = $product->get_id();
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
-        
+
         $applies = false;
-        
+
         if ($rule['apply_to'] === 'products') {
             $applies = in_array($check_id, $rule['target_ids']);
         } else if ($rule['apply_to'] === 'categories') {
@@ -497,56 +501,173 @@ class Module {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
             $applies = !empty(array_intersect($rule['target_ids'], $tags));
         }
-        
+
         if (!$applies) {
             return $price_html;
         }
-        
-        // Calcular precio con descuento
-        $regular_price = floatval($product->get_regular_price());
-        
-        if ($regular_price <= 0) {
+
+        // Obtener el precio actual del producto (puede ser precio regular o precio de oferta)
+        $current_price = floatval($product->get_price());
+
+        // Si no hay precio, retornar HTML original
+        if ($current_price <= 0) {
             return $price_html;
         }
-        
+
+        // Calcular precio con descuento (solo para visualización)
         if ($rule['discount_type'] === 'percentage') {
-            $discounted_price = $regular_price * (1 - ($rule['discount_value'] / 100));
-            $badge = sprintf('-%.0f%%', $rule['discount_value']);
+            $discounted_price = $current_price * (1 - ($rule['discount_value'] / 100));
+            $discount_label = sprintf('%.0f%% OFF', $rule['discount_value']);
+            $savings_amount = $current_price - $discounted_price;
         } else {
-            $discounted_price = $regular_price - $rule['discount_value'];
-            $badge = '-' . wc_price($rule['discount_value']);
+            $discounted_price = $current_price - $rule['discount_value'];
+            $discount_label = wc_price($rule['discount_value']) . ' OFF';
+            $savings_amount = $rule['discount_value'];
         }
-        
+
+        // Asegurar que el precio con descuento no sea negativo
         $discounted_price = max(0, $discounted_price);
-        
+
+        // Construir HTML mejorado para mostrar el descuento
         $price_html = sprintf(
-            '<del><span class="woocommerce-Price-amount amount">%s</span></del> ' .
-            '<ins><span class="woocommerce-Price-amount amount">%s</span></ins> ' .
-            '<span class="private-shop-badge">%s</span>',
-            wc_price($regular_price),
+            '<div class="mad-ps-price-container">' .
+                '<div class="mad-ps-price-display">' .
+                    '<del class="mad-ps-original-price">%s</del> ' .
+                    '<ins class="mad-ps-discounted-price">%s</ins>' .
+                '</div>' .
+                '<span class="mad-ps-discount-badge">%s</span>' .
+                '<small class="mad-ps-savings-note">Ahorras %s con tu cuenta</small>' .
+            '</div>',
+            wc_price($current_price),
             wc_price($discounted_price),
-            $badge
+            esc_html($discount_label),
+            wc_price($savings_amount)
         );
-        
+
         return $price_html;
     }
     
     /**
-     * Estilos CSS
+     * Estilos CSS para visualización de descuentos
      */
     public function add_frontend_styles() {
         ?>
         <style>
-        .private-shop-badge {
+        /* Contenedor principal de precio con descuento */
+        .mad-ps-price-container {
             display: inline-block;
-            background: #4CAF50;
+            margin: 10px 0;
+        }
+
+        /* Display de precios */
+        .mad-ps-price-display {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 5px;
+            flex-wrap: wrap;
+        }
+
+        /* Precio original tachado */
+        .mad-ps-original-price {
+            opacity: 0.6;
+            text-decoration: line-through;
+            font-size: 0.95em;
+            color: #666;
+        }
+
+        .mad-ps-original-price .woocommerce-Price-amount {
+            color: #666 !important;
+        }
+
+        /* Precio con descuento destacado */
+        .mad-ps-discounted-price {
+            text-decoration: none !important;
+            background: none !important;
+            font-weight: 700;
+            font-size: 1.2em;
+            color: #e74c3c;
+        }
+
+        .mad-ps-discounted-price .woocommerce-Price-amount {
+            color: #e74c3c !important;
+        }
+
+        /* Badge de descuento */
+        .mad-ps-discount-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
             color: white;
-            padding: 4px 10px;
-            border-radius: 4px;
-            font-size: 13px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
             font-weight: bold;
             margin-left: 8px;
             vertical-align: middle;
+            box-shadow: 0 2px 6px rgba(231, 76, 60, 0.3);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Nota de ahorro */
+        .mad-ps-savings-note {
+            display: block;
+            color: #27ae60;
+            font-size: 0.85em;
+            margin-top: 5px;
+            font-weight: 500;
+        }
+
+        /* Compatibilidad con loops de productos */
+        .woocommerce ul.products li.product .mad-ps-price-container {
+            margin: 8px 0;
+        }
+
+        .woocommerce ul.products li.product .mad-ps-price-display {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 5px;
+        }
+
+        .woocommerce ul.products li.product .mad-ps-discounted-price {
+            font-size: 1.1em;
+        }
+
+        .woocommerce ul.products li.product .mad-ps-discount-badge {
+            margin-left: 0;
+            margin-top: 5px;
+        }
+
+        /* Estilo legacy para retrocompatibilidad */
+        .private-shop-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #4CAF50 0%, #388E3C 100%);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: middle;
+            box-shadow: 0 2px 6px rgba(76, 175, 80, 0.3);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .mad-ps-price-display {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+
+            .mad-ps-discount-badge {
+                margin-left: 0;
+                margin-top: 5px;
+            }
+
+            .mad-ps-discounted-price {
+                font-size: 1.1em;
+            }
         }
         </style>
         <?php
