@@ -27,12 +27,13 @@ class RoleAssigner
     /**
      * Asigna un rol a uno o múltiples usuarios
      *
-     * @param array|int $user_ids
-     * @param string    $role
-     * @param bool      $remove_existing Si true, remueve roles existentes antes de asignar
+     * @param array|int   $user_ids
+     * @param string      $role
+     * @param bool        $remove_existing Si true, remueve roles existentes antes de asignar
+     * @param string|null $specific_role_to_remove Rol específico a remover (para transformaciones)
      * @return array ['success' => int, 'errors' => array]
      */
-    public function assign_role_to_users($user_ids, $role, $remove_existing = false)
+    public function assign_role_to_users($user_ids, $role, $remove_existing = false, $specific_role_to_remove = null)
     {
         if (! is_array($user_ids)) {
             $user_ids = [$user_ids];
@@ -64,6 +65,9 @@ class RoleAssigner
                     foreach ($existing_roles as $existing_role) {
                         $user->remove_role($existing_role);
                     }
+                } elseif ($specific_role_to_remove) {
+                    // Remover solo un rol específico (para transformaciones)
+                    $user->remove_role($specific_role_to_remove);
                 }
 
                 // Asignar el nuevo rol
@@ -140,8 +144,21 @@ class RoleAssigner
                 continue;
             }
 
+            // Filtrar usuarios según el rol de origen (si está especificado)
+            $filtered_user_ids = $this->filter_users_by_source_role($user_ids, $rule);
+
+            if (empty($filtered_user_ids)) {
+                continue;
+            }
+
+            // Determinar si debe reemplazar el rol de origen
+            $specific_role_to_remove = null;
+            if (isset($rule['source_role']) && isset($rule['replace_source_role']) && $rule['replace_source_role']) {
+                $specific_role_to_remove = $rule['source_role'];
+            }
+
             // Asignar el rol a los usuarios que cumplen la condición
-            $result = $this->assign_role_to_users($user_ids, $rule['role'], false);
+            $result = $this->assign_role_to_users($filtered_user_ids, $rule['role'], false, $specific_role_to_remove);
 
             $total_assigned  += $result['success'];
             $rules_processed++;
@@ -188,8 +205,24 @@ class RoleAssigner
             ];
         }
 
+        // Filtrar usuarios según el rol de origen (si está especificado)
+        $filtered_user_ids = $this->filter_users_by_source_role($user_ids, $rule);
+
+        if (empty($filtered_user_ids)) {
+            return [
+                'assigned' => 0,
+                'message'  => __('No hay usuarios con el rol de origen requerido que cumplan las condiciones.', 'mad-suite'),
+            ];
+        }
+
+        // Determinar si debe reemplazar el rol de origen
+        $specific_role_to_remove = null;
+        if (isset($rule['source_role']) && isset($rule['replace_source_role']) && $rule['replace_source_role']) {
+            $specific_role_to_remove = $rule['source_role'];
+        }
+
         // Asignar el rol
-        $result = $this->assign_role_to_users($user_ids, $rule['role'], false);
+        $result = $this->assign_role_to_users($filtered_user_ids, $rule['role'], false, $specific_role_to_remove);
 
         return [
             'assigned' => $result['success'],
@@ -233,5 +266,31 @@ class RoleAssigner
         }
 
         return in_array($role, $user->roles, true);
+    }
+
+    /**
+     * Filtra usuarios según el rol de origen requerido por una regla
+     *
+     * @param array $user_ids
+     * @param array $rule
+     * @return array
+     */
+    private function filter_users_by_source_role($user_ids, $rule)
+    {
+        // Si no hay rol de origen especificado, devolver todos los usuarios
+        if (! isset($rule['source_role']) || empty($rule['source_role'])) {
+            return $user_ids;
+        }
+
+        $source_role = $rule['source_role'];
+        $filtered_users = [];
+
+        foreach ($user_ids as $user_id) {
+            if ($this->user_has_role($user_id, $source_role)) {
+                $filtered_users[] = $user_id;
+            }
+        }
+
+        return $filtered_users;
     }
 }

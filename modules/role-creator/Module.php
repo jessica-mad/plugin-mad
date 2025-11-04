@@ -215,21 +215,25 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $this->ensure_capability();
         check_admin_referer('mads_role_creator_create_rule', 'mads_role_creator_nonce');
 
-        $name       = isset($_POST['rule_name']) ? sanitize_text_field(wp_unslash($_POST['rule_name'])) : '';
-        $role       = isset($_POST['rule_role']) ? sanitize_key(wp_unslash($_POST['rule_role'])) : '';
-        $min_spent  = isset($_POST['rule_min_spent']) ? floatval($_POST['rule_min_spent']) : 0;
-        $min_orders = isset($_POST['rule_min_orders']) ? intval($_POST['rule_min_orders']) : 0;
-        $operator   = isset($_POST['rule_operator']) ? sanitize_key(wp_unslash($_POST['rule_operator'])) : 'AND';
+        $name                = isset($_POST['rule_name']) ? sanitize_text_field(wp_unslash($_POST['rule_name'])) : '';
+        $role                = isset($_POST['rule_role']) ? sanitize_key(wp_unslash($_POST['rule_role'])) : '';
+        $source_role         = isset($_POST['rule_source_role']) && ! empty($_POST['rule_source_role']) ? sanitize_key(wp_unslash($_POST['rule_source_role'])) : null;
+        $replace_source_role = isset($_POST['rule_replace_source_role']) && $_POST['rule_replace_source_role'] === '1';
+        $min_spent           = isset($_POST['rule_min_spent']) ? floatval($_POST['rule_min_spent']) : 0;
+        $min_orders          = isset($_POST['rule_min_orders']) ? intval($_POST['rule_min_orders']) : 0;
+        $operator            = isset($_POST['rule_operator']) ? sanitize_key(wp_unslash($_POST['rule_operator'])) : 'AND';
 
         $result = RoleRule::instance()->create_rule([
-            'name'       => $name,
-            'role'       => $role,
-            'conditions' => [
+            'name'                => $name,
+            'role'                => $role,
+            'source_role'         => $source_role,
+            'replace_source_role' => $replace_source_role,
+            'conditions'          => [
                 'min_spent'  => $min_spent,
                 'min_orders' => $min_orders,
                 'operator'   => $operator,
             ],
-            'active'     => true,
+            'active'              => true,
         ]);
 
         if (is_wp_error($result)) {

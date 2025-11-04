@@ -25,7 +25,7 @@ if (! defined('ABSPATH')) {
                         <thead>
                             <tr>
                                 <th><?php esc_html_e('Nombre', 'mad-suite'); ?></th>
-                                <th><?php esc_html_e('Rol', 'mad-suite'); ?></th>
+                                <th><?php esc_html_e('Transformación', 'mad-suite'); ?></th>
                                 <th><?php esc_html_e('Condiciones', 'mad-suite'); ?></th>
                                 <th><?php esc_html_e('Estado', 'mad-suite'); ?></th>
                                 <th><?php esc_html_e('Acciones', 'mad-suite'); ?></th>
@@ -37,6 +37,8 @@ if (! defined('ABSPATH')) {
                                 $is_active = isset($rule['active']) && $rule['active'];
                                 $rule_id = isset($rule['id']) ? $rule['id'] : '';
                                 $role_name = isset($roles[$rule['role']]['name']) ? $roles[$rule['role']]['name'] : $rule['role'];
+                                $source_role = isset($rule['source_role']) ? $rule['source_role'] : null;
+                                $replace_source = isset($rule['replace_source_role']) && $rule['replace_source_role'];
 
                                 $conditions_text = [];
                                 if (! empty($rule['conditions']['min_spent'])) {
@@ -55,7 +57,25 @@ if (! defined('ABSPATH')) {
                                 ?>
                                 <tr>
                                     <td><strong><?php echo esc_html($rule['name']); ?></strong></td>
-                                    <td><code><?php echo esc_html($role_name); ?></code></td>
+                                    <td>
+                                        <?php if ($source_role) : ?>
+                                            <?php
+                                            $source_role_name = isset($roles[$source_role]['name']) ? $roles[$source_role]['name'] : $source_role;
+                                            ?>
+                                            <code style="background: #f0f0f1; padding: 2px 6px; border-radius: 3px;"><?php echo esc_html($source_role_name); ?></code>
+                                            <span style="font-size: 16px;">→</span>
+                                            <code style="background: #d4f0d4; padding: 2px 6px; border-radius: 3px;"><?php echo esc_html($role_name); ?></code>
+                                            <?php if ($replace_source) : ?>
+                                                <br><small style="color: #666;"><?php esc_html_e('(Reemplaza rol anterior)', 'mad-suite'); ?></small>
+                                            <?php else : ?>
+                                                <br><small style="color: #666;"><?php esc_html_e('(Agrega rol)', 'mad-suite'); ?></small>
+                                            <?php endif; ?>
+                                        <?php else : ?>
+                                            <span style="color: #999;"><?php esc_html_e('Cualquier rol', 'mad-suite'); ?></span>
+                                            <span style="font-size: 16px;">→</span>
+                                            <code style="background: #d4f0d4; padding: 2px 6px; border-radius: 3px;"><?php echo esc_html($role_name); ?></code>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <?php echo esc_html(implode(' ' . $operator . ' ', $conditions_text)); ?>
                                     </td>
@@ -144,7 +164,7 @@ if (! defined('ABSPATH')) {
 
                             <tr>
                                 <th scope="row">
-                                    <label for="rule-role"><?php esc_html_e('Rol a Asignar', 'mad-suite'); ?> <span class="required">*</span></label>
+                                    <label for="rule-role"><?php esc_html_e('Rol Destino', 'mad-suite'); ?> <span class="required">*</span></label>
                                 </th>
                                 <td>
                                     <select id="rule-role" name="rule_role" class="regular-text" required>
@@ -156,6 +176,41 @@ if (! defined('ABSPATH')) {
                                         <?php endforeach; ?>
                                     </select>
                                     <p class="description"><?php esc_html_e('El rol que se asignará a los usuarios que cumplan las condiciones.', 'mad-suite'); ?></p>
+                                </td>
+                            </tr>
+
+                            <tr style="background: #fff8e5; border-left: 4px solid #ffa500;">
+                                <th scope="row">
+                                    <label for="rule-source-role"><?php esc_html_e('Rol de Origen (Opcional)', 'mad-suite'); ?></label>
+                                </th>
+                                <td>
+                                    <select id="rule-source-role" name="rule_source_role" class="regular-text">
+                                        <option value=""><?php esc_html_e('Cualquier rol (sin restricción)', 'mad-suite'); ?></option>
+                                        <?php foreach ($roles as $slug => $role_data) : ?>
+                                            <option value="<?php echo esc_attr($slug); ?>">
+                                                <?php echo esc_html($role_data['name']); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <p class="description">
+                                        <strong><?php esc_html_e('🔄 Transformación de Roles:', 'mad-suite'); ?></strong>
+                                        <?php esc_html_e('Si especificas un rol de origen, SOLO los usuarios con ese rol podrán ser transformados. Ejemplo: customer → vip1 → vip2.', 'mad-suite'); ?>
+                                    </p>
+                                </td>
+                            </tr>
+
+                            <tr style="background: #fff8e5;">
+                                <th scope="row">
+                                    <label for="rule-replace-source-role"><?php esc_html_e('Modo de Asignación', 'mad-suite'); ?></label>
+                                </th>
+                                <td>
+                                    <label for="rule-replace-source-role">
+                                        <input type="checkbox" id="rule-replace-source-role" name="rule_replace_source_role" value="1" />
+                                        <?php esc_html_e('Reemplazar el rol de origen (transformación)', 'mad-suite'); ?>
+                                    </label>
+                                    <p class="description">
+                                        <?php esc_html_e('Si está activado, el rol de origen será removido y reemplazado por el rol destino. Si está desactivado, el rol destino se agregará sin eliminar el rol de origen.', 'mad-suite'); ?>
+                                    </p>
                                 </td>
                             </tr>
 
@@ -206,9 +261,65 @@ if (! defined('ABSPATH')) {
                     <li><?php esc_html_e('Las reglas activas se evalúan automáticamente cuando un usuario completa un pedido.', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Puedes aplicar reglas manualmente usando el botón "Aplicar Ahora" o "Aplicar Todas".', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Si especificas ambas condiciones (gasto y pedidos), el operador lógico determina si deben cumplirse ambas (AND) o solo una (OR).', 'mad-suite'); ?></li>
-                    <li><?php esc_html_e('Los roles se agregan a los usuarios existentes sin eliminar sus roles actuales.', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('Por defecto, los roles se agregan sin eliminar roles existentes.', 'mad-suite'); ?></li>
                 </ul>
             </div>
+
+            <div class="card" style="margin-top: 20px; background: #fff8e5; border-left: 4px solid #ffa500;">
+                <h3><?php esc_html_e('🔄 Transformación de Roles Secuencial', 'mad-suite'); ?></h3>
+                <p><?php esc_html_e('Puedes crear un sistema de niveles o tiers de lealtad:', 'mad-suite'); ?></p>
+                <div style="padding: 15px; background: white; border-radius: 5px; margin: 15px 0;">
+                    <p style="margin-bottom: 10px;"><strong><?php esc_html_e('Ejemplo de cadena de transformación:', 'mad-suite'); ?></strong></p>
+                    <div style="font-size: 16px; text-align: center; padding: 10px;">
+                        <code style="background: #e8e8e8; padding: 5px 10px; border-radius: 3px;">customer</code>
+                        <span style="font-size: 20px; color: #ffa500;">→</span>
+                        <code style="background: #d4f0d4; padding: 5px 10px; border-radius: 3px;">vip1</code>
+                        <span style="font-size: 20px; color: #ffa500;">→</span>
+                        <code style="background: #d4e8ff; padding: 5px 10px; border-radius: 3px;">vip2</code>
+                        <span style="font-size: 20px; color: #ffa500;">→</span>
+                        <code style="background: #ffe4d4; padding: 5px 10px; border-radius: 3px;">vip3</code>
+                    </div>
+                </div>
+                <ol style="line-height: 1.8;">
+                    <li><strong><?php esc_html_e('Regla 1:', 'mad-suite'); ?></strong> <?php esc_html_e('customer → vip1 (si 3+ pedidos o $500+ gastados)', 'mad-suite'); ?></li>
+                    <li><strong><?php esc_html_e('Regla 2:', 'mad-suite'); ?></strong> <?php esc_html_e('vip1 → vip2 (si 10+ pedidos o $2000+ gastados)', 'mad-suite'); ?></li>
+                    <li><strong><?php esc_html_e('Regla 3:', 'mad-suite'); ?></strong> <?php esc_html_e('vip2 → vip3 (si 25+ pedidos o $5000+ gastados)', 'mad-suite'); ?></li>
+                </ol>
+                <p style="margin-top: 10px;">
+                    <strong><?php esc_html_e('💡 Consejo:', 'mad-suite'); ?></strong>
+                    <?php esc_html_e('Usa el checkbox "Reemplazar rol de origen" para que los usuarios pasen de un nivel a otro (customer desaparece cuando se convierte en vip1).', 'mad-suite'); ?>
+                </p>
+            </div>
+
+            <?php
+            // Mostrar cadenas de transformación existentes
+            use MAD_Suite\Modules\RoleCreator\RoleRule;
+            $chains = RoleRule::instance()->get_transformation_chains();
+            if (! empty($chains)) :
+            ?>
+            <div class="card" style="margin-top: 20px;">
+                <h3><?php esc_html_e('📊 Cadenas de Transformación Activas', 'mad-suite'); ?></h3>
+                <p class="description"><?php esc_html_e('Visualización de las transformaciones de roles configuradas:', 'mad-suite'); ?></p>
+                <ul style="list-style: none; padding-left: 0;">
+                    <?php foreach ($chains as $chain) : ?>
+                        <?php
+                        $from_name = isset($roles[$chain['from']]['name']) ? $roles[$chain['from']]['name'] : $chain['from'];
+                        $to_name = isset($roles[$chain['to']]['name']) ? $roles[$chain['to']]['name'] : $chain['to'];
+                        $rule_active = isset($chain['rule']['active']) && $chain['rule']['active'];
+                        ?>
+                        <li style="padding: 8px; margin: 5px 0; background: <?php echo $rule_active ? '#f0f9ff' : '#f5f5f5'; ?>; border-left: 3px solid <?php echo $rule_active ? '#2271b1' : '#999'; ?>; border-radius: 3px;">
+                            <code><?php echo esc_html($from_name); ?></code>
+                            <span style="font-size: 16px;">→</span>
+                            <code><?php echo esc_html($to_name); ?></code>
+                            <small style="color: #666;">(<?php echo esc_html($chain['rule']['name']); ?>)</small>
+                            <?php if (! $rule_active) : ?>
+                                <span style="color: #dc3232;"><?php esc_html_e('- Inactiva', 'mad-suite'); ?></span>
+                            <?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+            <?php endif; ?>
         </div>
     </div>
 </div>
