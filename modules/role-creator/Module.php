@@ -52,6 +52,18 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         return 'mad-suite-role-creator';
     }
 
+    public function description()
+    {
+        return __('Gestiona roles de usuarios automáticamente según compras, productos o condiciones. Incluye integración con Mailchimp y asignación manual de roles.', 'mad-suite');
+    }
+
+    public function required_plugins()
+    {
+        return [
+            'WooCommerce' => 'woocommerce/woocommerce.php',
+        ];
+    }
+
     public function init()
     {
         $logger = Logger::instance();

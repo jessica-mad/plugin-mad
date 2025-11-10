@@ -34,6 +34,20 @@ return new class($core ?? null) implements MAD_Suite_Module {
     }
 
     /**
+     * Descripción del módulo (opcional)
+     */
+    public function description() {
+        return __('Sistema de protección por contraseña para el front-end del sitio. Bloquea el acceso a la web hasta ingresar una contraseña correcta, con opciones de horario.', 'mad-suite');
+    }
+
+    /**
+     * Plugins requeridos (opcional)
+     */
+    public function required_plugins() {
+        return []; // No requiere plugins adicionales
+    }
+
+    /**
      * Inicialización del módulo (front-end y admin)
      */
     public function init() {

@@ -37,6 +37,16 @@ return new class($core) implements MAD_Suite_Module {
     return MAD_Suite_Core::MENU_SLUG_ROOT . '-' . $this->slug;
   }
 
+  public function description() {
+    return __('Permite agregar notas personalizadas a productos específicos. Las notas se muestran en carrito, checkout y pedidos.', 'mad-suite');
+  }
+
+  public function required_plugins() {
+    return [
+      'WooCommerce' => 'woocommerce/woocommerce.php',
+    ];
+  }
+
   public function init() {
     // Solo ejecutar si WooCommerce está activo
     if ( ! class_exists('WooCommerce') ) {
