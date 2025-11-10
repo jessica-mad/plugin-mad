@@ -35,6 +35,8 @@ foreach ($timezones as $tz) {
                 </label>
             </th>
             <td>
+                <!-- Hidden field para detectar cuando el checkbox no está marcado -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[enable_schedule]" value="0">
                 <label>
                     <input type="checkbox"
                            name="<?php echo esc_attr($option_key); ?>[enable_schedule]"
@@ -100,6 +102,8 @@ foreach ($timezones as $tz) {
                 <?php _e('Días de la semana', 'mad-suite'); ?>
             </th>
             <td>
+                <!-- Hidden field para detectar cuando el array está vacío -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[_schedule_days_present]" value="1">
                 <fieldset>
                     <legend class="screen-reader-text">
                         <span><?php _e('Días de la semana', 'mad-suite'); ?></span>

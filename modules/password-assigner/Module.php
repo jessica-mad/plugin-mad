@@ -152,43 +152,86 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
     /**
      * Sanitizar configuración
+     * Solo sanitiza los campos que están presentes en $input
      */
     public function sanitize_settings($input) {
         $sanitized = [];
 
-        // General
-        $sanitized['enabled'] = isset($input['enabled']) ? 1 : 0;
-        $sanitized['password'] = sanitize_text_field($input['password'] ?? '');
-        $sanitized['session_duration'] = absint($input['session_duration'] ?? 24);
+        // General (solo si vienen en el input)
+        if (isset($input['enabled']) || array_key_exists('enabled', $input)) {
+            $sanitized['enabled'] = isset($input['enabled']) ? 1 : 0;
+        }
+        if (isset($input['password'])) {
+            $sanitized['password'] = sanitize_text_field($input['password']);
+        }
+        if (isset($input['session_duration'])) {
+            $sanitized['session_duration'] = absint($input['session_duration']);
+        }
 
-        // Multiidioma WPML
-        $sanitized['enable_wpml'] = isset($input['enable_wpml']) ? 1 : 0;
-        $sanitized['custom_message'] = sanitize_textarea_field($input['custom_message'] ?? '');
-        $sanitized['custom_message_en'] = sanitize_textarea_field($input['custom_message_en'] ?? '');
+        // Multiidioma WPML (solo si vienen en el input)
+        if (isset($input['enable_wpml']) || array_key_exists('enable_wpml', $input)) {
+            $sanitized['enable_wpml'] = isset($input['enable_wpml']) ? 1 : 0;
+        }
+        if (isset($input['custom_message'])) {
+            $sanitized['custom_message'] = sanitize_textarea_field($input['custom_message']);
+        }
+        if (isset($input['custom_message_en'])) {
+            $sanitized['custom_message_en'] = sanitize_textarea_field($input['custom_message_en']);
+        }
 
-        // Horarios
-        $sanitized['enable_schedule'] = isset($input['enable_schedule']) ? 1 : 0;
-        $sanitized['schedule_type'] = sanitize_key($input['schedule_type'] ?? 'recurring');
-        $sanitized['schedule_start'] = sanitize_text_field($input['schedule_start'] ?? '09:00');
-        $sanitized['schedule_end'] = sanitize_text_field($input['schedule_end'] ?? '18:00');
-        $sanitized['schedule_days'] = isset($input['schedule_days']) && is_array($input['schedule_days'])
-            ? array_map('sanitize_key', $input['schedule_days'])
-            : [];
-        $sanitized['schedule_timezone'] = sanitize_text_field($input['schedule_timezone'] ?? 'America/New_York');
-        $sanitized['schedule_date_start'] = sanitize_text_field($input['schedule_date_start'] ?? '');
-        $sanitized['schedule_date_end'] = sanitize_text_field($input['schedule_date_end'] ?? '');
+        // Horarios (solo si vienen en el input)
+        if (isset($input['enable_schedule']) || array_key_exists('enable_schedule', $input)) {
+            $sanitized['enable_schedule'] = isset($input['enable_schedule']) ? 1 : 0;
+        }
+        if (isset($input['schedule_type'])) {
+            $sanitized['schedule_type'] = sanitize_key($input['schedule_type']);
+        }
+        if (isset($input['schedule_start'])) {
+            $sanitized['schedule_start'] = sanitize_text_field($input['schedule_start']);
+        }
+        if (isset($input['schedule_end'])) {
+            $sanitized['schedule_end'] = sanitize_text_field($input['schedule_end']);
+        }
+        // Si el marcador está presente, procesar schedule_days (incluso si está vacío)
+        if (isset($input['_schedule_days_present'])) {
+            $sanitized['schedule_days'] = isset($input['schedule_days']) && is_array($input['schedule_days'])
+                ? array_map('sanitize_key', $input['schedule_days'])
+                : [];
+        }
+        if (isset($input['schedule_timezone'])) {
+            $sanitized['schedule_timezone'] = sanitize_text_field($input['schedule_timezone']);
+        }
+        if (isset($input['schedule_date_start'])) {
+            $sanitized['schedule_date_start'] = sanitize_text_field($input['schedule_date_start']);
+        }
+        if (isset($input['schedule_date_end'])) {
+            $sanitized['schedule_date_end'] = sanitize_text_field($input['schedule_date_end']);
+        }
 
-        // URLs y páginas
-        $sanitized['redirect_url'] = esc_url_raw($input['redirect_url'] ?? '');
-        $sanitized['exclude_admin'] = isset($input['exclude_admin']) ? 1 : 0;
-        $sanitized['exclude_urls'] = sanitize_textarea_field($input['exclude_urls'] ?? '');
-        $sanitized['exclude_pages'] = isset($input['exclude_pages']) && is_array($input['exclude_pages'])
-            ? array_map('absint', $input['exclude_pages'])
-            : [];
+        // URLs y páginas (solo si vienen en el input)
+        if (isset($input['redirect_url'])) {
+            $sanitized['redirect_url'] = esc_url_raw($input['redirect_url']);
+        }
+        if (isset($input['exclude_admin']) || array_key_exists('exclude_admin', $input)) {
+            $sanitized['exclude_admin'] = isset($input['exclude_admin']) ? 1 : 0;
+        }
+        if (isset($input['exclude_urls'])) {
+            $sanitized['exclude_urls'] = sanitize_textarea_field($input['exclude_urls']);
+        }
+        // Si el marcador está presente, procesar exclude_pages (incluso si está vacío)
+        if (isset($input['_exclude_pages_present'])) {
+            $sanitized['exclude_pages'] = isset($input['exclude_pages']) && is_array($input['exclude_pages'])
+                ? array_map('absint', $input['exclude_pages'])
+                : [];
+        }
 
-        // IPs en whitelist
-        $sanitized['enable_whitelist'] = isset($input['enable_whitelist']) ? 1 : 0;
-        $sanitized['whitelist_ips'] = sanitize_textarea_field($input['whitelist_ips'] ?? '');
+        // IPs en whitelist (solo si vienen en el input)
+        if (isset($input['enable_whitelist']) || array_key_exists('enable_whitelist', $input)) {
+            $sanitized['enable_whitelist'] = isset($input['enable_whitelist']) ? 1 : 0;
+        }
+        if (isset($input['whitelist_ips'])) {
+            $sanitized['whitelist_ips'] = sanitize_textarea_field($input['whitelist_ips']);
+        }
 
         return $sanitized;
     }
@@ -201,10 +244,21 @@ return new class($core ?? null) implements MAD_Suite_Module {
         check_admin_referer('mads_password_assigner_save', 'mads_password_assigner_nonce');
 
         $option_key = MAD_Suite_Core::option_key($this->slug());
+
+        // Obtener configuración existente
+        $existing_settings = $this->get_settings();
+
+        // Obtener datos del formulario
         $input = $_POST[$option_key] ?? [];
+
+        // Sanitizar solo los campos enviados
         $sanitized = $this->sanitize_settings($input);
 
-        update_option($option_key, $sanitized);
+        // Hacer merge con la configuración existente (los nuevos valores sobrescriben los existentes)
+        $merged_settings = array_merge($existing_settings, $sanitized);
+
+        // Guardar configuración completa
+        update_option($option_key, $merged_settings);
 
         $redirect_url = add_query_arg([
             'page' => $this->menu_slug(),

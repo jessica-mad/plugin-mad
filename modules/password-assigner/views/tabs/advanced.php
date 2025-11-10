@@ -21,6 +21,8 @@ $pages = get_pages(['sort_column' => 'post_title']);
                 </label>
             </th>
             <td>
+                <!-- Hidden field para detectar cuando el checkbox no está marcado -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[exclude_admin]" value="0">
                 <label>
                     <input type="checkbox"
                            name="<?php echo esc_attr($option_key); ?>[exclude_admin]"
@@ -40,6 +42,8 @@ $pages = get_pages(['sort_column' => 'post_title']);
                 <?php _e('IPs en whitelist', 'mad-suite'); ?>
             </th>
             <td>
+                <!-- Hidden field para detectar cuando el checkbox no está marcado -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[enable_whitelist]" value="0">
                 <label style="margin-bottom: 10px; display: block;">
                     <input type="checkbox"
                            name="<?php echo esc_attr($option_key); ?>[enable_whitelist]"
@@ -85,6 +89,8 @@ $pages = get_pages(['sort_column' => 'post_title']);
                 <?php _e('Páginas excluidas', 'mad-suite'); ?>
             </th>
             <td>
+                <!-- Hidden field para detectar cuando el array está vacío -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[_exclude_pages_present]" value="1">
                 <fieldset>
                     <legend class="screen-reader-text">
                         <span><?php _e('Páginas excluidas', 'mad-suite'); ?></span>

@@ -18,6 +18,8 @@ if (!defined('ABSPATH')) exit;
                 </label>
             </th>
             <td>
+                <!-- Hidden field para detectar cuando el checkbox no está marcado -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[enabled]" value="0">
                 <label>
                     <input type="checkbox"
                            name="<?php echo esc_attr($option_key); ?>[enabled]"
@@ -135,6 +137,8 @@ if (!defined('ABSPATH')) exit;
                 <?php _e('Mensajes personalizados', 'mad-suite'); ?>
             </th>
             <td>
+                <!-- Hidden field para detectar cuando el checkbox no está marcado -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[enable_wpml]" value="0">
                 <label>
                     <input type="checkbox"
                            name="<?php echo esc_attr($option_key); ?>[enable_wpml]"
