@@ -9,7 +9,22 @@
 
 if (!defined('ABSPATH')) exit;
 
-$message = !empty($custom_message) ? $custom_message : $settings['custom_message'];
+// Obtener mensaje según configuración de WPML
+if (!empty($custom_message)) {
+    $message = $custom_message;
+} elseif (!empty($settings['enable_wpml'])) {
+    // Detectar idioma por URL
+    $current_url = $_SERVER['REQUEST_URI'] ?? '';
+    $is_english = (strpos($current_url, '/en/') !== false);
+
+    if ($is_english && !empty($settings['custom_message_en'])) {
+        $message = $settings['custom_message_en'];
+    } else {
+        $message = $settings['custom_message'];
+    }
+} else {
+    $message = $settings['custom_message'];
+}
 ?>
 
 <div class="mads-password-form-container">

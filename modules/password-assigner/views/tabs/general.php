@@ -132,19 +132,57 @@ if (!defined('ABSPATH')) exit;
 
         <tr>
             <th scope="row">
-                <label for="custom_message">
-                    <?php _e('Mensaje personalizado', 'mad-suite'); ?>
-                </label>
+                <?php _e('Mensajes personalizados', 'mad-suite'); ?>
             </th>
             <td>
-                <textarea name="<?php echo esc_attr($option_key); ?>[custom_message]"
-                          id="custom_message"
-                          rows="3"
-                          class="large-text"><?php echo esc_textarea($settings['custom_message']); ?></textarea>
+                <label>
+                    <input type="checkbox"
+                           name="<?php echo esc_attr($option_key); ?>[enable_wpml]"
+                           id="enable_wpml"
+                           value="1"
+                           <?php checked($settings['enable_wpml'], 1); ?>>
+                    <?php _e('Activar soporte multiidioma (WPML)', 'mad-suite'); ?>
+                </label>
                 <p class="description">
-                    <?php _e('Mensaje que se mostrará en el formulario de contraseña.', 'mad-suite'); ?>
+                    <?php _e('Detecta automáticamente el idioma según la URL (/en/ para inglés).', 'mad-suite'); ?>
                 </p>
+
+                <div style="margin-top: 15px;">
+                    <label for="custom_message" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Mensaje en español:', 'mad-suite'); ?></strong>
+                    </label>
+                    <textarea name="<?php echo esc_attr($option_key); ?>[custom_message]"
+                              id="custom_message"
+                              rows="2"
+                              class="large-text"><?php echo esc_textarea($settings['custom_message']); ?></textarea>
+                </div>
+
+                <div style="margin-top: 10px;" id="message_en_wrapper">
+                    <label for="custom_message_en" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Mensaje en inglés:', 'mad-suite'); ?></strong>
+                    </label>
+                    <textarea name="<?php echo esc_attr($option_key); ?>[custom_message_en]"
+                              id="custom_message_en"
+                              rows="2"
+                              class="large-text"><?php echo esc_textarea($settings['custom_message_en']); ?></textarea>
+                </div>
             </td>
         </tr>
     </tbody>
 </table>
+
+<script>
+    jQuery(document).ready(function($) {
+        // Toggle de mensajes en inglés
+        function toggleEnglishMessage() {
+            if ($('#enable_wpml').is(':checked')) {
+                $('#message_en_wrapper').show();
+            } else {
+                $('#message_en_wrapper').hide();
+            }
+        }
+
+        toggleEnglishMessage();
+        $('#enable_wpml').on('change', toggleEnglishMessage);
+    });
+</script>

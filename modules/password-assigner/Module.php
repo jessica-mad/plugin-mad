@@ -117,14 +117,31 @@ return new class($core ?? null) implements MAD_Suite_Module {
             'enabled' => 0,
             'password' => '',
             'session_duration' => 24, // horas
+
+            // Multiidioma WPML
+            'enable_wpml' => 0,
+            'custom_message' => __('Por favor, ingresa la contraseña para acceder al sitio.', 'mad-suite'),
+            'custom_message_en' => 'Please enter the password to access the site.',
+
+            // Horarios
             'enable_schedule' => 0,
+            'schedule_type' => 'recurring', // 'recurring' o 'specific'
             'schedule_start' => '09:00',
             'schedule_end' => '18:00',
             'schedule_days' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+            'schedule_timezone' => 'America/New_York',
+            'schedule_date_start' => '',
+            'schedule_date_end' => '',
+
+            // URLs y páginas
             'redirect_url' => '',
             'exclude_admin' => 1,
             'exclude_urls' => '',
-            'custom_message' => __('Por favor, ingresa la contraseña para acceder al sitio.', 'mad-suite'),
+            'exclude_pages' => [], // IDs de páginas a excluir
+
+            // IPs en whitelist
+            'whitelist_ips' => '',
+            'enable_whitelist' => 0,
         ];
 
         $option_key = MAD_Suite_Core::option_key($this->slug());
@@ -139,19 +156,39 @@ return new class($core ?? null) implements MAD_Suite_Module {
     public function sanitize_settings($input) {
         $sanitized = [];
 
+        // General
         $sanitized['enabled'] = isset($input['enabled']) ? 1 : 0;
         $sanitized['password'] = sanitize_text_field($input['password'] ?? '');
         $sanitized['session_duration'] = absint($input['session_duration'] ?? 24);
+
+        // Multiidioma WPML
+        $sanitized['enable_wpml'] = isset($input['enable_wpml']) ? 1 : 0;
+        $sanitized['custom_message'] = sanitize_textarea_field($input['custom_message'] ?? '');
+        $sanitized['custom_message_en'] = sanitize_textarea_field($input['custom_message_en'] ?? '');
+
+        // Horarios
         $sanitized['enable_schedule'] = isset($input['enable_schedule']) ? 1 : 0;
+        $sanitized['schedule_type'] = sanitize_key($input['schedule_type'] ?? 'recurring');
         $sanitized['schedule_start'] = sanitize_text_field($input['schedule_start'] ?? '09:00');
         $sanitized['schedule_end'] = sanitize_text_field($input['schedule_end'] ?? '18:00');
         $sanitized['schedule_days'] = isset($input['schedule_days']) && is_array($input['schedule_days'])
             ? array_map('sanitize_key', $input['schedule_days'])
             : [];
+        $sanitized['schedule_timezone'] = sanitize_text_field($input['schedule_timezone'] ?? 'America/New_York');
+        $sanitized['schedule_date_start'] = sanitize_text_field($input['schedule_date_start'] ?? '');
+        $sanitized['schedule_date_end'] = sanitize_text_field($input['schedule_date_end'] ?? '');
+
+        // URLs y páginas
         $sanitized['redirect_url'] = esc_url_raw($input['redirect_url'] ?? '');
         $sanitized['exclude_admin'] = isset($input['exclude_admin']) ? 1 : 0;
         $sanitized['exclude_urls'] = sanitize_textarea_field($input['exclude_urls'] ?? '');
-        $sanitized['custom_message'] = sanitize_textarea_field($input['custom_message'] ?? '');
+        $sanitized['exclude_pages'] = isset($input['exclude_pages']) && is_array($input['exclude_pages'])
+            ? array_map('absint', $input['exclude_pages'])
+            : [];
+
+        // IPs en whitelist
+        $sanitized['enable_whitelist'] = isset($input['enable_whitelist']) ? 1 : 0;
+        $sanitized['whitelist_ips'] = sanitize_textarea_field($input['whitelist_ips'] ?? '');
 
         return $sanitized;
     }
@@ -208,25 +245,29 @@ return new class($core ?? null) implements MAD_Suite_Module {
      * Verificar si estamos dentro del horario configurado
      */
     private function is_within_schedule($settings) {
-        $current_day = strtolower(current_time('l')); // monday, tuesday, etc.
-        $current_time = current_time('H:i');
+        $timezone = new \DateTimeZone($settings['schedule_timezone']);
+        $now = new \DateTime('now', $timezone);
 
-        // Mapeo de nombres de días en inglés
-        $day_map = [
-            'monday' => 'monday',
-            'tuesday' => 'tuesday',
-            'wednesday' => 'wednesday',
-            'thursday' => 'thursday',
-            'friday' => 'friday',
-            'saturday' => 'saturday',
-            'sunday' => 'sunday',
-        ];
+        // Verificar tipo de horario
+        if ($settings['schedule_type'] === 'specific') {
+            // Horario específico (fechas)
+            return $this->is_within_specific_schedule($settings, $now);
+        } else {
+            // Horario recurrente (días de la semana)
+            return $this->is_within_recurring_schedule($settings, $now);
+        }
+    }
 
-        $current_day_key = $day_map[$current_day] ?? '';
+    /**
+     * Verificar horario recurrente (días de la semana)
+     */
+    private function is_within_recurring_schedule($settings, $now) {
+        $current_day = strtolower($now->format('l'));
+        $current_time = $now->format('H:i');
 
         // Verificar si hoy está en los días configurados
-        if (!in_array($current_day_key, $settings['schedule_days'])) {
-            return false; // No proteger fuera de los días configurados
+        if (!in_array($current_day, $settings['schedule_days'])) {
+            return false;
         }
 
         // Verificar si estamos dentro del rango de horas
@@ -234,10 +275,29 @@ return new class($core ?? null) implements MAD_Suite_Module {
         $end_time = $settings['schedule_end'];
 
         if ($current_time >= $start_time && $current_time <= $end_time) {
-            return true; // Proteger dentro del horario
+            return true;
         }
 
-        return false; // No proteger fuera del horario
+        return false;
+    }
+
+    /**
+     * Verificar horario específico (fechas)
+     */
+    private function is_within_specific_schedule($settings, $now) {
+        if (empty($settings['schedule_date_start']) || empty($settings['schedule_date_end'])) {
+            return false;
+        }
+
+        $timezone = new \DateTimeZone($settings['schedule_timezone']);
+        $start_datetime = new \DateTime($settings['schedule_date_start'] . ' ' . $settings['schedule_start'], $timezone);
+        $end_datetime = new \DateTime($settings['schedule_date_end'] . ' ' . $settings['schedule_end'], $timezone);
+
+        if ($now >= $start_datetime && $now <= $end_datetime) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -283,6 +343,79 @@ return new class($core ?? null) implements MAD_Suite_Module {
     }
 
     /**
+     * Verificar si la IP actual está en whitelist
+     */
+    private function is_ip_whitelisted() {
+        $settings = $this->get_settings();
+
+        // Si la whitelist no está habilitada, no verificar
+        if (empty($settings['enable_whitelist'])) {
+            return false;
+        }
+
+        // Si no hay IPs configuradas, no permitir
+        if (empty($settings['whitelist_ips'])) {
+            return false;
+        }
+
+        $current_ip = $this->get_client_ip();
+        $whitelist = array_filter(array_map('trim', explode("\n", $settings['whitelist_ips'])));
+
+        foreach ($whitelist as $allowed_ip) {
+            // Soporte para rangos CIDR
+            if (strpos($allowed_ip, '/') !== false) {
+                if ($this->ip_in_range($current_ip, $allowed_ip)) {
+                    return true;
+                }
+            } else {
+                // Comparación directa
+                if ($current_ip === $allowed_ip) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Obtener la IP del cliente
+     */
+    private function get_client_ip() {
+        $ip_keys = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'];
+
+        foreach ($ip_keys as $key) {
+            if (isset($_SERVER[$key])) {
+                $ip = $_SERVER[$key];
+                // Si hay múltiples IPs, tomar la primera
+                if (strpos($ip, ',') !== false) {
+                    $ip = explode(',', $ip)[0];
+                }
+                return trim($ip);
+            }
+        }
+
+        return $_SERVER['REMOTE_ADDR'] ?? '';
+    }
+
+    /**
+     * Verificar si una IP está en un rango CIDR
+     */
+    private function ip_in_range($ip, $range) {
+        if (strpos($range, '/') === false) {
+            return $ip === $range;
+        }
+
+        list($subnet, $bits) = explode('/', $range);
+        $ip_long = ip2long($ip);
+        $subnet_long = ip2long($subnet);
+        $mask = -1 << (32 - $bits);
+        $subnet_long &= $mask;
+
+        return ($ip_long & $mask) === $subnet_long;
+    }
+
+    /**
      * Verificar si la URL actual debe ser excluida
      */
     private function is_excluded_url($current_url) {
@@ -305,6 +438,27 @@ return new class($core ?? null) implements MAD_Suite_Module {
     }
 
     /**
+     * Verificar si la página actual debe ser excluida
+     */
+    private function is_excluded_page() {
+        $settings = $this->get_settings();
+
+        // Si no hay páginas excluidas, no excluir
+        if (empty($settings['exclude_pages'])) {
+            return false;
+        }
+
+        // Obtener el ID de la página actual
+        $current_page_id = get_the_ID();
+
+        if (!$current_page_id) {
+            return false;
+        }
+
+        return in_array($current_page_id, $settings['exclude_pages']);
+    }
+
+    /**
      * Bloquear acceso al sitio si es necesario
      */
     public function check_site_access() {
@@ -317,6 +471,11 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
         // Excluir administradores si está configurado
         if (!empty($settings['exclude_admin']) && current_user_can('manage_options')) {
+            return;
+        }
+
+        // Verificar si la IP está en whitelist
+        if ($this->is_ip_whitelisted()) {
             return;
         }
 
@@ -338,6 +497,11 @@ return new class($core ?? null) implements MAD_Suite_Module {
             return;
         }
 
+        // Excluir páginas específicas
+        if ($this->is_excluded_page()) {
+            return;
+        }
+
         // Excluir la página de login para evitar bucles infinitos
         if (!empty($settings['redirect_url'])) {
             $redirect_page_id = url_to_postid($settings['redirect_url']);
@@ -352,12 +516,33 @@ return new class($core ?? null) implements MAD_Suite_Module {
             exit;
         } else {
             // Si no hay página configurada, mostrar mensaje simple
+            $message = $this->get_message_for_current_language($settings);
             wp_die(
-                esc_html($settings['custom_message']),
+                esc_html($message),
                 esc_html__('Acceso Restringido', 'mad-suite'),
                 ['response' => 403]
             );
         }
+    }
+
+    /**
+     * Obtener mensaje según el idioma actual (WPML)
+     */
+    private function get_message_for_current_language($settings) {
+        // Si WPML no está habilitado, usar mensaje por defecto
+        if (empty($settings['enable_wpml'])) {
+            return $settings['custom_message'];
+        }
+
+        // Verificar si la URL contiene /en/
+        $current_url = $_SERVER['REQUEST_URI'] ?? '';
+        $is_english = (strpos($current_url, '/en/') !== false);
+
+        if ($is_english && !empty($settings['custom_message_en'])) {
+            return $settings['custom_message_en'];
+        }
+
+        return $settings['custom_message'];
     }
 
     /**
