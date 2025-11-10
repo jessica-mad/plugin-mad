@@ -71,44 +71,117 @@ class PricingEngine {
      * Aplicar precio VIP
      */
     public function apply_vip_price($price, $product) {
-        // Solo aplicar en tienda privada o para usuarios VIP
-        if (!ProductVisibility::instance()->is_private_store() && !UserRole::instance()->is_vip_user()) {
+        // Verificar si el usuario puede ver descuentos basándose en:
+        // 1. Si está en tienda privada
+        // 2. Si es usuario VIP (rol hardcodeado vip_customer)
+        // 3. Si tiene un rol que está en alguna regla de descuento
+        if (!$this->user_can_see_discounts()) {
             return $price;
         }
-        
+
         // Si no hay precio, retornar
         if (empty($price) || $price <= 0) {
             return $price;
         }
-        
+
         $product_id = $product->get_id();
         $original_price = $price;
-        
+
         // 1. Verificar descuento individual del producto (máxima prioridad)
         $individual_discount = $this->get_individual_discount($product_id);
-        
+
         if ($individual_discount) {
             $price = $this->calculate_discount($price, $individual_discount['amount'], $individual_discount['type']);
-            
+
             $this->log_discount_applied($product_id, 'individual', $original_price, $price, $individual_discount);
-            
+
             return $price;
         }
-        
+
         // 2. Verificar descuentos por categoría y etiqueta
         $category_discount = $this->get_best_category_discount($product_id);
         $tag_discount = $this->get_best_tag_discount($product_id);
-        
+
         // Aplicar el mejor descuento disponible
         $best_discount = $this->get_best_discount($category_discount, $tag_discount);
-        
+
         if ($best_discount) {
             $price = $this->calculate_discount($price, $best_discount['amount'], $best_discount['type']);
-            
+
             $this->log_discount_applied($product_id, $best_discount['discount_type'], $original_price, $price, $best_discount);
         }
-        
+
         return $price;
+    }
+
+    /**
+     * Verificar si el usuario puede ver descuentos
+     * Verifica si está en tienda privada O si el usuario tiene un rol con acceso a descuentos
+     */
+    private function user_can_see_discounts() {
+        // Si está en tienda privada, todos los usuarios autorizados pueden ver descuentos
+        if (ProductVisibility::instance()->is_private_store()) {
+            return true;
+        }
+
+        // Si es usuario VIP (rol hardcodeado), puede ver descuentos
+        if (UserRole::instance()->is_vip_user()) {
+            return true;
+        }
+
+        // Verificar si el usuario tiene algún rol que esté en las reglas de descuento
+        return $this->user_has_discount_role();
+    }
+
+    /**
+     * Verificar si el usuario tiene un rol que esté configurado en alguna regla de descuento
+     */
+    private function user_has_discount_role() {
+        $user = wp_get_current_user();
+
+        if (!$user || empty($user->roles)) {
+            return false;
+        }
+
+        $rules = $this->get_discount_rules();
+
+        if (empty($rules)) {
+            return false;
+        }
+
+        // Verificar si alguna regla activa incluye alguno de los roles del usuario
+        foreach ($rules as $rule) {
+            // Solo reglas activas
+            if (empty($rule['enabled'])) {
+                continue;
+            }
+
+            // Verificar fechas
+            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
+                continue;
+            }
+            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
+                continue;
+            }
+
+            // Verificar si el usuario tiene alguno de los roles de esta regla
+            if (!empty($rule['roles'])) {
+                foreach ($user->roles as $user_role) {
+                    if (in_array($user_role, $rule['roles'])) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Obtener reglas de descuento
+     */
+    private function get_discount_rules() {
+        return get_option('mad_private_shop_rules', []);
     }
     
     /**
@@ -131,73 +204,225 @@ class PricingEngine {
     
     /**
      * Obtener mejor descuento por categoría
+     * Considera tanto descuentos legacy como reglas con roles
      */
     private function get_best_category_discount($product_id) {
-        $discounts = get_option('mads_ps_discounts', []);
+        // Obtener categorías del producto
         $product_categories = wp_get_post_terms($product_id, 'product_cat', ['fields' => 'ids']);
-        
+
         if (empty($product_categories)) {
             return null;
         }
-        
+
+        // Obtener roles del usuario actual
+        $user = wp_get_current_user();
+        $user_roles = $user ? $user->roles : [];
+
         $best_discount = null;
         $best_value = 0;
-        
+
+        // 1. Verificar descuentos de REGLAS (con roles)
+        $rules = $this->get_discount_rules();
+        foreach ($rules as $rule) {
+            // Solo reglas activas
+            if (empty($rule['enabled'])) {
+                continue;
+            }
+
+            // Verificar fechas
+            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
+                continue;
+            }
+            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
+                continue;
+            }
+
+            // Verificar si el usuario tiene uno de los roles de la regla
+            $has_role = false;
+            if (!empty($rule['roles'])) {
+                foreach ($user_roles as $user_role) {
+                    if (in_array($user_role, $rule['roles'])) {
+                        $has_role = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!$has_role) {
+                continue;
+            }
+
+            // Verificar si aplica a categorías y si el producto está en una de ellas
+            if ($rule['apply_to'] === 'categories' && !empty($rule['target_ids'])) {
+                foreach ($product_categories as $cat_id) {
+                    if (in_array($cat_id, $rule['target_ids'])) {
+                        // Calcular valor del descuento
+                        $discount_value = $this->calculate_discount_value(100, $rule['discount_value'], $rule['discount_type']);
+
+                        if ($discount_value > $best_value) {
+                            $best_value = $discount_value;
+                            $best_discount = [
+                                'amount' => $rule['discount_value'],
+                                'type' => $rule['discount_type'],
+                                'discount_type' => 'category',
+                                'rule_name' => $rule['name'],
+                                'from_rule' => true
+                            ];
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 2. Verificar descuentos LEGACY (sin roles, para compatibilidad)
+        $discounts = get_option('mads_ps_discounts', []);
         foreach ($discounts as $discount) {
             if ($discount['type'] !== 'category') {
                 continue;
             }
-            
+
             // Verificar si el producto pertenece a esta categoría
             if (!in_array($discount['target'], $product_categories)) {
                 continue;
             }
-            
+
+            // Legacy: si no tiene roles configurados, aplica a todos los VIP
+            if (!$this->discount_applies_to_user($discount, $user_roles)) {
+                continue;
+            }
+
             // Calcular valor del descuento para comparar
             $discount_value = $this->calculate_discount_value(100, $discount['amount'], $discount['amount_type']);
-            
+
             if ($discount_value > $best_value) {
                 $best_value = $discount_value;
-                $best_discount = array_merge($discount, ['discount_type' => 'category']);
+                $best_discount = array_merge($discount, ['discount_type' => 'category', 'from_rule' => false]);
             }
         }
-        
+
         return $best_discount;
+    }
+
+    /**
+     * Verificar si un descuento aplica al usuario basándose en roles
+     * Los descuentos legacy (sin roles configurados) aplican a todos
+     * Los descuentos con roles solo aplican si el usuario tiene uno de esos roles
+     */
+    private function discount_applies_to_user($discount, $user_roles) {
+        // Si el descuento no tiene roles configurados, es legacy y aplica a todos los VIP
+        if (empty($discount['roles'])) {
+            return true;
+        }
+
+        // Si tiene roles configurados, verificar si el usuario tiene alguno
+        if (empty($user_roles)) {
+            return false;
+        }
+
+        foreach ($user_roles as $user_role) {
+            if (in_array($user_role, $discount['roles'])) {
+                return true;
+            }
+        }
+
+        return false;
     }
     
     /**
-     * Obtener mejor descuento por etiqueta
+     * Obtener mejor descuento por etiqueta o producto específico
+     * Considera tanto descuentos legacy como reglas con roles
      */
     private function get_best_tag_discount($product_id) {
-        $discounts = get_option('mads_ps_discounts', []);
+        // Obtener etiquetas del producto
         $product_tags = wp_get_post_terms($product_id, 'product_tag', ['fields' => 'ids']);
-        
-        if (empty($product_tags)) {
-            return null;
-        }
-        
+
+        // Obtener roles del usuario actual
+        $user = wp_get_current_user();
+        $user_roles = $user ? $user->roles : [];
+
         $best_discount = null;
         $best_value = 0;
-        
-        foreach ($discounts as $discount) {
-            if ($discount['type'] !== 'tag') {
+
+        // 1. Verificar descuentos de REGLAS (con roles)
+        $rules = $this->get_discount_rules();
+        foreach ($rules as $rule) {
+            // Solo reglas activas
+            if (empty($rule['enabled'])) {
                 continue;
             }
-            
-            // Verificar si el producto tiene esta etiqueta
-            if (!in_array($discount['target'], $product_tags)) {
+
+            // Verificar fechas
+            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
                 continue;
             }
-            
-            // Calcular valor del descuento para comparar
-            $discount_value = $this->calculate_discount_value(100, $discount['amount'], $discount['amount_type']);
-            
-            if ($discount_value > $best_value) {
-                $best_value = $discount_value;
-                $best_discount = array_merge($discount, ['discount_type' => 'tag']);
+            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
+                continue;
+            }
+
+            // Verificar si el usuario tiene uno de los roles de la regla
+            $has_role = false;
+            if (!empty($rule['roles'])) {
+                foreach ($user_roles as $user_role) {
+                    if (in_array($user_role, $rule['roles'])) {
+                        $has_role = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!$has_role) {
+                continue;
+            }
+
+            // Verificar si aplica a productos específicos
+            if ($rule['apply_to'] === 'products' && !empty($rule['target_ids'])) {
+                if (in_array($product_id, $rule['target_ids'])) {
+                    // Calcular valor del descuento
+                    $discount_value = $this->calculate_discount_value(100, $rule['discount_value'], $rule['discount_type']);
+
+                    if ($discount_value > $best_value) {
+                        $best_value = $discount_value;
+                        $best_discount = [
+                            'amount' => $rule['discount_value'],
+                            'type' => $rule['discount_type'],
+                            'discount_type' => 'product',
+                            'rule_name' => $rule['name'],
+                            'from_rule' => true
+                        ];
+                    }
+                }
             }
         }
-        
+
+        // 2. Verificar descuentos LEGACY por etiquetas (sin roles, para compatibilidad)
+        if (!empty($product_tags)) {
+            $discounts = get_option('mads_ps_discounts', []);
+            foreach ($discounts as $discount) {
+                if ($discount['type'] !== 'tag') {
+                    continue;
+                }
+
+                // Verificar si el producto tiene esta etiqueta
+                if (!in_array($discount['target'], $product_tags)) {
+                    continue;
+                }
+
+                // Legacy: si no tiene roles configurados, aplica a todos los VIP
+                if (!$this->discount_applies_to_user($discount, $user_roles)) {
+                    continue;
+                }
+
+                // Calcular valor del descuento para comparar
+                $discount_value = $this->calculate_discount_value(100, $discount['amount'], $discount['amount_type']);
+
+                if ($discount_value > $best_value) {
+                    $best_value = $discount_value;
+                    $best_discount = array_merge($discount, ['discount_type' => 'tag', 'from_rule' => false]);
+                }
+            }
+        }
+
         return $best_discount;
     }
     
@@ -280,8 +505,8 @@ class PricingEngine {
      * Modificar HTML del precio para mostrar original tachado
      */
     public function modify_price_html($price_html, $product) {
-        // Solo en tienda privada o para usuarios VIP
-        if (!ProductVisibility::instance()->is_private_store() && !UserRole::instance()->is_vip_user()) {
+        // Solo si el usuario puede ver descuentos
+        if (!$this->user_can_see_discounts()) {
             return $price_html;
         }
         
@@ -462,8 +687,13 @@ class PricingEngine {
      */
     public function show_discount_badge() {
         global $product;
-        
-        if (!$product || !ProductVisibility::instance()->is_private_store()) {
+
+        if (!$product) {
+            return;
+        }
+
+        // Solo mostrar badge si el usuario puede ver descuentos
+        if (!$this->user_can_see_discounts()) {
             return;
         }
         
@@ -495,8 +725,13 @@ class PricingEngine {
      */
     public function show_discount_badge_loop() {
         global $product;
-        
-        if (!$product || !ProductVisibility::instance()->is_private_store()) {
+
+        if (!$product) {
+            return;
+        }
+
+        // Solo mostrar badge si el usuario puede ver descuentos
+        if (!$this->user_can_see_discounts()) {
             return;
         }
         
