@@ -1,0 +1,492 @@
+<?php
+/**
+ * Módulo: Password Assigner
+ *
+ * Sistema de protección por contraseña para el front-end del sitio.
+ * Permite bloquear el acceso al sitio web completo hasta que se ingrese
+ * una contraseña correcta. Incluye opciones de horario y configuración avanzada.
+ */
+
+if (!defined('ABSPATH')) exit;
+
+return new class($core ?? null) implements MAD_Suite_Module {
+    private $core;
+    private $slug = 'password-assigner';
+
+    public function __construct($core) {
+        $this->core = $core;
+    }
+
+    public function slug() {
+        return $this->slug;
+    }
+
+    public function title() {
+        return __('Asignador de Contraseña', 'mad-suite');
+    }
+
+    public function menu_label() {
+        return __('Protección Web', 'mad-suite');
+    }
+
+    public function menu_slug() {
+        return MAD_Suite_Core::MENU_SLUG_ROOT . '-' . $this->slug;
+    }
+
+    /**
+     * Inicialización del módulo (front-end y admin)
+     */
+    public function init() {
+        // Registrar shortcode para el formulario de contraseña
+        add_shortcode('password_access_form', [$this, 'render_password_form_shortcode']);
+
+        // Hook para bloquear el acceso al front-end
+        add_action('template_redirect', [$this, 'check_site_access'], 1);
+
+        // Cargar estilos en el front-end
+        add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_scripts']);
+
+        // Handler para procesar el formulario de contraseña
+        add_action('template_redirect', [$this, 'handle_password_submission']);
+
+        // Acción de logout
+        add_action('template_redirect', [$this, 'handle_logout']);
+    }
+
+    /**
+     * Inicialización del admin
+     */
+    public function admin_init() {
+        $option_key = MAD_Suite_Core::option_key($this->slug());
+
+        // Registrar ajustes
+        register_setting($this->menu_slug(), $option_key, [$this, 'sanitize_settings']);
+
+        // Cargar estilos y scripts del admin
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
+
+        // Handler para guardar configuración
+        add_action('admin_post_mads_password_assigner_save', [$this, 'handle_save_settings']);
+
+        // AJAX handler para obtener permalink de página
+        add_action('wp_ajax_get_page_permalink', [$this, 'ajax_get_page_permalink']);
+    }
+
+    /**
+     * Renderizar página de configuración
+     */
+    public function render_settings_page() {
+        $this->ensure_capability();
+
+        $settings = $this->get_settings();
+        $tabs = [
+            'general' => __('Configuración General', 'mad-suite'),
+            'schedule' => __('Horarios', 'mad-suite'),
+            'advanced' => __('Avanzado', 'mad-suite'),
+        ];
+
+        $current_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'general';
+
+        $this->render_view('settings', [
+            'tabs' => $tabs,
+            'current_tab' => $current_tab,
+            'settings' => $settings,
+            'module' => $this,
+        ]);
+    }
+
+    /**
+     * Obtener configuración actual
+     */
+    private function get_settings() {
+        $defaults = [
+            'enabled' => 0,
+            'password' => '',
+            'session_duration' => 24, // horas
+            'enable_schedule' => 0,
+            'schedule_start' => '09:00',
+            'schedule_end' => '18:00',
+            'schedule_days' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+            'redirect_url' => '',
+            'exclude_admin' => 1,
+            'exclude_urls' => '',
+            'custom_message' => __('Por favor, ingresa la contraseña para acceder al sitio.', 'mad-suite'),
+        ];
+
+        $option_key = MAD_Suite_Core::option_key($this->slug());
+        $settings = get_option($option_key, []);
+
+        return wp_parse_args($settings, $defaults);
+    }
+
+    /**
+     * Sanitizar configuración
+     */
+    public function sanitize_settings($input) {
+        $sanitized = [];
+
+        $sanitized['enabled'] = isset($input['enabled']) ? 1 : 0;
+        $sanitized['password'] = sanitize_text_field($input['password'] ?? '');
+        $sanitized['session_duration'] = absint($input['session_duration'] ?? 24);
+        $sanitized['enable_schedule'] = isset($input['enable_schedule']) ? 1 : 0;
+        $sanitized['schedule_start'] = sanitize_text_field($input['schedule_start'] ?? '09:00');
+        $sanitized['schedule_end'] = sanitize_text_field($input['schedule_end'] ?? '18:00');
+        $sanitized['schedule_days'] = isset($input['schedule_days']) && is_array($input['schedule_days'])
+            ? array_map('sanitize_key', $input['schedule_days'])
+            : [];
+        $sanitized['redirect_url'] = esc_url_raw($input['redirect_url'] ?? '');
+        $sanitized['exclude_admin'] = isset($input['exclude_admin']) ? 1 : 0;
+        $sanitized['exclude_urls'] = sanitize_textarea_field($input['exclude_urls'] ?? '');
+        $sanitized['custom_message'] = sanitize_textarea_field($input['custom_message'] ?? '');
+
+        return $sanitized;
+    }
+
+    /**
+     * Handler para guardar configuración
+     */
+    public function handle_save_settings() {
+        $this->ensure_capability();
+        check_admin_referer('mads_password_assigner_save', 'mads_password_assigner_nonce');
+
+        $option_key = MAD_Suite_Core::option_key($this->slug());
+        $input = $_POST[$option_key] ?? [];
+        $sanitized = $this->sanitize_settings($input);
+
+        update_option($option_key, $sanitized);
+
+        $redirect_url = add_query_arg([
+            'page' => $this->menu_slug(),
+            'tab' => sanitize_key($_POST['current_tab'] ?? 'general'),
+            'updated' => 'true',
+        ], admin_url('admin.php'));
+
+        wp_safe_redirect($redirect_url);
+        exit;
+    }
+
+    /**
+     * Verificar si el sitio debe estar protegido en este momento
+     */
+    private function should_protect_site() {
+        $settings = $this->get_settings();
+
+        // Si no está habilitado, no proteger
+        if (empty($settings['enabled'])) {
+            return false;
+        }
+
+        // Si no hay contraseña configurada, no proteger
+        if (empty($settings['password'])) {
+            return false;
+        }
+
+        // Si el horario está habilitado, verificar si estamos dentro del horario
+        if (!empty($settings['enable_schedule'])) {
+            return $this->is_within_schedule($settings);
+        }
+
+        // Por defecto, proteger
+        return true;
+    }
+
+    /**
+     * Verificar si estamos dentro del horario configurado
+     */
+    private function is_within_schedule($settings) {
+        $current_day = strtolower(current_time('l')); // monday, tuesday, etc.
+        $current_time = current_time('H:i');
+
+        // Mapeo de nombres de días en inglés
+        $day_map = [
+            'monday' => 'monday',
+            'tuesday' => 'tuesday',
+            'wednesday' => 'wednesday',
+            'thursday' => 'thursday',
+            'friday' => 'friday',
+            'saturday' => 'saturday',
+            'sunday' => 'sunday',
+        ];
+
+        $current_day_key = $day_map[$current_day] ?? '';
+
+        // Verificar si hoy está en los días configurados
+        if (!in_array($current_day_key, $settings['schedule_days'])) {
+            return false; // No proteger fuera de los días configurados
+        }
+
+        // Verificar si estamos dentro del rango de horas
+        $start_time = $settings['schedule_start'];
+        $end_time = $settings['schedule_end'];
+
+        if ($current_time >= $start_time && $current_time <= $end_time) {
+            return true; // Proteger dentro del horario
+        }
+
+        return false; // No proteger fuera del horario
+    }
+
+    /**
+     * Verificar si el usuario tiene acceso
+     */
+    private function user_has_access() {
+        // Verificar sesión
+        if (!session_id()) {
+            session_start();
+        }
+
+        $settings = $this->get_settings();
+        $session_key = 'mads_password_access_granted';
+        $session_time_key = 'mads_password_access_time';
+
+        // Verificar si existe la sesión y no ha expirado
+        if (isset($_SESSION[$session_key]) && $_SESSION[$session_key] === true) {
+            $access_time = $_SESSION[$session_time_key] ?? 0;
+            $session_duration = $settings['session_duration'] * 3600; // convertir horas a segundos
+
+            if ((time() - $access_time) < $session_duration) {
+                return true;
+            } else {
+                // Sesión expirada
+                unset($_SESSION[$session_key]);
+                unset($_SESSION[$session_time_key]);
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Otorgar acceso al usuario
+     */
+    private function grant_access() {
+        if (!session_id()) {
+            session_start();
+        }
+
+        $_SESSION['mads_password_access_granted'] = true;
+        $_SESSION['mads_password_access_time'] = time();
+    }
+
+    /**
+     * Verificar si la URL actual debe ser excluida
+     */
+    private function is_excluded_url($current_url) {
+        $settings = $this->get_settings();
+
+        // Si no hay URLs excluidas, no excluir nada
+        if (empty($settings['exclude_urls'])) {
+            return false;
+        }
+
+        $excluded_urls = array_filter(array_map('trim', explode("\n", $settings['exclude_urls'])));
+
+        foreach ($excluded_urls as $excluded) {
+            if (strpos($current_url, $excluded) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Bloquear acceso al sitio si es necesario
+     */
+    public function check_site_access() {
+        // No bloquear en el admin
+        if (is_admin()) {
+            return;
+        }
+
+        $settings = $this->get_settings();
+
+        // Excluir administradores si está configurado
+        if (!empty($settings['exclude_admin']) && current_user_can('manage_options')) {
+            return;
+        }
+
+        // Verificar si debemos proteger el sitio
+        if (!$this->should_protect_site()) {
+            return;
+        }
+
+        // Verificar si el usuario ya tiene acceso
+        if ($this->user_has_access()) {
+            return;
+        }
+
+        // Obtener URL actual
+        $current_url = $_SERVER['REQUEST_URI'] ?? '';
+
+        // Excluir URLs específicas
+        if ($this->is_excluded_url($current_url)) {
+            return;
+        }
+
+        // Excluir la página de login para evitar bucles infinitos
+        if (!empty($settings['redirect_url'])) {
+            $redirect_page_id = url_to_postid($settings['redirect_url']);
+            if ($redirect_page_id && is_page($redirect_page_id)) {
+                return;
+            }
+        }
+
+        // Redirigir a la página de login
+        if (!empty($settings['redirect_url'])) {
+            wp_safe_redirect($settings['redirect_url']);
+            exit;
+        } else {
+            // Si no hay página configurada, mostrar mensaje simple
+            wp_die(
+                esc_html($settings['custom_message']),
+                esc_html__('Acceso Restringido', 'mad-suite'),
+                ['response' => 403]
+            );
+        }
+    }
+
+    /**
+     * Handler para procesar el formulario de contraseña
+     */
+    public function handle_password_submission() {
+        if (!isset($_POST['mads_password_submit'])) {
+            return;
+        }
+
+        check_admin_referer('mads_password_form', 'mads_password_nonce');
+
+        $settings = $this->get_settings();
+        $submitted_password = $_POST['mads_password'] ?? '';
+
+        if ($submitted_password === $settings['password']) {
+            // Contraseña correcta
+            $this->grant_access();
+
+            // Redirigir al home
+            wp_safe_redirect(home_url('/'));
+            exit;
+        } else {
+            // Contraseña incorrecta - redirigir con error
+            $current_url = $_SERVER['REQUEST_URI'] ?? '';
+            $redirect_url = add_query_arg('password_error', '1', $current_url);
+            wp_safe_redirect($redirect_url);
+            exit;
+        }
+    }
+
+    /**
+     * Handler para cerrar sesión
+     */
+    public function handle_logout() {
+        if (!isset($_GET['mads_password_logout'])) {
+            return;
+        }
+
+        if (!session_id()) {
+            session_start();
+        }
+
+        unset($_SESSION['mads_password_access_granted']);
+        unset($_SESSION['mads_password_access_time']);
+
+        $redirect_url = remove_query_arg('mads_password_logout', home_url('/'));
+        wp_safe_redirect($redirect_url);
+        exit;
+    }
+
+    /**
+     * Shortcode para el formulario de contraseña
+     */
+    public function render_password_form_shortcode($atts) {
+        $atts = shortcode_atts([
+            'message' => '',
+        ], $atts, 'password_access_form');
+
+        ob_start();
+        $this->render_view('password-form', [
+            'settings' => $this->get_settings(),
+            'custom_message' => $atts['message'],
+            'error' => isset($_GET['password_error']),
+        ]);
+        return ob_get_clean();
+    }
+
+    /**
+     * Cargar scripts del frontend
+     */
+    public function enqueue_frontend_scripts() {
+        wp_enqueue_style(
+            'mads-password-assigner-frontend',
+            plugin_dir_url(__FILE__) . 'assets/css/frontend.css',
+            [],
+            '1.0.0'
+        );
+    }
+
+    /**
+     * Cargar scripts del admin
+     */
+    public function enqueue_admin_scripts($hook) {
+        if (strpos($hook, $this->menu_slug()) === false) {
+            return;
+        }
+
+        wp_enqueue_style(
+            'mads-password-assigner-admin',
+            plugin_dir_url(__FILE__) . 'assets/css/admin.css',
+            [],
+            '1.0.0'
+        );
+
+        wp_enqueue_script(
+            'mads-password-assigner-admin',
+            plugin_dir_url(__FILE__) . 'assets/js/admin.js',
+            ['jquery'],
+            '1.0.0',
+            true
+        );
+    }
+
+    /**
+     * Verificar permisos
+     */
+    private function ensure_capability() {
+        if (!current_user_can(MAD_Suite_Core::CAPABILITY)) {
+            wp_die(__('No tienes permisos suficientes para acceder a esta página.', 'mad-suite'));
+        }
+    }
+
+    /**
+     * AJAX handler para obtener el permalink de una página
+     */
+    public function ajax_get_page_permalink() {
+        $this->ensure_capability();
+
+        $page_id = isset($_POST['page_id']) ? absint($_POST['page_id']) : 0;
+
+        if (!$page_id) {
+            wp_send_json_error(['message' => __('ID de página inválido.', 'mad-suite')]);
+        }
+
+        $permalink = get_permalink($page_id);
+
+        if (!$permalink) {
+            wp_send_json_error(['message' => __('No se pudo obtener el permalink.', 'mad-suite')]);
+        }
+
+        wp_send_json_success(['permalink' => $permalink]);
+    }
+
+    /**
+     * Renderizar una vista
+     */
+    private function render_view($view_name, $data = []) {
+        $view_file = __DIR__ . '/views/' . $view_name . '.php';
+        if (!file_exists($view_file)) {
+            wp_die(sprintf(__('La vista %s no existe.', 'mad-suite'), $view_name));
+        }
+        extract($data, EXTR_SKIP);
+        include $view_file;
+    }
+};
