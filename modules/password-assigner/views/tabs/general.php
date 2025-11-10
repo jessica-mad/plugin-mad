@@ -65,11 +65,17 @@ if (!defined('ABSPATH')) exit;
                        id="session_duration"
                        value="<?php echo esc_attr($settings['session_duration']); ?>"
                        min="1"
-                       max="168"
                        class="small-text">
-                <span><?php _e('horas', 'mad-suite'); ?></span>
+                <select name="<?php echo esc_attr($option_key); ?>[session_duration_unit]" id="session_duration_unit">
+                    <option value="minutes" <?php selected($settings['session_duration_unit'], 'minutes'); ?>>
+                        <?php _e('minutos', 'mad-suite'); ?>
+                    </option>
+                    <option value="hours" <?php selected($settings['session_duration_unit'], 'hours'); ?>>
+                        <?php _e('horas', 'mad-suite'); ?>
+                    </option>
+                </select>
                 <p class="description">
-                    <?php _e('Tiempo que la sesión permanecerá activa después de ingresar la contraseña correcta. (1-168 horas)', 'mad-suite'); ?>
+                    <?php _e('Tiempo que la sesión permanecerá activa después de ingresar la contraseña correcta.', 'mad-suite'); ?>
                 </p>
             </td>
         </tr>
@@ -172,21 +178,113 @@ if (!defined('ABSPATH')) exit;
                 </div>
             </td>
         </tr>
+
+        <tr>
+            <th scope="row">
+                <?php _e('Personalización del formulario', 'mad-suite'); ?>
+            </th>
+            <td>
+                <!-- Hidden field para detectar cuando el checkbox no está marcado -->
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[enable_theme_styles]" value="0">
+                <label style="margin-bottom: 15px; display: block;">
+                    <input type="checkbox"
+                           name="<?php echo esc_attr($option_key); ?>[enable_theme_styles]"
+                           id="enable_theme_styles"
+                           value="1"
+                           <?php checked($settings['enable_theme_styles'], 1); ?>>
+                    <?php _e('Usar estilos del tema actual (recomendado)', 'mad-suite'); ?>
+                </label>
+                <p class="description" style="margin-bottom: 15px;">
+                    <?php _e('Cuando está activado, el formulario usa las clases CSS de tu tema para integrarse mejor.', 'mad-suite'); ?>
+                </p>
+
+                <div style="margin-top: 15px;">
+                    <label for="custom_form_intro" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Texto antes del formulario (español):', 'mad-suite'); ?></strong>
+                    </label>
+                    <textarea name="<?php echo esc_attr($option_key); ?>[custom_form_intro]"
+                              id="custom_form_intro"
+                              rows="3"
+                              class="large-text"><?php echo esc_textarea($settings['custom_form_intro']); ?></textarea>
+                    <p class="description"><?php _e('Texto opcional que aparece antes del formulario. Acepta HTML básico.', 'mad-suite'); ?></p>
+                </div>
+
+                <div style="margin-top: 10px;" id="form_intro_en_wrapper">
+                    <label for="custom_form_intro_en" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Texto antes del formulario (inglés):', 'mad-suite'); ?></strong>
+                    </label>
+                    <textarea name="<?php echo esc_attr($option_key); ?>[custom_form_intro_en]"
+                              id="custom_form_intro_en"
+                              rows="3"
+                              class="large-text"><?php echo esc_textarea($settings['custom_form_intro_en']); ?></textarea>
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <label for="custom_placeholder" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Placeholder del campo (español):', 'mad-suite'); ?></strong>
+                    </label>
+                    <input type="text"
+                           name="<?php echo esc_attr($option_key); ?>[custom_placeholder]"
+                           id="custom_placeholder"
+                           value="<?php echo esc_attr($settings['custom_placeholder']); ?>"
+                           class="regular-text">
+                </div>
+
+                <div style="margin-top: 10px;" id="placeholder_en_wrapper">
+                    <label for="custom_placeholder_en" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Placeholder del campo (inglés):', 'mad-suite'); ?></strong>
+                    </label>
+                    <input type="text"
+                           name="<?php echo esc_attr($option_key); ?>[custom_placeholder_en]"
+                           id="custom_placeholder_en"
+                           value="<?php echo esc_attr($settings['custom_placeholder_en']); ?>"
+                           class="regular-text">
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <label for="custom_button_text" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Texto del botón (español):', 'mad-suite'); ?></strong>
+                    </label>
+                    <input type="text"
+                           name="<?php echo esc_attr($option_key); ?>[custom_button_text]"
+                           id="custom_button_text"
+                           value="<?php echo esc_attr($settings['custom_button_text']); ?>"
+                           class="regular-text">
+                </div>
+
+                <div style="margin-top: 10px;" id="button_text_en_wrapper">
+                    <label for="custom_button_text_en" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Texto del botón (inglés):', 'mad-suite'); ?></strong>
+                    </label>
+                    <input type="text"
+                           name="<?php echo esc_attr($option_key); ?>[custom_button_text_en]"
+                           id="custom_button_text_en"
+                           value="<?php echo esc_attr($settings['custom_button_text_en']); ?>"
+                           class="regular-text">
+                </div>
+            </td>
+        </tr>
     </tbody>
 </table>
 
 <script>
     jQuery(document).ready(function($) {
-        // Toggle de mensajes en inglés
-        function toggleEnglishMessage() {
+        // Toggle de campos en inglés
+        function toggleEnglishFields() {
             if ($('#enable_wpml').is(':checked')) {
                 $('#message_en_wrapper').show();
+                $('#form_intro_en_wrapper').show();
+                $('#placeholder_en_wrapper').show();
+                $('#button_text_en_wrapper').show();
             } else {
                 $('#message_en_wrapper').hide();
+                $('#form_intro_en_wrapper').hide();
+                $('#placeholder_en_wrapper').hide();
+                $('#button_text_en_wrapper').hide();
             }
         }
 
-        toggleEnglishMessage();
-        $('#enable_wpml').on('change', toggleEnglishMessage);
+        toggleEnglishFields();
+        $('#enable_wpml').on('change', toggleEnglishFields);
     });
 </script>

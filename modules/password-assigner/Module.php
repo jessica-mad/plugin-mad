@@ -116,12 +116,22 @@ return new class($core ?? null) implements MAD_Suite_Module {
         $defaults = [
             'enabled' => 0,
             'password' => '',
-            'session_duration' => 24, // horas
+            'session_duration' => 24,
+            'session_duration_unit' => 'hours', // 'hours' o 'minutes'
 
             // Multiidioma WPML
             'enable_wpml' => 0,
             'custom_message' => __('Por favor, ingresa la contraseña para acceder al sitio.', 'mad-suite'),
             'custom_message_en' => 'Please enter the password to access the site.',
+
+            // Personalización del formulario
+            'custom_form_intro' => '',
+            'custom_form_intro_en' => '',
+            'custom_placeholder' => __('Contraseña', 'mad-suite'),
+            'custom_placeholder_en' => 'Password',
+            'custom_button_text' => __('Acceder', 'mad-suite'),
+            'custom_button_text_en' => 'Access',
+            'enable_theme_styles' => 1, // Usar estilos del tema por defecto
 
             // Horarios
             'enable_schedule' => 0,
@@ -129,7 +139,7 @@ return new class($core ?? null) implements MAD_Suite_Module {
             'schedule_start' => '09:00',
             'schedule_end' => '18:00',
             'schedule_days' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
-            'schedule_timezone' => 'America/New_York',
+            'schedule_timezone' => 'Europe/Madrid',
             'schedule_date_start' => '',
             'schedule_date_end' => '',
 
@@ -139,9 +149,10 @@ return new class($core ?? null) implements MAD_Suite_Module {
             'exclude_urls' => '',
             'exclude_pages' => [], // IDs de páginas a excluir
 
-            // IPs en whitelist
-            'whitelist_ips' => '',
-            'enable_whitelist' => 0,
+            // Sistema de IP lists (whitelist/blacklist)
+            'enable_ip_list' => 0,
+            'ip_list_mode' => 'whitelist', // 'whitelist' o 'blacklist'
+            'ip_list' => '',
         ];
 
         $option_key = MAD_Suite_Core::option_key($this->slug());
@@ -159,7 +170,7 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
         // General (solo si vienen en el input)
         if (isset($input['enabled']) || array_key_exists('enabled', $input)) {
-            $sanitized['enabled'] = isset($input['enabled']) ? 1 : 0;
+            $sanitized['enabled'] = !empty($input['enabled']) && $input['enabled'] == '1' ? 1 : 0;
         }
         if (isset($input['password'])) {
             $sanitized['password'] = sanitize_text_field($input['password']);
@@ -167,10 +178,15 @@ return new class($core ?? null) implements MAD_Suite_Module {
         if (isset($input['session_duration'])) {
             $sanitized['session_duration'] = absint($input['session_duration']);
         }
+        if (isset($input['session_duration_unit'])) {
+            $sanitized['session_duration_unit'] = in_array($input['session_duration_unit'], ['hours', 'minutes'])
+                ? $input['session_duration_unit']
+                : 'hours';
+        }
 
         // Multiidioma WPML (solo si vienen en el input)
         if (isset($input['enable_wpml']) || array_key_exists('enable_wpml', $input)) {
-            $sanitized['enable_wpml'] = isset($input['enable_wpml']) ? 1 : 0;
+            $sanitized['enable_wpml'] = !empty($input['enable_wpml']) && $input['enable_wpml'] == '1' ? 1 : 0;
         }
         if (isset($input['custom_message'])) {
             $sanitized['custom_message'] = sanitize_textarea_field($input['custom_message']);
@@ -179,9 +195,32 @@ return new class($core ?? null) implements MAD_Suite_Module {
             $sanitized['custom_message_en'] = sanitize_textarea_field($input['custom_message_en']);
         }
 
+        // Personalización del formulario (solo si vienen en el input)
+        if (isset($input['custom_form_intro'])) {
+            $sanitized['custom_form_intro'] = wp_kses_post($input['custom_form_intro']);
+        }
+        if (isset($input['custom_form_intro_en'])) {
+            $sanitized['custom_form_intro_en'] = wp_kses_post($input['custom_form_intro_en']);
+        }
+        if (isset($input['custom_placeholder'])) {
+            $sanitized['custom_placeholder'] = sanitize_text_field($input['custom_placeholder']);
+        }
+        if (isset($input['custom_placeholder_en'])) {
+            $sanitized['custom_placeholder_en'] = sanitize_text_field($input['custom_placeholder_en']);
+        }
+        if (isset($input['custom_button_text'])) {
+            $sanitized['custom_button_text'] = sanitize_text_field($input['custom_button_text']);
+        }
+        if (isset($input['custom_button_text_en'])) {
+            $sanitized['custom_button_text_en'] = sanitize_text_field($input['custom_button_text_en']);
+        }
+        if (isset($input['enable_theme_styles']) || array_key_exists('enable_theme_styles', $input)) {
+            $sanitized['enable_theme_styles'] = !empty($input['enable_theme_styles']) && $input['enable_theme_styles'] == '1' ? 1 : 0;
+        }
+
         // Horarios (solo si vienen en el input)
         if (isset($input['enable_schedule']) || array_key_exists('enable_schedule', $input)) {
-            $sanitized['enable_schedule'] = isset($input['enable_schedule']) ? 1 : 0;
+            $sanitized['enable_schedule'] = !empty($input['enable_schedule']) && $input['enable_schedule'] == '1' ? 1 : 0;
         }
         if (isset($input['schedule_type'])) {
             $sanitized['schedule_type'] = sanitize_key($input['schedule_type']);
@@ -213,7 +252,7 @@ return new class($core ?? null) implements MAD_Suite_Module {
             $sanitized['redirect_url'] = esc_url_raw($input['redirect_url']);
         }
         if (isset($input['exclude_admin']) || array_key_exists('exclude_admin', $input)) {
-            $sanitized['exclude_admin'] = isset($input['exclude_admin']) ? 1 : 0;
+            $sanitized['exclude_admin'] = !empty($input['exclude_admin']) && $input['exclude_admin'] == '1' ? 1 : 0;
         }
         if (isset($input['exclude_urls'])) {
             $sanitized['exclude_urls'] = sanitize_textarea_field($input['exclude_urls']);
@@ -225,12 +264,17 @@ return new class($core ?? null) implements MAD_Suite_Module {
                 : [];
         }
 
-        // IPs en whitelist (solo si vienen en el input)
-        if (isset($input['enable_whitelist']) || array_key_exists('enable_whitelist', $input)) {
-            $sanitized['enable_whitelist'] = isset($input['enable_whitelist']) ? 1 : 0;
+        // Sistema de IP lists (whitelist/blacklist)
+        if (isset($input['enable_ip_list']) || array_key_exists('enable_ip_list', $input)) {
+            $sanitized['enable_ip_list'] = !empty($input['enable_ip_list']) && $input['enable_ip_list'] == '1' ? 1 : 0;
         }
-        if (isset($input['whitelist_ips'])) {
-            $sanitized['whitelist_ips'] = sanitize_textarea_field($input['whitelist_ips']);
+        if (isset($input['ip_list_mode'])) {
+            $sanitized['ip_list_mode'] = in_array($input['ip_list_mode'], ['whitelist', 'blacklist'])
+                ? $input['ip_list_mode']
+                : 'whitelist';
+        }
+        if (isset($input['ip_list'])) {
+            $sanitized['ip_list'] = sanitize_textarea_field($input['ip_list']);
         }
 
         return $sanitized;
@@ -375,7 +419,10 @@ return new class($core ?? null) implements MAD_Suite_Module {
         // Verificar si existe la sesión y no ha expirado
         if (isset($_SESSION[$session_key]) && $_SESSION[$session_key] === true) {
             $access_time = $_SESSION[$session_time_key] ?? 0;
-            $session_duration = $settings['session_duration'] * 3600; // convertir horas a segundos
+            // Convertir a segundos según la unidad
+            $session_duration = $settings['session_duration_unit'] === 'minutes'
+                ? $settings['session_duration'] * 60  // minutos a segundos
+                : $settings['session_duration'] * 3600; // horas a segundos
 
             if ((time() - $access_time) < $session_duration) {
                 return true;
@@ -402,33 +449,49 @@ return new class($core ?? null) implements MAD_Suite_Module {
     }
 
     /**
-     * Verificar si la IP actual está en whitelist
+     * Verificar si se debe permitir el acceso basándose en el control de IPs
+     * @return bool true si se permite el acceso, false si se debe bloquear
      */
-    private function is_ip_whitelisted() {
+    private function should_allow_ip_access() {
         $settings = $this->get_settings();
 
-        // Si la whitelist no está habilitada, no verificar
-        if (empty($settings['enable_whitelist'])) {
-            return false;
+        // Si el control de IPs no está habilitado, permitir acceso
+        if (empty($settings['enable_ip_list'])) {
+            return true;
         }
 
-        // Si no hay IPs configuradas, no permitir
-        if (empty($settings['whitelist_ips'])) {
-            return false;
+        // Si no hay IPs configuradas, permitir acceso
+        if (empty($settings['ip_list'])) {
+            return true;
         }
 
         $current_ip = $this->get_client_ip();
-        $whitelist = array_filter(array_map('trim', explode("\n", $settings['whitelist_ips'])));
+        $ip_list = array_filter(array_map('trim', explode("\n", $settings['ip_list'])));
+        $is_in_list = $this->is_ip_in_list($current_ip, $ip_list);
 
-        foreach ($whitelist as $allowed_ip) {
+        // Lógica según el modo
+        if ($settings['ip_list_mode'] === 'whitelist') {
+            // Whitelist: solo permitir si está en la lista
+            return $is_in_list;
+        } else {
+            // Blacklist: solo bloquear si está en la lista
+            return !$is_in_list;
+        }
+    }
+
+    /**
+     * Verificar si una IP está en una lista de IPs
+     */
+    private function is_ip_in_list($current_ip, $ip_list) {
+        foreach ($ip_list as $list_ip) {
             // Soporte para rangos CIDR
-            if (strpos($allowed_ip, '/') !== false) {
-                if ($this->ip_in_range($current_ip, $allowed_ip)) {
+            if (strpos($list_ip, '/') !== false) {
+                if ($this->ip_in_range($current_ip, $list_ip)) {
                     return true;
                 }
             } else {
                 // Comparación directa
-                if ($current_ip === $allowed_ip) {
+                if ($current_ip === $list_ip) {
                     return true;
                 }
             }
@@ -533,14 +596,22 @@ return new class($core ?? null) implements MAD_Suite_Module {
             return;
         }
 
-        // Verificar si la IP está en whitelist
-        if ($this->is_ip_whitelisted()) {
-            return;
-        }
-
         // Verificar si debemos proteger el sitio
         if (!$this->should_protect_site()) {
             return;
+        }
+
+        // Verificar control de IPs (whitelist/blacklist)
+        // Si should_allow_ip_access() devuelve true, se permite el acceso sin contraseña
+        if ($this->should_allow_ip_access()) {
+            // En modo whitelist: si está en la lista, permitir acceso sin contraseña
+            // En modo blacklist: si NO está en la lista, permitir acceso sin contraseña
+            if (!empty($settings['enable_ip_list'])) {
+                return;
+            }
+        } else {
+            // En modo blacklist: si está en la lista, siempre pedir contraseña (forzar protección)
+            // No hacemos return, continuamos con el flujo normal
         }
 
         // Verificar si el usuario ya tiene acceso

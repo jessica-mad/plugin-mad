@@ -39,30 +39,42 @@ $pages = get_pages(['sort_column' => 'post_title']);
 
         <tr>
             <th scope="row">
-                <?php _e('IPs en whitelist', 'mad-suite'); ?>
+                <?php _e('Control de IPs', 'mad-suite'); ?>
             </th>
             <td>
                 <!-- Hidden field para detectar cuando el checkbox no está marcado -->
-                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[enable_whitelist]" value="0">
+                <input type="hidden" name="<?php echo esc_attr($option_key); ?>[enable_ip_list]" value="0">
                 <label style="margin-bottom: 10px; display: block;">
                     <input type="checkbox"
-                           name="<?php echo esc_attr($option_key); ?>[enable_whitelist]"
-                           id="enable_whitelist"
+                           name="<?php echo esc_attr($option_key); ?>[enable_ip_list]"
+                           id="enable_ip_list"
                            value="1"
-                           <?php checked($settings['enable_whitelist'], 1); ?>>
-                    <?php _e('Activar whitelist de IPs para pruebas', 'mad-suite'); ?>
+                           <?php checked($settings['enable_ip_list'], 1); ?>>
+                    <?php _e('Activar control de IPs (whitelist/blacklist)', 'mad-suite'); ?>
                 </label>
                 <p class="description">
-                    <?php _e('Las IPs en whitelist podrán acceder al sitio sin ingresar contraseña. Útil para realizar pruebas.', 'mad-suite'); ?>
+                    <?php _e('Controla el acceso basándote en direcciones IP.', 'mad-suite'); ?>
                 </p>
 
-                <div id="whitelist_wrapper" style="margin-top: 15px;">
-                    <textarea name="<?php echo esc_attr($option_key); ?>[whitelist_ips]"
-                              id="whitelist_ips"
+                <div id="ip_list_wrapper" style="margin-top: 15px;">
+                    <label for="ip_list_mode" style="display: block; margin-bottom: 10px;">
+                        <strong><?php _e('Modo de control:', 'mad-suite'); ?></strong>
+                    </label>
+                    <select name="<?php echo esc_attr($option_key); ?>[ip_list_mode]" id="ip_list_mode" style="margin-bottom: 15px;">
+                        <option value="whitelist" <?php selected($settings['ip_list_mode'], 'whitelist'); ?>>
+                            <?php _e('Whitelist - Solo las IPs listadas PUEDEN acceder sin contraseña', 'mad-suite'); ?>
+                        </option>
+                        <option value="blacklist" <?php selected($settings['ip_list_mode'], 'blacklist'); ?>>
+                            <?php _e('Blacklist - Solo las IPs listadas NO PUEDEN acceder (siempre pide contraseña)', 'mad-suite'); ?>
+                        </option>
+                    </select>
+
+                    <textarea name="<?php echo esc_attr($option_key); ?>[ip_list]"
+                              id="ip_list"
                               rows="5"
-                              class="large-text code"><?php echo esc_textarea($settings['whitelist_ips']); ?></textarea>
+                              class="large-text code"><?php echo esc_textarea($settings['ip_list']); ?></textarea>
                     <p class="description">
-                        <?php _e('Lista de IPs permitidas (una por línea). Soporta IPs individuales y rangos CIDR.', 'mad-suite'); ?>
+                        <?php _e('Lista de IPs (una por línea). Soporta IPs individuales y rangos CIDR.', 'mad-suite'); ?>
                         <br>
                         <strong><?php _e('Ejemplos:', 'mad-suite'); ?></strong>
                         <br>
@@ -103,7 +115,7 @@ $pages = get_pages(['sort_column' => 'post_title']);
                                     <input type="checkbox"
                                            name="<?php echo esc_attr($option_key); ?>[exclude_pages][]"
                                            value="<?php echo esc_attr($page->ID); ?>"
-                                           <?php checked(in_array($page->ID, $settings['exclude_pages'])); ?>>
+                                           <?php checked(in_array($page->ID, (array)$settings['exclude_pages'])); ?>>
                                     <?php echo esc_html($page->post_title); ?>
                                     <small style="color: #666;">(ID: <?php echo esc_html($page->ID); ?>)</small>
                                 </label>
@@ -203,28 +215,28 @@ $pages = get_pages(['sort_column' => 'post_title']);
 <script>
     jQuery(document).ready(function($) {
         // Toggle de whitelist
-        function toggleWhitelist() {
-            if ($('#enable_whitelist').is(':checked')) {
-                $('#whitelist_wrapper').show();
+        function toggleIpList() {
+            if ($('#enable_ip_list').is(':checked')) {
+                $('#ip_list_wrapper').show();
             } else {
-                $('#whitelist_wrapper').hide();
+                $('#ip_list_wrapper').hide();
             }
         }
 
-        toggleWhitelist();
-        $('#enable_whitelist').on('change', toggleWhitelist);
+        toggleIpList();
+        $('#enable_ip_list').on('change', toggleIpList);
 
         // Agregar IP actual
         $('#add_current_ip').on('click', function() {
             var currentIp = '<?php echo esc_js($_SERVER['REMOTE_ADDR'] ?? ''); ?>';
-            var currentValue = $('#whitelist_ips').val();
+            var currentValue = $('#ip_list').val();
 
             // Verificar si la IP ya está en la lista
             if (currentValue.indexOf(currentIp) === -1) {
                 if (currentValue) {
-                    $('#whitelist_ips').val(currentValue + '\n' + currentIp);
+                    $('#ip_list').val(currentValue + '\n' + currentIp);
                 } else {
-                    $('#whitelist_ips').val(currentIp);
+                    $('#ip_list').val(currentIp);
                 }
                 alert('<?php _e('IP agregada correctamente.', 'mad-suite'); ?>');
             } else {

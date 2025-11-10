@@ -126,3 +126,50 @@
     white-space: nowrap;
     border-width: 0;
 }
+
+/* Estilos cuando se usa el tema (theme-styles) */
+.mads-password-form-container.theme-styles {
+    display: block;
+    min-height: auto;
+    padding: 0;
+}
+
+.mads-password-form-container.theme-styles .entry-content {
+    max-width: none;
+    background: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    text-align: inherit;
+}
+
+.mads-password-form-container.theme-styles .mads-password-error {
+    /* Mantener estilos de error */
+}
+
+.mads-password-form-container.theme-styles .mads-password-intro {
+    margin-bottom: 1.5em;
+}
+
+.mads-password-form-container.theme-styles .mads-password-message {
+    margin-bottom: 1.5em;
+}
+
+.mads-password-form-container.theme-styles .mads-password-form {
+    display: block;
+}
+
+.mads-password-form-container.theme-styles .mads-password-field {
+    margin-bottom: 1em;
+}
+
+.mads-password-form-container.theme-styles input.input {
+    /* Confiar en los estilos del tema */
+    width: 100%;
+    max-width: 400px;
+}
+
+.mads-password-form-container.theme-styles button.button,
+.mads-password-form-container.theme-styles button.btn {
+    /* Confiar en los estilos del tema */
+}
