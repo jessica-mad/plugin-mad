@@ -1,0 +1,117 @@
+/**
+ * Estilos del panel de administración
+ */
+
+.mads-password-assigner {
+    max-width: 1200px;
+}
+
+.mads-password-assigner .tab-content {
+    background: #fff;
+    padding: 20px;
+    margin-top: 0;
+    border: 1px solid #ccd0d4;
+    border-top: none;
+}
+
+.mads-password-assigner .form-table th {
+    width: 220px;
+    padding: 20px 10px 20px 0;
+}
+
+.mads-password-assigner .required {
+    color: #d63638;
+}
+
+/* Cajas de información */
+.mads-info-box,
+.mads-status-box,
+.mads-schedule-info,
+.mads-advanced-info,
+.mads-warning-box {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-left: 4px solid #2271b1;
+    padding: 15px 20px;
+    margin-top: 20px;
+    border-radius: 4px;
+}
+
+.mads-info-box h3,
+.mads-status-box h3,
+.mads-schedule-info h4,
+.mads-advanced-info h4,
+.mads-warning-box h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+}
+
+.mads-info-box ul,
+.mads-advanced-info ul,
+.mads-warning-box ul {
+    margin: 10px 0;
+    padding-left: 25px;
+}
+
+.mads-info-box ul li,
+.mads-advanced-info ul li,
+.mads-warning-box ul li {
+    margin-bottom: 8px;
+    line-height: 1.6;
+}
+
+.mads-warning-box {
+    border-left-color: #d63638;
+    background-color: #fff8f8;
+}
+
+.mads-schedule-info {
+    border-left-color: #00a32a;
+    background-color: #f7fcf7;
+}
+
+/* Tabla de estado */
+.mads-status-box table {
+    margin-top: 15px;
+}
+
+.mads-status-box table td {
+    padding: 10px;
+}
+
+.mads-status-active {
+    color: #00a32a;
+    font-weight: 600;
+}
+
+.mads-status-inactive {
+    color: #d63638;
+    font-weight: 600;
+}
+
+/* Días de la semana */
+.mads-password-assigner fieldset label {
+    display: inline-block;
+    min-width: 150px;
+}
+
+/* Código inline */
+code {
+    background-color: #f0f0f1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 13px;
+}
+
+/* Textarea de URLs excluidas */
+#exclude_urls {
+    font-family: 'Courier New', Courier, monospace;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+    .mads-password-assigner .form-table th {
+        width: auto;
+        padding: 15px 0 10px 0;
+    }
+}

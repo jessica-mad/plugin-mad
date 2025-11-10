@@ -1,0 +1,175 @@
+/**
+ * Estilos del formulario de contraseña (frontend)
+ */
+
+.mads-password-form-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    padding: 20px;
+}
+
+.mads-password-form-wrapper {
+    max-width: 450px;
+    width: 100%;
+    background: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 40px 30px;
+    text-align: center;
+}
+
+.mads-password-icon {
+    font-size: 48px;
+    margin-bottom: 20px;
+    line-height: 1;
+}
+
+.mads-password-title {
+    font-size: 24px;
+    font-weight: 600;
+    color: #333;
+    margin: 0 0 15px 0;
+}
+
+.mads-password-message {
+    font-size: 16px;
+    color: #666;
+    margin: 0 0 30px 0;
+    line-height: 1.5;
+}
+
+.mads-password-error {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+    padding: 12px 20px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    font-size: 14px;
+}
+
+.mads-password-error p {
+    margin: 0;
+}
+
+.mads-password-form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.mads-password-field {
+    position: relative;
+}
+
+.mads-password-input {
+    width: 100%;
+    padding: 14px 18px;
+    font-size: 16px;
+    border: 2px solid #e0e0e0;
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.3s;
+    box-sizing: border-box;
+}
+
+.mads-password-input:focus {
+    border-color: #2271b1;
+}
+
+.mads-password-submit {
+    padding: 14px 30px;
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+    background-color: #2271b1;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+.mads-password-submit:hover {
+    background-color: #135e96;
+}
+
+.mads-password-submit:active {
+    background-color: #0e4b7a;
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+    .mads-password-form-wrapper {
+        padding: 30px 20px;
+    }
+
+    .mads-password-title {
+        font-size: 20px;
+    }
+
+    .mads-password-message {
+        font-size: 14px;
+    }
+}
+
+/* Screen reader only */
+.screen-reader-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
+
+/* Estilos cuando se usa el tema (theme-styles) */
+.mads-password-form-container.theme-styles {
+    display: block;
+    min-height: auto;
+    padding: 0;
+}
+
+.mads-password-form-container.theme-styles .entry-content {
+    max-width: none;
+    background: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+    text-align: inherit;
+}
+
+.mads-password-form-container.theme-styles .mads-password-error {
+    /* Mantener estilos de error */
+}
+
+.mads-password-form-container.theme-styles .mads-password-intro {
+    margin-bottom: 1.5em;
+}
+
+.mads-password-form-container.theme-styles .mads-password-message {
+    margin-bottom: 1.5em;
+}
+
+.mads-password-form-container.theme-styles .mads-password-form {
+    display: block;
+}
+
+.mads-password-form-container.theme-styles .mads-password-field {
+    margin-bottom: 1em;
+}
+
+.mads-password-form-container.theme-styles input.input {
+    /* Confiar en los estilos del tema */
+    width: 100%;
+    max-width: 400px;
+}
+
+.mads-password-form-container.theme-styles button.button,
+.mads-password-form-container.theme-styles button.btn {
+    /* Confiar en los estilos del tema */
+}

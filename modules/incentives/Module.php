@@ -25,6 +25,16 @@ return new class($core) implements MAD_Suite_Module {
   public function menu_label(){ return __('Incentivos','mad-suite'); }
   public function menu_slug(){ return 'mad-'.$this->slug(); }
 
+  public function description(){
+    return __('Muestra incentivos dinámicos en el mini-carrito para motivar compras. Configura umbrales y productos de regalo automáticos.', 'mad-suite');
+  }
+
+  public function required_plugins(){
+    return [
+      'WooCommerce' => 'woocommerce/woocommerce.php',
+    ];
+  }
+
   /* ===== Ciclo de vida ===== */
   public function init(){
     if ( ! class_exists('WooCommerce') ) return;
