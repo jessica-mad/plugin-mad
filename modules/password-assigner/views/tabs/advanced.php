@@ -164,7 +164,23 @@ $pages = get_pages(['sort_column' => 'post_title']);
             <strong><?php _e('Prioridad:', 'mad-suite'); ?></strong>
             <?php _e('Este módulo se ejecuta en el hook <code>template_redirect</code> con prioridad 1, antes que la mayoría de plugins.', 'mad-suite'); ?>
         </li>
+        <li>
+            <strong><?php _e('Bypass de emergencia:', 'mad-suite'); ?></strong>
+            <?php _e('Si te quedas bloqueado, agrega <code>define(\'MADS_PASSWORD_DISABLE\', true);</code> en tu archivo <code>wp-config.php</code> (antes de la línea "¡Eso es todo!") para desactivar completamente la protección de forma temporal.', 'mad-suite'); ?>
+        </li>
     </ul>
+</div>
+
+<div class="mads-emergency-box" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px 20px; margin-top: 20px; border-radius: 4px;">
+    <h4 style="margin-top: 0; color: #856404;">🚨 <?php _e('Bypass de Emergencia', 'mad-suite'); ?></h4>
+    <p><?php _e('Si quedas bloqueado y no puedes acceder al sitio, sigue estos pasos:', 'mad-suite'); ?></p>
+    <ol>
+        <li><?php _e('Conecta por FTP o cPanel a tu servidor', 'mad-suite'); ?></li>
+        <li><?php _e('Edita el archivo <code>wp-config.php</code> en la raíz de WordPress', 'mad-suite'); ?></li>
+        <li><?php _e('Agrega esta línea antes de "/* ¡Eso es todo, deja de editar! Feliz blogging. */":', 'mad-suite'); ?></li>
+    </ol>
+    <pre style="background: #f5f5f5; padding: 10px; border-radius: 3px; overflow-x: auto;"><code>define('MADS_PASSWORD_DISABLE', true);</code></pre>
+    <p><?php _e('Esto desactivará completamente la protección y podrás acceder al admin para ajustar la configuración. Recuerda <strong>eliminar esta línea</strong> después de hacer los cambios.', 'mad-suite'); ?></p>
 </div>
 
 <div class="mads-warning-box">

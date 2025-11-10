@@ -220,6 +220,11 @@ return new class($core ?? null) implements MAD_Suite_Module {
      * Verificar si el sitio debe estar protegido en este momento
      */
     private function should_protect_site() {
+        // Bypass de emergencia: si la constante está definida, nunca proteger
+        if (defined('MADS_PASSWORD_DISABLE') && MADS_PASSWORD_DISABLE === true) {
+            return false;
+        }
+
         $settings = $this->get_settings();
 
         // Si no está habilitado, no proteger
