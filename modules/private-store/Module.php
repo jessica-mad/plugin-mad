@@ -112,6 +112,8 @@ class Module {
     
     /**
      * Obtiene la mejor regla para un usuario
+     * Verifica TODOS los roles del usuario (no solo el primero)
+     * para compatibilidad con role-creator
      */
     private function get_best_rule_for_user($user_id) {
         $user = get_userdata($user_id);
@@ -123,18 +125,16 @@ class Module {
         if (empty($user_roles)) {
             return null;
         }
-        
-        $user_role = $user_roles[0]; // Usuario tiene solo 1 rol
-        
+
         $rules = $this->get_discount_rules();
         $applicable_rules = [];
-        
+
         foreach ($rules as $rule) {
             // Solo reglas activas
             if (!isset($rule['enabled']) || !$rule['enabled']) {
                 continue;
             }
-            
+
             // Verificar fechas
             if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
                 continue;
@@ -142,10 +142,20 @@ class Module {
             if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
                 continue;
             }
-            
-            // Verificar rol
-            if (!empty($rule['roles']) && in_array($user_role, $rule['roles'])) {
-                $applicable_rules[] = $rule;
+
+            // Verificar si el usuario tiene alguno de los roles de la regla
+            if (!empty($rule['roles'])) {
+                $has_matching_role = false;
+                foreach ($user_roles as $user_role) {
+                    if (in_array($user_role, $rule['roles'])) {
+                        $has_matching_role = true;
+                        break;
+                    }
+                }
+
+                if ($has_matching_role) {
+                    $applicable_rules[] = $rule;
+                }
             }
         }
         
