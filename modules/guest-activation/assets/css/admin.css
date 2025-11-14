@@ -1,0 +1,43 @@
+/**
+ * Estilos Admin - Guest Activation
+ */
+
+/* Mejorar la apariencia del formulario de configuración */
+.mad-guest-activation-settings .form-table th {
+    width: 250px;
+}
+
+.mad-guest-activation-settings .form-table td {
+    padding: 15px 10px;
+}
+
+.mad-guest-activation-settings h2 {
+    margin-top: 30px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #0073aa;
+    color: #0073aa;
+}
+
+.mad-guest-activation-settings .description {
+    color: #666;
+    font-style: italic;
+}
+
+.mad-guest-activation-settings textarea {
+    resize: vertical;
+}
+
+/* Información de logs */
+.mad-logs-info {
+    background: #f7f7f7;
+    padding: 15px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+.mad-logs-info strong {
+    display: block;
+    margin-bottom: 10px;
+    color: #333;
+}
