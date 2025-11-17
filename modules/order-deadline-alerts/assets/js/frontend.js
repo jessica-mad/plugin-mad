@@ -68,12 +68,6 @@
 
             const html = `
                 <div class="mads-oda-alert-box">
-                    <div class="mads-oda-alert-icon">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <polyline points="12 6 12 12 16 14"></polyline>
-                        </svg>
-                    </div>
                     <div class="mads-oda-alert-content">
                         <div class="mads-oda-alert-message">${message}</div>
                     </div>
@@ -216,11 +210,6 @@
 
     // Inicializar cuando el documento esté listo
     $(document).ready(function() {
-        MadsOdaFrontend.init();
-    });
-
-    // Re-inicializar después de actualizaciones de carrito (WooCommerce)
-    $(document.body).on('updated_cart_totals', function() {
         MadsOdaFrontend.init();
     });
 

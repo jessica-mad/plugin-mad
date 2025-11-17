@@ -95,7 +95,7 @@ $settings = $this->get_settings();
         <div class="mads-oda-section">
             <h2><?php _e('Gestión de Alertas', 'mad-suite'); ?></h2>
             <p class="description">
-                <?php _e('Configura alertas que se mostrarán en el carrito cuando hay un límite de tiempo para recibir el pedido en un día específico. Todas las horas son en zona horaria de Madrid.', 'mad-suite'); ?>
+                <?php _e('Configura alertas que se mostrarán en las fichas de producto cuando hay un límite de tiempo para recibir el pedido en un día específico. Todas las horas son en zona horaria de Madrid.', 'mad-suite'); ?>
             </p>
 
             <button type="button" class="button button-primary" id="mads-oda-add-alert">

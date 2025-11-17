@@ -34,7 +34,7 @@ return new class($core) implements MAD_Suite_Module {
     }
 
     public function description(): string {
-        return __('Configura alertas con countdown que se muestran en el carrito cuando hay un límite de tiempo para recibir pedidos.', 'mad-suite');
+        return __('Configura alertas con countdown que se muestran en las fichas de producto cuando hay un límite de tiempo para recibir pedidos.', 'mad-suite');
     }
 
     public function menu_label(): string {
@@ -52,8 +52,8 @@ return new class($core) implements MAD_Suite_Module {
         // Shortcode para mostrar la alerta
         add_shortcode('mad_order_deadline_alert', [$this, 'render_alert_shortcode']);
 
-        // Hook para mostrar debajo del carrito (WooCommerce)
-        add_action('woocommerce_after_cart_totals', [$this, 'render_cart_alert']);
+        // Hook para mostrar debajo del botón añadir al carrito (WooCommerce)
+        add_action('woocommerce_after_add_to_cart_button', [$this, 'render_product_alert']);
 
         // AJAX para obtener la alerta activa
         add_action('wp_ajax_mads_oda_get_active_alert', [$this, 'ajax_get_active_alert']);
@@ -384,9 +384,9 @@ return new class($core) implements MAD_Suite_Module {
     }
 
     /**
-     * Renderizar alerta en el carrito
+     * Renderizar alerta en ficha de producto
      */
-    public function render_cart_alert(): void {
+    public function render_product_alert(): void {
         $settings = $this->get_settings();
 
         if (!$settings['enabled']) {
@@ -423,14 +423,14 @@ return new class($core) implements MAD_Suite_Module {
             'mads-oda-frontend',
             plugin_dir_url(__FILE__) . 'assets/css/frontend.css',
             [],
-            '1.0.0'
+            '1.0.1'
         );
 
         wp_enqueue_script(
             'mads-oda-frontend',
             plugin_dir_url(__FILE__) . 'assets/js/frontend.js',
             ['jquery'],
-            '1.0.0',
+            '1.0.1',
             true
         );
 
