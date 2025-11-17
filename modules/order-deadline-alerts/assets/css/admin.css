@@ -1,0 +1,315 @@
+/**
+ * Estilos de administración para Order Deadline Alerts
+ */
+
+/* Contenedor principal */
+.mads-oda-settings {
+    max-width: 1200px;
+}
+
+.mads-oda-container {
+    margin-top: 20px;
+}
+
+.mads-oda-section {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.mads-oda-section h2 {
+    margin-top: 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+/* Lista de alertas */
+.mads-oda-alerts-list {
+    margin-top: 20px;
+}
+
+.mads-oda-no-alerts {
+    padding: 40px 20px;
+    text-align: center;
+    color: #666;
+    background: #f9f9f9;
+    border: 2px dashed #ddd;
+    border-radius: 4px;
+}
+
+/* Item de alerta */
+.mads-oda-alert-item {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    margin-bottom: 15px;
+    transition: all 0.3s ease;
+}
+
+.mads-oda-alert-item:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.mads-oda-alert-disabled {
+    opacity: 0.6;
+    background: #f5f5f5;
+}
+
+/* Header de alerta */
+.mads-oda-alert-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    background: #f7f7f7;
+    border-bottom: 1px solid #ddd;
+    border-radius: 6px 6px 0 0;
+}
+
+.mads-oda-alert-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0;
+    font-size: 16px;
+}
+
+.mads-oda-alert-name {
+    font-weight: 600;
+    color: #1d2327;
+}
+
+.mads-oda-alert-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.mads-oda-status-enabled {
+    background: #d4edda;
+    color: #155724;
+}
+
+.mads-oda-status-disabled {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.mads-oda-alert-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.mads-oda-alert-actions .button {
+    padding: 4px 8px;
+    height: auto;
+    line-height: 1;
+}
+
+.mads-oda-alert-actions .dashicons {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+/* Contenido de alerta */
+.mads-oda-alert-content {
+    padding: 20px;
+}
+
+/* Formulario de alerta */
+.mads-oda-alert-form {
+    margin-bottom: 0;
+}
+
+.mads-oda-alert-form .form-table th {
+    width: 200px;
+    padding: 15px 10px 15px 0;
+}
+
+.mads-oda-alert-form .form-table td {
+    padding: 15px 10px;
+}
+
+.mads-oda-days-checkboxes {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.mads-oda-days-checkboxes label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+    padding: 6px 12px;
+    background: #f0f0f1;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.mads-oda-days-checkboxes label:hover {
+    background: #e0e0e1;
+}
+
+.mads-oda-days-checkboxes input[type="checkbox"] {
+    margin: 0;
+}
+
+.mads-oda-days-checkboxes input[type="checkbox"]:checked + label,
+.mads-oda-days-checkboxes label:has(input[type="checkbox"]:checked) {
+    background: #2271b1;
+    color: #fff;
+}
+
+.mads-oda-alert-form-actions {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #eee;
+    display: flex;
+    gap: 10px;
+}
+
+/* Resumen de alerta */
+.mads-oda-alert-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.mads-oda-alert-info {
+    display: flex;
+    gap: 8px;
+    padding: 8px 0;
+}
+
+.mads-oda-alert-info strong {
+    min-width: 100px;
+    color: #1d2327;
+}
+
+.mads-oda-alert-info span {
+    color: #50575e;
+}
+
+/* Fechas excluidas */
+#mads-oda-excluded-dates {
+    margin-top: 15px;
+}
+
+#mads-oda-new-excluded-date {
+    margin-right: 10px;
+}
+
+.mads-oda-excluded-dates-list {
+    margin-top: 15px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.mads-oda-excluded-date-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #f0f0f1;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.mads-oda-remove-excluded-date {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    color: #b32d2e;
+    display: flex;
+    align-items: center;
+    transition: color 0.2s;
+}
+
+.mads-oda-remove-excluded-date:hover {
+    color: #dc3232;
+}
+
+.mads-oda-remove-excluded-date .dashicons {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+}
+
+/* Botones */
+#mads-oda-add-alert {
+    margin-bottom: 20px;
+}
+
+#mads-oda-add-alert .dashicons {
+    vertical-align: middle;
+    margin-right: 5px;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+    .mads-oda-alert-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .mads-oda-alert-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+
+    .mads-oda-alert-form .form-table th {
+        width: 100%;
+        display: block;
+        padding-bottom: 5px;
+    }
+
+    .mads-oda-alert-form .form-table td {
+        display: block;
+        padding-top: 0;
+    }
+
+    .mads-oda-days-checkboxes {
+        gap: 8px;
+    }
+
+    .mads-oda-days-checkboxes label {
+        padding: 8px 10px;
+        font-size: 14px;
+    }
+}
+
+/* Animaciones */
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.mads-oda-alert-item {
+    animation: slideDown 0.3s ease;
+}
+
+/* Mejoras de accesibilidad */
+.mads-oda-alert-actions button:focus,
+.mads-oda-days-checkboxes input:focus + label {
+    outline: 2px solid #2271b1;
+    outline-offset: 2px;
+}
