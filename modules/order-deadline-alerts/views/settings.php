@@ -85,6 +85,63 @@ $settings = $this->get_settings();
                             </p>
                         </td>
                     </tr>
+
+                    <tr>
+                        <th scope="row">
+                            <label for="test_mode"><?php _e('Modo de Prueba', 'mad-suite'); ?></label>
+                        </th>
+                        <td>
+                            <input type="hidden" name="<?php echo esc_attr($option_key); ?>[test_mode]" value="0">
+                            <input type="checkbox"
+                                   id="test_mode"
+                                   name="<?php echo esc_attr($option_key); ?>[test_mode]"
+                                   value="1"
+                                   <?php checked($settings['test_mode'], 1); ?>>
+                            <p class="description">
+                                <?php _e('Activa el modo de prueba para mostrar alertas solo en productos específicos. Una vez probado, desactiva esta opción para mostrar en todos los productos.', 'mad-suite'); ?>
+                            </p>
+                        </td>
+                    </tr>
+
+                    <tr id="test_products_row" style="<?php echo $settings['test_mode'] ? '' : 'display:none;'; ?>">
+                        <th scope="row">
+                            <label for="test_products_search"><?php _e('Productos de Prueba', 'mad-suite'); ?></label>
+                        </th>
+                        <td>
+                            <div class="mads-oda-test-products">
+                                <input type="text"
+                                       id="test_products_search"
+                                       class="regular-text"
+                                       placeholder="<?php esc_attr_e('Buscar productos...', 'mad-suite'); ?>">
+
+                                <div id="test_products_results" class="mads-oda-product-results"></div>
+
+                                <div id="test_products_selected" class="mads-oda-products-selected">
+                                    <?php if (!empty($settings['test_products'])): ?>
+                                        <?php foreach ($settings['test_products'] as $product_id): ?>
+                                            <?php
+                                            $product = wc_get_product($product_id);
+                                            if ($product):
+                                            ?>
+                                                <div class="mads-oda-selected-product" data-product-id="<?php echo esc_attr($product_id); ?>">
+                                                    <span class="product-title"><?php echo esc_html($product->get_name()); ?></span>
+                                                    <span class="product-sku"><?php echo $product->get_sku() ? '#' . esc_html($product->get_sku()) : '#' . $product_id; ?></span>
+                                                    <button type="button" class="mads-oda-remove-product">
+                                                        <span class="dashicons dashicons-no-alt"></span>
+                                                    </button>
+                                                    <input type="hidden" name="<?php echo esc_attr($option_key); ?>[test_products][]" value="<?php echo esc_attr($product_id); ?>">
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                </div>
+
+                                <p class="description">
+                                    <?php _e('Busca y selecciona los productos donde quieres probar las alertas. Puedes seleccionar varios productos.', 'mad-suite'); ?>
+                                </p>
+                            </div>
+                        </td>
+                    </tr>
                 </table>
 
                 <?php submit_button(__('Guardar Configuración General', 'mad-suite')); ?>

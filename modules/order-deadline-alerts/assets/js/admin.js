@@ -8,6 +8,7 @@
         init: function() {
             this.bindEvents();
             this.initExcludedDates();
+            this.initTestMode();
         },
 
         /**
@@ -386,6 +387,116 @@
             `;
 
             $('#mads-oda-excluded-dates-list').append(html);
+        },
+
+        /**
+         * Inicializar modo de prueba
+         */
+        initTestMode: function() {
+            const self = this;
+            let searchTimeout = null;
+
+            // Toggle visibilidad de productos de prueba
+            $('#test_mode').on('change', function() {
+                if ($(this).is(':checked')) {
+                    $('#test_products_row').slideDown();
+                } else {
+                    $('#test_products_row').slideUp();
+                }
+            });
+
+            // Búsqueda de productos
+            $('#test_products_search').on('keyup', function() {
+                const $input = $(this);
+                const search = $input.val().trim();
+
+                clearTimeout(searchTimeout);
+
+                if (search.length < 2) {
+                    $('#test_products_results').empty().hide();
+                    return;
+                }
+
+                searchTimeout = setTimeout(function() {
+                    $.ajax({
+                        url: madsOdaAdminL10n.ajaxUrl,
+                        type: 'POST',
+                        data: {
+                            action: 'mads_oda_search_products',
+                            nonce: madsOdaAdminL10n.nonce,
+                            search: search
+                        },
+                        success: function(response) {
+                            if (response.success && response.data.products.length > 0) {
+                                self.renderProductResults(response.data.products);
+                            } else {
+                                $('#test_products_results').html('<p class="no-results">No se encontraron productos.</p>').show();
+                            }
+                        }
+                    });
+                }, 300);
+            });
+
+            // Seleccionar producto desde resultados
+            $(document).on('click', '.mads-oda-product-result', function() {
+                const productId = $(this).data('product-id');
+                const productTitle = $(this).data('product-title');
+                const productSku = $(this).data('product-sku');
+
+                // Verificar si ya está seleccionado
+                if ($('#test_products_selected').find('[data-product-id="' + productId + '"]').length > 0) {
+                    return;
+                }
+
+                self.addSelectedProduct(productId, productTitle, productSku);
+
+                // Limpiar búsqueda
+                $('#test_products_search').val('');
+                $('#test_products_results').empty().hide();
+            });
+
+            // Eliminar producto seleccionado
+            $(document).on('click', '.mads-oda-remove-product', function(e) {
+                e.preventDefault();
+                $(this).closest('.mads-oda-selected-product').remove();
+            });
+        },
+
+        /**
+         * Renderizar resultados de búsqueda de productos
+         */
+        renderProductResults: function(products) {
+            const html = products.map(function(product) {
+                return `
+                    <div class="mads-oda-product-result"
+                         data-product-id="${product.id}"
+                         data-product-title="${product.title}"
+                         data-product-sku="${product.sku || product.id}">
+                        <span class="product-title">${product.title}</span>
+                        <span class="product-info">#${product.sku || product.id}</span>
+                    </div>
+                `;
+            }).join('');
+
+            $('#test_products_results').html(html).show();
+        },
+
+        /**
+         * Agregar producto seleccionado
+         */
+        addSelectedProduct: function(productId, productTitle, productSku) {
+            const html = `
+                <div class="mads-oda-selected-product" data-product-id="${productId}">
+                    <span class="product-title">${productTitle}</span>
+                    <span class="product-sku">#${productSku || productId}</span>
+                    <button type="button" class="mads-oda-remove-product">
+                        <span class="dashicons dashicons-no-alt"></span>
+                    </button>
+                    <input type="hidden" name="madsuite_order_deadline_alerts_settings[test_products][]" value="${productId}">
+                </div>
+            `;
+
+            $('#test_products_selected').append(html);
         },
 
         /**

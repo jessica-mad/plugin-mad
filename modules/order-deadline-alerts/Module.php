@@ -79,6 +79,9 @@ return new class($core) implements MAD_Suite_Module {
         add_action('wp_ajax_mads_oda_save_alert', [$this, 'ajax_save_alert']);
         add_action('wp_ajax_mads_oda_delete_alert', [$this, 'ajax_delete_alert']);
         add_action('wp_ajax_mads_oda_toggle_alert', [$this, 'ajax_toggle_alert']);
+
+        // AJAX handler para buscar productos
+        add_action('wp_ajax_mads_oda_search_products', [$this, 'ajax_search_products']);
     }
 
     public function render_settings_page(): void {
@@ -96,6 +99,8 @@ return new class($core) implements MAD_Suite_Module {
             'alerts' => [],
             'excluded_dates' => [],
             'enable_wpml' => 0,
+            'test_mode' => 0,
+            'test_products' => [],
         ];
 
         $option_key = MAD_Suite_Core::option_key($this->slug());
@@ -122,6 +127,14 @@ return new class($core) implements MAD_Suite_Module {
 
         if (isset($input['enable_wpml'])) {
             $sanitized['enable_wpml'] = absint($input['enable_wpml']);
+        }
+
+        if (isset($input['test_mode'])) {
+            $sanitized['test_mode'] = absint($input['test_mode']);
+        }
+
+        if (isset($input['test_products'])) {
+            $sanitized['test_products'] = array_map('absint', $input['test_products']);
         }
 
         // Las alertas se guardan vía AJAX, no aquí
@@ -393,6 +406,33 @@ return new class($core) implements MAD_Suite_Module {
             return;
         }
 
+        // Si está en modo de prueba, verificar si el producto actual está en la lista
+        if ($settings['test_mode']) {
+            global $product;
+
+            // Intentar obtener el producto de diferentes formas
+            if (!$product) {
+                $product = wc_get_product(get_the_ID());
+            }
+
+            if (!$product) {
+                return;
+            }
+
+            $current_product_id = $product->get_id();
+            $test_products = $settings['test_products'] ?? [];
+
+            // Si la lista de productos de prueba está vacía, no mostrar nada
+            if (empty($test_products)) {
+                return;
+            }
+
+            // Si el producto actual no está en la lista, no mostrar la alerta
+            if (!in_array($current_product_id, $test_products)) {
+                return;
+            }
+        }
+
         echo '<div id="mad-order-deadline-alert-container"></div>';
     }
 
@@ -407,6 +447,51 @@ return new class($core) implements MAD_Suite_Module {
         }
 
         return '<div id="mad-order-deadline-alert-container"></div>';
+    }
+
+    /**
+     * AJAX: Buscar productos
+     */
+    public function ajax_search_products(): void {
+        check_ajax_referer('mads_oda_nonce', 'nonce');
+
+        if (!current_user_can(MAD_Suite_Core::CAPABILITY)) {
+            wp_send_json_error(['message' => __('No tienes permisos.', 'mad-suite')]);
+        }
+
+        $search = sanitize_text_field($_POST['search'] ?? '');
+
+        if (empty($search)) {
+            wp_send_json_success(['products' => []]);
+        }
+
+        $args = [
+            'post_type' => 'product',
+            'posts_per_page' => 20,
+            's' => $search,
+            'post_status' => 'publish',
+        ];
+
+        $query = new \WP_Query($args);
+        $products = [];
+
+        if ($query->have_posts()) {
+            while ($query->have_posts()) {
+                $query->the_post();
+                $product_id = get_the_ID();
+                $product = wc_get_product($product_id);
+
+                $products[] = [
+                    'id' => $product_id,
+                    'title' => get_the_title(),
+                    'sku' => $product ? $product->get_sku() : '',
+                    'price' => $product ? $product->get_price() : '',
+                ];
+            }
+            wp_reset_postdata();
+        }
+
+        wp_send_json_success(['products' => $products]);
     }
 
     /**
@@ -452,14 +537,14 @@ return new class($core) implements MAD_Suite_Module {
             'mads-oda-admin',
             plugin_dir_url(__FILE__) . 'assets/css/admin.css',
             [],
-            '1.0.0'
+            '1.0.2'
         );
 
         wp_enqueue_script(
             'mads-oda-admin',
             plugin_dir_url(__FILE__) . 'assets/js/admin.js',
             ['jquery', 'jquery-ui-sortable'],
-            '1.0.0',
+            '1.0.2',
             true
         );
 
