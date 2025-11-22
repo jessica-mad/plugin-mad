@@ -5,6 +5,12 @@
 
 defined('ABSPATH') || exit;
 
+// Verificar que WooCommerce esté activo
+if (!function_exists('WC')) {
+    echo '<div class="notice notice-error"><p><strong>Error:</strong> WooCommerce debe estar activo para usar esta funcionalidad.</p></div>';
+    return;
+}
+
 // Mensajes
 if (isset($_GET['regenerated'])) {
     echo '<div class="notice notice-success is-dismissible"><p><strong>✓ Cupón regenerado correctamente</strong></p></div>';
@@ -13,9 +19,10 @@ if (isset($_GET['deleted_coupon'])) {
     echo '<div class="notice notice-success is-dismissible"><p><strong>✓ Cupón eliminado correctamente</strong></p></div>';
 }
 
-// Obtener datos
-$rules = get_option('mad_private_shop_rules', []);
-$rule_coupons = get_option('mad_private_shop_rule_coupons', []);
+try {
+    // Obtener datos
+    $rules = get_option('mad_private_shop_rules', []);
+    $rule_coupons = get_option('mad_private_shop_rule_coupons', []);
 
 // DEBUG - comentar después de verificar
 // echo '<pre>Rules: '; print_r($rules); echo '</pre>';
@@ -107,10 +114,22 @@ if (!empty($rule_coupons) && is_array($rule_coupons)) {
 // Calcular estadísticas globales
 $stats = [
     'total_generated' => count($all_coupons),
-    'total_used' => count(array_filter($all_coupons, function($c) { return $c['usage_count'] > 0; })),
-    'total_value' => array_sum(array_column($all_coupons, 'total_value')),
-    'total_usage' => array_sum(array_column($all_coupons, 'usage_count')),
+    'total_used' => 0,
+    'total_value' => 0,
+    'total_usage' => 0,
 ];
+
+if (!empty($all_coupons)) {
+    $stats['total_used'] = count(array_filter($all_coupons, function($c) {
+        return isset($c['usage_count']) && $c['usage_count'] > 0;
+    }));
+
+    $total_values = array_column($all_coupons, 'total_value');
+    $stats['total_value'] = !empty($total_values) ? array_sum($total_values) : 0;
+
+    $usage_counts = array_column($all_coupons, 'usage_count');
+    $stats['total_usage'] = !empty($usage_counts) ? array_sum($usage_counts) : 0;
+}
 ?>
 
 <div class="wrap">
@@ -510,6 +529,20 @@ $stats = [
         
     <?php endif; ?>
 </div>
+
+<?php
+} catch (Exception $e) {
+    // Mostrar error de forma amigable
+    echo '<div class="wrap">';
+    echo '<h1>🎫 Cupones Generados</h1>';
+    echo '<div class="notice notice-error">';
+    echo '<p><strong>Error al cargar la página de cupones:</strong></p>';
+    echo '<p>' . esc_html($e->getMessage()) . '</p>';
+    echo '<p><small>Archivo: ' . esc_html($e->getFile()) . ' (Línea ' . $e->getLine() . ')</small></p>';
+    echo '</div>';
+    echo '</div>';
+}
+?>
 
 <style>
 .button-link-delete {
