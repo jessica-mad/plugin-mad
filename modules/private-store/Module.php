@@ -1144,6 +1144,25 @@ class Module {
             </div>';
         }
 
+        // Ordenar cupones por fecha de activación (del más próximo al más lejano)
+        usort($user_coupons, function($a, $b) {
+            $rule_a = $a['rule'];
+            $rule_b = $b['rule'];
+
+            // Obtener fecha y hora de inicio para cupón A
+            $date_from_a = !empty($rule_a['date_from']) ? $rule_a['date_from'] : '1970-01-01';
+            $time_from_a = isset($rule_a['time_from']) && !empty($rule_a['time_from']) ? $rule_a['time_from'] : '00:00';
+            $datetime_a = strtotime($date_from_a . ' ' . $time_from_a);
+
+            // Obtener fecha y hora de inicio para cupón B
+            $date_from_b = !empty($rule_b['date_from']) ? $rule_b['date_from'] : '1970-01-01';
+            $time_from_b = isset($rule_b['time_from']) && !empty($rule_b['time_from']) ? $rule_b['time_from'] : '00:00';
+            $datetime_b = strtotime($date_from_b . ' ' . $time_from_b);
+
+            // Ordenar ascendente (el que se activa primero aparece primero)
+            return $datetime_a - $datetime_b;
+        });
+
         // URL del carrito
         $cart_url = wc_get_cart_url();
 
