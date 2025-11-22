@@ -167,7 +167,64 @@ class Module {
         
         return $applicable_rules[0];
     }
-    
+
+    /**
+     * Obtiene TODAS las reglas aplicables para un usuario
+     * Devuelve array de reglas ordenadas por prioridad
+     */
+    private function get_all_applicable_rules_for_user($user_id) {
+        $user = get_userdata($user_id);
+        if (!$user) {
+            return [];
+        }
+
+        $user_roles = $user->roles;
+        if (empty($user_roles)) {
+            return [];
+        }
+
+        $rules = $this->get_discount_rules();
+        $applicable_rules = [];
+
+        foreach ($rules as $rule) {
+            // Solo reglas activas (habilitadas en configuración)
+            if (!isset($rule['enabled']) || !$rule['enabled']) {
+                continue;
+            }
+
+            // NO filtrar por fechas - queremos crear cupones para reglas futuras también
+            // El cupón mismo tendrá las restricciones de fecha configuradas
+
+            // Verificar si el usuario tiene alguno de los roles de la regla
+            if (!empty($rule['roles'])) {
+                $has_matching_role = false;
+                foreach ($user_roles as $user_role) {
+                    if (in_array($user_role, $rule['roles'])) {
+                        $has_matching_role = true;
+                        break;
+                    }
+                }
+
+                if ($has_matching_role) {
+                    $applicable_rules[] = $rule;
+                }
+            }
+        }
+
+        if (empty($applicable_rules)) {
+            return [];
+        }
+
+        // Ordenar por prioridad (menor = mayor prioridad)
+        usort($applicable_rules, function($a, $b) {
+            $priority_a = isset($a['priority']) ? intval($a['priority']) : 999;
+            $priority_b = isset($b['priority']) ? intval($b['priority']) : 999;
+            return $priority_a - $priority_b;
+        });
+
+        return $applicable_rules; // Devolver TODAS las reglas, no solo la primera
+    }
+
     /**
      * Limpia username para usar en cupón
      */
@@ -360,58 +417,66 @@ class Module {
     
     /**
      * Evento: Usuario hace login
+     * Crea cupones para TODAS las reglas aplicables al usuario
      */
     public function on_user_login($user_login, $user) {
         $user_id = $user->ID;
-        
-        // Obtener mejor regla para este usuario
-        $rule = $this->get_best_rule_for_user($user_id);
-        
-        if (!$rule) {
+
+        // Obtener TODAS las reglas aplicables para este usuario
+        $applicable_rules = $this->get_all_applicable_rules_for_user($user_id);
+
+        if (empty($applicable_rules)) {
             $this->log("Usuario {$user_login} sin reglas aplicables");
             return;
         }
-        
-        // Verificar si ya tiene cupón
-        $existing_coupon = $this->get_user_active_coupon($user_id);
-        
-        if ($existing_coupon) {
-            $this->log("Usuario {$user_login} ya tiene cupón: {$existing_coupon}");
-            return;
-        }
-        
-        // Generar código de cupón
-        $coupon_code = $this->generate_coupon_code($user_id, $rule);
-        
-        if (!$coupon_code) {
-            $this->log("Error generando código de cupón para usuario {$user_login}", 'ERROR');
-            return;
-        }
-        
-        // Crear cupón en WooCommerce
-        $coupon_id = $this->create_wc_coupon($coupon_code, $rule, $user_id);
-        
-        if (!$coupon_id) {
-            $this->log("Error creando cupón WC para usuario {$user_login}", 'ERROR');
-            return;
-        }
-        
-        // Guardar en mapeo
+
         $rule_coupons = $this->get_rule_coupons();
-        
-        if (!isset($rule_coupons[$rule['id']])) {
-            $rule_coupons[$rule['id']] = [
-                'coupon_ids' => [],
-                'user_coupons' => []
-            ];
+        $created_count = 0;
+
+        // Crear un cupón para CADA regla aplicable
+        foreach ($applicable_rules as $rule) {
+            // Verificar si ya tiene cupón para ESTA regla específica
+            if (isset($rule_coupons[$rule['id']]['user_coupons'][$user_id])) {
+                $existing_code = $rule_coupons[$rule['id']]['user_coupons'][$user_id];
+                $this->log("Usuario {$user_login} ya tiene cupón para regla {$rule['name']}: {$existing_code}");
+                continue; // Ya tiene cupón para esta regla, pasar a la siguiente
+            }
+
+            // Generar código de cupón
+            $coupon_code = $this->generate_coupon_code($user_id, $rule);
+
+            if (!$coupon_code) {
+                $this->log("Error generando código de cupón para usuario {$user_login} y regla {$rule['name']}", 'ERROR');
+                continue;
+            }
+
+            // Crear cupón en WooCommerce
+            $coupon_id = $this->create_wc_coupon($coupon_code, $rule, $user_id);
+
+            if (!$coupon_id) {
+                $this->log("Error creando cupón WC para usuario {$user_login} y regla {$rule['name']}", 'ERROR');
+                continue;
+            }
+
+            // Guardar en mapeo
+            if (!isset($rule_coupons[$rule['id']])) {
+                $rule_coupons[$rule['id']] = [
+                    'coupon_ids' => [],
+                    'user_coupons' => []
+                ];
+            }
+
+            $rule_coupons[$rule['id']]['coupon_ids'][] = $coupon_id;
+            $rule_coupons[$rule['id']]['user_coupons'][$user_id] = $coupon_code;
+
+            $created_count++;
+            $this->log("Cupón creado para usuario {$user_login} y regla {$rule['name']}: {$coupon_code}");
         }
-        
-        $rule_coupons[$rule['id']]['coupon_ids'][] = $coupon_id;
-        $rule_coupons[$rule['id']]['user_coupons'][$user_id] = $coupon_code;
-        
+
+        // Guardar todos los cambios
         $this->save_rule_coupons($rule_coupons);
-        
-        $this->log("Sistema completo - Cupón {$coupon_code} asignado a {$user_login}", 'SUCCESS');
+
+        $this->log("Sistema completo - {$created_count} cupón(es) creado(s) para {$user_login}", 'SUCCESS');
     }
     
     /**
@@ -1107,7 +1172,6 @@ class Module {
                 // Determinar estado del cupón basándose en la regla programada
                 $coupon_status = 'active'; // Por defecto activo
                 $status_badge = '';
-                $status_color = '#000'; // Negro por defecto (activo)
                 $status_message = '';
                 $activation_date = '';
 
@@ -1120,7 +1184,6 @@ class Module {
                         // Cupón FUTURO - aún no activo
                         $coupon_status = 'future';
                         $status_badge = 'PRÓXIMAMENTE';
-                        $status_color = '#0066cc'; // Azul
                         $activation_date = $datetime_from->format('d/m/Y H:i');
                         $status_message = "Este cupón se activará el {$activation_date} (hora Madrid)";
                     }
@@ -1135,7 +1198,6 @@ class Module {
                         // Cupón EXPIRADO
                         $coupon_status = 'expired';
                         $status_badge = 'EXPIRADO';
-                        $status_color = '#666'; // Gris
                         $status_message = "Este cupón expiró el " . $datetime_to->format('d/m/Y H:i') . " (hora Madrid)";
                     }
                 }
@@ -1175,7 +1237,7 @@ class Module {
                 <div class="mad-coupon-ticket" style="
                     max-width: 500px;
                     margin: 20px auto;
-                    background: <?php echo esc_attr($status_color); ?>;
+                    background: #000;
                     color: #fff;
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
                     border-radius: 8px;
