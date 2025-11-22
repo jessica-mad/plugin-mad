@@ -1,0 +1,126 @@
+/**
+ * Estilos para configuración de MAD Gemini Assistant
+ */
+
+.mad-gemini-settings {
+    max-width: 900px;
+}
+
+.mad-gemini-settings .form-table th {
+    width: 200px;
+}
+
+/* Test de conexión */
+#test-result {
+    display: inline-block;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+#test-result .success {
+    color: #00a32a;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+#test-result .error {
+    color: #d63638;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+#test-result .testing {
+    color: #666;
+}
+
+#test-result .dashicons {
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+}
+
+/* Info cards */
+.mad-gemini-info-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+    margin: 20px 0;
+}
+
+.info-card {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 20px;
+}
+
+.info-card h3 {
+    margin: 0 0 15px;
+    color: #1d2327;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 16px;
+}
+
+.info-card h3 .dashicons {
+    color: #2271b1;
+}
+
+.info-card p {
+    margin: 10px 0;
+    color: #666;
+    line-height: 1.6;
+}
+
+.info-card ul {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.info-card li {
+    margin: 5px 0;
+    color: #666;
+}
+
+.info-card .button {
+    margin-top: 10px;
+}
+
+.info-card .description {
+    font-size: 13px;
+    color: #757575;
+}
+
+/* Wrapper general */
+.mad-gemini-wrapper .nav-tab-wrapper {
+    margin-bottom: 20px;
+}
+
+.mad-gemini-wrapper .tab-content {
+    background: #fff;
+    padding: 20px;
+    border: 1px solid #ddd;
+    border-top: none;
+}
+
+/* API Key field */
+#api_key {
+    font-family: monospace;
+}
+
+#api_key:focus {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+}
+
+/* Temperature slider visual */
+#temperature-value {
+    display: inline-block;
+    min-width: 30px;
+    margin-left: 10px;
+    font-weight: 600;
+    color: #2271b1;
+}
