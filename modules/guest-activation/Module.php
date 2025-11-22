@@ -83,6 +83,9 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
         // Handler para guardar configuración
         add_action('admin_post_mads_guest_activation_save', [$this, 'handle_save_settings']);
+
+        // AJAX handler para limpiar logs
+        add_action('wp_ajax_mad_guest_activation_clear_logs', [$this, 'ajax_clear_logs']);
     }
 
     /**
@@ -94,7 +97,18 @@ return new class($core ?? null) implements MAD_Suite_Module {
         }
 
         $settings = $this->get_settings();
+        $tabs = [
+            'general' => __('Configuración General', 'mad-suite'),
+            'messages' => __('Mensajes', 'mad-suite'),
+            'emails' => __('Emails', 'mad-suite'),
+            'logs' => __('Logs', 'mad-suite'),
+        ];
+
+        $current_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'general';
+
         $this->render_view('settings', [
+            'tabs' => $tabs,
+            'current_tab' => $current_tab,
             'settings' => $settings,
             'module' => $this,
         ]);
@@ -752,6 +766,11 @@ return new class($core ?? null) implements MAD_Suite_Module {
             '1.0.0',
             true
         );
+
+        wp_localize_script('mad-guest-activation-admin', 'madGuestActivationAdmin', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'clear_logs_nonce' => wp_create_nonce('mad_guest_activation_clear_logs'),
+        ]);
     }
 
     /**
@@ -771,5 +790,38 @@ return new class($core ?? null) implements MAD_Suite_Module {
      */
     public function get_logs_url() {
         return $this->logger->get_logs_url();
+    }
+
+    /**
+     * Obtener archivos de log
+     */
+    public function get_log_files() {
+        return $this->logger->get_log_files();
+    }
+
+    /**
+     * Leer contenido de un archivo de log
+     */
+    public function read_log_file($file_path) {
+        return $this->logger->read_log($file_path);
+    }
+
+    /**
+     * AJAX: Limpiar logs antiguos
+     */
+    public function ajax_clear_logs() {
+        if (!current_user_can(MAD_Suite_Core::CAPABILITY)) {
+            wp_send_json_error(['message' => __('No tienes permisos suficientes.', 'mad-suite')]);
+        }
+
+        check_ajax_referer('mad_guest_activation_clear_logs', 'nonce');
+
+        $days = isset($_POST['days']) ? absint($_POST['days']) : 30;
+
+        $this->logger->cleanup_old_logs($days);
+
+        wp_send_json_success([
+            'message' => sprintf(__('Logs anteriores a %d días eliminados correctamente.', 'mad-suite'), $days)
+        ]);
     }
 };
