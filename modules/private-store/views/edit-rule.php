@@ -21,6 +21,8 @@ $rule = [
     'priority' => 10,
     'date_from' => '',
     'date_to' => '',
+    'time_from' => '00:00',
+    'time_to' => '23:59',
     'coupon_config' => [
         'prefix' => 'ps',
         'name_length' => 7,
@@ -381,28 +383,51 @@ $all_roles = wp_roles()->roles;
                     </div>
                 </div>
                 
-                <!-- Fechas -->
+                <!-- Fechas y Horas -->
                 <div class="postbox">
                     <div class="postbox-header">
-                        <h2>📅 Fechas (Opcional)</h2>
+                        <h2>📅 Programación (Opcional)</h2>
                     </div>
                     <div class="inside">
-                        <label for="date_from">Desde:</label>
-                        <input type="date" 
-                               id="date_from" 
-                               name="date_from" 
-                               value="<?php echo esc_attr($rule['date_from']); ?>" 
+                        <p style="margin-top: 0; padding: 10px; background: #e7f5fe; border-radius: 4px; font-size: 13px;">
+                            🕐 <strong>Zona horaria:</strong> Madrid (Europe/Madrid)
+                        </p>
+
+                        <label for="date_from"><strong>Fecha inicio:</strong></label>
+                        <input type="date"
+                               id="date_from"
+                               name="date_from"
+                               value="<?php echo esc_attr($rule['date_from']); ?>"
+                               style="width: 100%; margin-bottom: 8px;">
+
+                        <label for="time_from"><strong>Hora inicio:</strong></label>
+                        <input type="time"
+                               id="time_from"
+                               name="time_from"
+                               value="<?php echo esc_attr($rule['time_from']); ?>"
                                style="width: 100%;">
-                        
-                        <label for="date_to" style="margin-top: 10px; display: block;">Hasta:</label>
-                        <input type="date" 
-                               id="date_to" 
-                               name="date_to" 
-                               value="<?php echo esc_attr($rule['date_to']); ?>" 
+
+                        <hr style="margin: 15px 0; border: none; border-top: 1px solid #ddd;">
+
+                        <label for="date_to"><strong>Fecha fin:</strong></label>
+                        <input type="date"
+                               id="date_to"
+                               name="date_to"
+                               value="<?php echo esc_attr($rule['date_to']); ?>"
+                               style="width: 100%; margin-bottom: 8px;">
+
+                        <label for="time_to"><strong>Hora fin:</strong></label>
+                        <input type="time"
+                               id="time_to"
+                               name="time_to"
+                               value="<?php echo esc_attr($rule['time_to']); ?>"
                                style="width: 100%;">
-                        
-                        <p class="description">
-                            Déjalas vacías para que la regla esté siempre activa
+
+                        <p class="description" style="margin-top: 12px;">
+                            <strong>Ejemplo:</strong><br>
+                            Fecha inicio: 2025-01-01, Hora: 08:00<br>
+                            Fecha fin: 2025-01-31, Hora: 23:59<br>
+                            <em>Déjalas vacías para que esté siempre activa</em>
                         </p>
                     </div>
                 </div>

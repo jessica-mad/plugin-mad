@@ -872,6 +872,8 @@ class Module {
             'priority' => isset($_POST['priority']) ? intval($_POST['priority']) : 10,
             'date_from' => sanitize_text_field($_POST['date_from'] ?? ''),
             'date_to' => sanitize_text_field($_POST['date_to'] ?? ''),
+            'time_from' => sanitize_text_field($_POST['time_from'] ?? '00:00'),
+            'time_to' => sanitize_text_field($_POST['time_to'] ?? '23:59'),
             'coupon_config' => [
                 'prefix' => sanitize_text_field($_POST['coupon_prefix'] ?? 'ps'),
                 'name_length' => intval($_POST['coupon_name_length'] ?? 7),
