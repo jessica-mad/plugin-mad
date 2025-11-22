@@ -191,13 +191,18 @@ $stats = [
             return $b['value'] - $a['value'];
         });
 
-        $max_value = !empty($chart_data) ? max(array_column($chart_data, 'value')) : 1;
+        // Calcular valor máximo para la escala de la gráfica
+        $max_value = 0;
+        if (!empty($chart_data)) {
+            $values = array_column($chart_data, 'value');
+            $max_value = !empty($values) ? max($values) : 0;
+        }
         ?>
 
         <div class="card" style="max-width: 100%; margin-top: 20px;">
             <h2 style="padding: 15px; margin: 0; border-bottom: 1px solid #ddd;">📈 Ingresos Generados por Regla</h2>
             <div style="padding: 30px;">
-                <?php if ($max_value > 0): ?>
+                <?php if (!empty($chart_data) && $max_value > 0): ?>
                     <div style="display: flex; flex-direction: column; gap: 20px;">
                         <?php foreach ($chart_data as $data):
                             $percentage = ($data['value'] / $max_value) * 100;
