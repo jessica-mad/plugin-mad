@@ -190,6 +190,7 @@ return new class($core) implements MAD_Suite_Module {
             'name' => sanitize_text_field($_POST['name'] ?? ''),
             'enabled' => isset($_POST['enabled']) ? (bool)$_POST['enabled'] : true,
             'days' => array_map('absint', $_POST['days'] ?? []),
+            'start_time' => sanitize_text_field($_POST['start_time'] ?? ''),
             'deadline_time' => sanitize_text_field($_POST['deadline_time'] ?? ''),
             'message_es' => wp_kses_post($_POST['message_es'] ?? ''),
             'message_en' => wp_kses_post($_POST['message_en'] ?? ''),
@@ -197,7 +198,7 @@ return new class($core) implements MAD_Suite_Module {
         ];
 
         // Validación
-        if (empty($alert_data['name']) || empty($alert_data['days']) || empty($alert_data['deadline_time'])) {
+        if (empty($alert_data['name']) || empty($alert_data['days']) || empty($alert_data['start_time']) || empty($alert_data['deadline_time'])) {
             wp_send_json_error(['message' => __('Faltan campos requeridos.', 'mad-suite')]);
         }
 
@@ -348,13 +349,18 @@ return new class($core) implements MAD_Suite_Module {
                 continue;
             }
 
+            // Crear objeto DateTime para la hora de inicio
+            $start_time = clone $now;
+            $start_parts = explode(':', $alert['start_time'] ?? '00:00');
+            $start_time->setTime((int)$start_parts[0], (int)$start_parts[1], 0);
+
             // Crear objeto DateTime para la hora límite
             $deadline = clone $now;
             $time_parts = explode(':', $alert['deadline_time']);
             $deadline->setTime((int)$time_parts[0], (int)$time_parts[1], 0);
 
-            // Si aún no hemos pasado la hora límite, esta alerta está activa
-            if ($now <= $deadline) {
+            // Verificar que estamos dentro del rango de horas (desde start_time hasta deadline_time)
+            if ($now >= $start_time && $now <= $deadline) {
                 // Calcular día de entrega
                 $delivery_date = clone $now;
                 $offset = (int)($alert['delivery_day_offset'] ?? 1);
@@ -537,14 +543,14 @@ return new class($core) implements MAD_Suite_Module {
             'mads-oda-admin',
             plugin_dir_url(__FILE__) . 'assets/css/admin.css',
             [],
-            '1.0.2'
+            '1.0.3'
         );
 
         wp_enqueue_script(
             'mads-oda-admin',
             plugin_dir_url(__FILE__) . 'assets/js/admin.js',
             ['jquery', 'jquery-ui-sortable'],
-            '1.0.2',
+            '1.0.3',
             true
         );
 

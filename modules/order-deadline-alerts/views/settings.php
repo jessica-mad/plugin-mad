@@ -254,6 +254,13 @@ $settings = $this->get_settings();
                         </td>
                     </tr>
                     <tr>
+                        <th><label><?php _e('Hora de Inicio (Madrid)', 'mad-suite'); ?> *</label></th>
+                        <td>
+                            <input type="time" class="regular-text mads-oda-alert-field" name="start_time" required>
+                            <p class="description"><?php _e('Hora desde la que se empezará a mostrar la alerta.', 'mad-suite'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
                         <th><label><?php _e('Hora Límite (Madrid)', 'mad-suite'); ?> *</label></th>
                         <td>
                             <input type="time" class="regular-text mads-oda-alert-field" name="deadline_time" required>

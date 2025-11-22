@@ -119,6 +119,7 @@
                 name: $form.find('[name="name"]').val(),
                 enabled: $alert.hasClass('mads-oda-alert-enabled') || $alert.attr('data-alert-id').startsWith('new_'),
                 days: [],
+                start_time: $form.find('[name="start_time"]').val(),
                 deadline_time: $form.find('[name="deadline_time"]').val(),
                 delivery_day_offset: $form.find('[name="delivery_day_offset"]').val(),
                 message_es: $form.find('[name="message_es"]').val(),
@@ -131,7 +132,7 @@
             });
 
             // Validación básica
-            if (!data.name || data.days.length === 0 || !data.deadline_time || !data.message_es) {
+            if (!data.name || data.days.length === 0 || !data.start_time || !data.deadline_time || !data.message_es) {
                 alert(madsOdaAdminL10n.strings.requiredFields);
                 return;
             }
@@ -160,7 +161,7 @@
                         const daysText = data.days.map(d => daysLabels[d]).join(', ');
 
                         $alert.find('.mads-oda-info-days').text(daysText);
-                        $alert.find('.mads-oda-info-time').text(data.deadline_time);
+                        $alert.find('.mads-oda-info-time').text(data.start_time + ' - ' + data.deadline_time);
                         $alert.find('.mads-oda-info-message').text(
                             data.message_es.substring(0, 100) + (data.message_es.length > 100 ? '...' : '')
                         );

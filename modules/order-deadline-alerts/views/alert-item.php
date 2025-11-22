@@ -77,6 +77,14 @@ $selected_days = array_map(function($day) use ($days_labels) {
                     </td>
                 </tr>
                 <tr>
+                    <th><label><?php _e('Hora de Inicio (Madrid)', 'mad-suite'); ?> *</label></th>
+                    <td>
+                        <input type="time" class="regular-text mads-oda-alert-field" name="start_time"
+                               value="<?php echo esc_attr($alert['start_time'] ?? '00:00'); ?>" required>
+                        <p class="description"><?php _e('Hora desde la que se empezará a mostrar la alerta.', 'mad-suite'); ?></p>
+                    </td>
+                </tr>
+                <tr>
                     <th><label><?php _e('Hora Límite (Madrid)', 'mad-suite'); ?> *</label></th>
                     <td>
                         <input type="time" class="regular-text mads-oda-alert-field" name="deadline_time"
@@ -128,8 +136,8 @@ $selected_days = array_map(function($day) use ($days_labels) {
                 <span class="mads-oda-info-days"><?php echo esc_html(implode(', ', $selected_days)); ?></span>
             </div>
             <div class="mads-oda-alert-info">
-                <strong><?php _e('Hora límite:', 'mad-suite'); ?></strong>
-                <span class="mads-oda-info-time"><?php echo esc_html($alert['deadline_time']); ?></span>
+                <strong><?php _e('Horario:', 'mad-suite'); ?></strong>
+                <span class="mads-oda-info-time"><?php echo esc_html(($alert['start_time'] ?? '00:00') . ' - ' . $alert['deadline_time']); ?></span>
             </div>
             <div class="mads-oda-alert-info">
                 <strong><?php _e('Mensaje:', 'mad-suite'); ?></strong>
