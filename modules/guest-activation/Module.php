@@ -67,6 +67,10 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
         add_action('wp_ajax_mad_find_previous_orders', [$this, 'ajax_find_previous_orders']);
 
+        // Mostrar pedidos en perfil de usuario
+        add_action('show_user_profile', [$this, 'display_user_orders_in_profile']);
+        add_action('edit_user_profile', [$this, 'display_user_orders_in_profile']);
+
         // Cargar estilos y scripts
         add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_scripts']);
     }
@@ -83,6 +87,9 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
         // Handler para guardar configuración
         add_action('admin_post_mads_guest_activation_save', [$this, 'handle_save_settings']);
+
+        // AJAX handler para limpiar logs
+        add_action('wp_ajax_mad_guest_activation_clear_logs', [$this, 'ajax_clear_logs']);
     }
 
     /**
@@ -94,7 +101,18 @@ return new class($core ?? null) implements MAD_Suite_Module {
         }
 
         $settings = $this->get_settings();
+        $tabs = [
+            'general' => __('Configuración General', 'mad-suite'),
+            'messages' => __('Mensajes', 'mad-suite'),
+            'emails' => __('Emails', 'mad-suite'),
+            'logs' => __('Logs', 'mad-suite'),
+        ];
+
+        $current_tab = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'general';
+
         $this->render_view('settings', [
+            'tabs' => $tabs,
+            'current_tab' => $current_tab,
             'settings' => $settings,
             'module' => $this,
         ]);
@@ -654,6 +672,12 @@ return new class($core ?? null) implements MAD_Suite_Module {
         foreach ($guest_orders as $order_id) {
             $order = wc_get_order($order_id);
             if ($order) {
+                // Guardar metadata indicando que fue un pedido de invitado
+                $order->update_meta_data('_original_customer_id', 0);
+                $order->update_meta_data('_was_guest_order', 'yes');
+                $order->update_meta_data('_assigned_date', current_time('mysql'));
+
+                // Asignar al usuario
                 $order->set_customer_id($user_id);
                 $order->save();
                 $count++;
@@ -701,6 +725,144 @@ return new class($core ?? null) implements MAD_Suite_Module {
         }
 
         return $settings[$key . '_es'] ?? '';
+    }
+
+    /**
+     * Mostrar pedidos en perfil de usuario
+     */
+    public function display_user_orders_in_profile($user) {
+        // Solo mostrar si WooCommerce está activo
+        if (!class_exists('WooCommerce')) {
+            return;
+        }
+
+        // Solo mostrar si el usuario actual tiene permisos
+        if (!current_user_can('edit_users')) {
+            return;
+        }
+
+        $user_id = $user->ID;
+        $user_email = $user->user_email;
+
+        // Obtener todos los pedidos del usuario
+        $orders_data = $this->get_user_orders_with_metadata($user_id, $user_email);
+
+        if (empty($orders_data)) {
+            return;
+        }
+
+        // Renderizar vista
+        $this->render_view('user-orders-table', [
+            'user' => $user,
+            'orders_data' => $orders_data,
+            'total_orders' => count($orders_data),
+        ]);
+    }
+
+    /**
+     * Obtener pedidos del usuario con metadatos
+     */
+    private function get_user_orders_with_metadata($user_id, $user_email) {
+        $orders_data = [];
+
+        // Obtener todos los pedidos del usuario por ID
+        $args = [
+            'customer_id' => $user_id,
+            'limit' => -1,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ];
+
+        $orders = wc_get_orders($args);
+
+        foreach ($orders as $order) {
+            $order_data = $this->extract_order_data($order);
+            $order_data['was_guest'] = $this->was_guest_order($order, $user_id);
+            $orders_data[] = $order_data;
+        }
+
+        // También buscar pedidos que tengan el mismo email pero sin customer_id (fueron de invitado y no se asignaron)
+        $guest_args = [
+            'billing_email' => $user_email,
+            'customer_id' => 0,
+            'limit' => -1,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ];
+
+        $guest_orders = wc_get_orders($guest_args);
+
+        foreach ($guest_orders as $order) {
+            $order_data = $this->extract_order_data($order);
+            $order_data['was_guest'] = true;
+            $order_data['not_assigned'] = true;
+            $orders_data[] = $order_data;
+        }
+
+        // Ordenar por fecha descendente
+        usort($orders_data, function($a, $b) {
+            return strtotime($b['date']) - strtotime($a['date']);
+        });
+
+        return $orders_data;
+    }
+
+    /**
+     * Extraer datos relevantes de un pedido
+     */
+    private function extract_order_data($order) {
+        return [
+            'id' => $order->get_id(),
+            'number' => $order->get_order_number(),
+            'date' => $order->get_date_created()->date('Y-m-d H:i:s'),
+            'status' => $order->get_status(),
+            'status_name' => wc_get_order_status_name($order->get_status()),
+            'total' => $order->get_total(),
+            'currency' => $order->get_currency(),
+            'items_count' => $order->get_item_count(),
+            'edit_url' => get_edit_post_link($order->get_id()),
+            'customer_id' => $order->get_customer_id(),
+        ];
+    }
+
+    /**
+     * Verificar si un pedido fue originalmente de invitado
+     */
+    private function was_guest_order($order, $current_user_id) {
+        // Si el pedido actualmente no tiene customer_id, es de invitado
+        if ($order->get_customer_id() == 0) {
+            return true;
+        }
+
+        // Verificar metadata específica
+        $was_guest = $order->get_meta('_was_guest_order', true);
+        if ($was_guest === 'yes') {
+            return true;
+        }
+
+        // Si el customer_id es diferente al usuario actual, podría ser que fue reasignado
+        // Verificar si hay metadata que indique que fue de invitado
+        $original_customer_id = $order->get_meta('_original_customer_id', true);
+
+        // Si existe metadata y era 0, fue de invitado
+        if ($original_customer_id !== '' && $original_customer_id == 0) {
+            return true;
+        }
+
+        // Si el pedido tiene customer_id pero queremos marcar los que fueron de invitado,
+        // verificamos la fecha de creación del usuario vs la fecha del pedido
+        $user = get_user_by('id', $current_user_id);
+        if ($user) {
+            $user_registered = strtotime($user->user_registered);
+            $order_date = $order->get_date_created()->getTimestamp();
+
+            // Si el pedido es anterior al registro del usuario, probablemente fue de invitado
+            if ($order_date < $user_registered) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -752,6 +914,11 @@ return new class($core ?? null) implements MAD_Suite_Module {
             '1.0.0',
             true
         );
+
+        wp_localize_script('mad-guest-activation-admin', 'madGuestActivationAdmin', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'clear_logs_nonce' => wp_create_nonce('mad_guest_activation_clear_logs'),
+        ]);
     }
 
     /**
@@ -771,5 +938,38 @@ return new class($core ?? null) implements MAD_Suite_Module {
      */
     public function get_logs_url() {
         return $this->logger->get_logs_url();
+    }
+
+    /**
+     * Obtener archivos de log
+     */
+    public function get_log_files() {
+        return $this->logger->get_log_files();
+    }
+
+    /**
+     * Leer contenido de un archivo de log
+     */
+    public function read_log_file($file_path) {
+        return $this->logger->read_log($file_path);
+    }
+
+    /**
+     * AJAX: Limpiar logs antiguos
+     */
+    public function ajax_clear_logs() {
+        if (!current_user_can(MAD_Suite_Core::CAPABILITY)) {
+            wp_send_json_error(['message' => __('No tienes permisos suficientes.', 'mad-suite')]);
+        }
+
+        check_ajax_referer('mad_guest_activation_clear_logs', 'nonce');
+
+        $days = isset($_POST['days']) ? absint($_POST['days']) : 30;
+
+        $this->logger->cleanup_old_logs($days);
+
+        wp_send_json_success([
+            'message' => sprintf(__('Logs anteriores a %d días eliminados correctamente.', 'mad-suite'), $days)
+        ]);
     }
 };

@@ -130,18 +130,13 @@ class Module {
         $applicable_rules = [];
 
         foreach ($rules as $rule) {
-            // Solo reglas activas
+            // Solo reglas activas (habilitadas en configuración)
             if (!isset($rule['enabled']) || !$rule['enabled']) {
                 continue;
             }
 
-            // Verificar fechas
-            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
-                continue;
-            }
-            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
-                continue;
-            }
+            // NO filtrar por fechas - queremos crear cupones para reglas futuras también
+            // El cupón mismo tendrá las restricciones de fecha configuradas
 
             // Verificar si el usuario tiene alguno de los roles de la regla
             if (!empty($rule['roles'])) {
@@ -172,7 +167,64 @@ class Module {
         
         return $applicable_rules[0];
     }
-    
+
+    /**
+     * Obtiene TODAS las reglas aplicables para un usuario
+     * Devuelve array de reglas ordenadas por prioridad
+     */
+    private function get_all_applicable_rules_for_user($user_id) {
+        $user = get_userdata($user_id);
+        if (!$user) {
+            return [];
+        }
+
+        $user_roles = $user->roles;
+        if (empty($user_roles)) {
+            return [];
+        }
+
+        $rules = $this->get_discount_rules();
+        $applicable_rules = [];
+
+        foreach ($rules as $rule) {
+            // Solo reglas activas (habilitadas en configuración)
+            if (!isset($rule['enabled']) || !$rule['enabled']) {
+                continue;
+            }
+
+            // NO filtrar por fechas - queremos crear cupones para reglas futuras también
+            // El cupón mismo tendrá las restricciones de fecha configuradas
+
+            // Verificar si el usuario tiene alguno de los roles de la regla
+            if (!empty($rule['roles'])) {
+                $has_matching_role = false;
+                foreach ($user_roles as $user_role) {
+                    if (in_array($user_role, $rule['roles'])) {
+                        $has_matching_role = true;
+                        break;
+                    }
+                }
+
+                if ($has_matching_role) {
+                    $applicable_rules[] = $rule;
+                }
+            }
+        }
+
+        if (empty($applicable_rules)) {
+            return [];
+        }
+
+        // Ordenar por prioridad (menor = mayor prioridad)
+        usort($applicable_rules, function($a, $b) {
+            $priority_a = isset($a['priority']) ? intval($a['priority']) : 999;
+            $priority_b = isset($b['priority']) ? intval($b['priority']) : 999;
+            return $priority_a - $priority_b;
+        });
+
+        return $applicable_rules; // Devolver TODAS las reglas, no solo la primera
+    }
+
     /**
      * Limpia username para usar en cupón
      */
@@ -310,11 +362,11 @@ class Module {
      */
     private function get_user_active_coupon($user_id) {
         $rule_coupons = $this->get_rule_coupons();
-        
+
         foreach ($rule_coupons as $rule_id => $data) {
             if (isset($data['user_coupons'][$user_id])) {
                 $coupon_code = $data['user_coupons'][$user_id];
-                
+
                 // Verificar que el cupón existe en WC
                 $coupon_id = wc_get_coupon_id_by_code($coupon_code);
                 if ($coupon_id) {
@@ -322,64 +374,109 @@ class Module {
                 }
             }
         }
-        
+
         return null;
+    }
+
+    /**
+     * Obtiene TODOS los cupones del usuario (activos, futuros y expirados)
+     */
+    private function get_all_user_coupons($user_id) {
+        $rule_coupons = $this->get_rule_coupons();
+        $user_coupons = [];
+
+        foreach ($rule_coupons as $rule_id => $data) {
+            if (isset($data['user_coupons'][$user_id])) {
+                $coupon_code = $data['user_coupons'][$user_id];
+
+                // Verificar que el cupón existe en WC
+                $coupon_id = wc_get_coupon_id_by_code($coupon_code);
+                if ($coupon_id) {
+                    try {
+                        $coupon = new \WC_Coupon($coupon_id);
+
+                        // Obtener regla asociada para fechas programadas
+                        $rules = $this->get_discount_rules();
+                        $rule = isset($rules[$rule_id]) ? $rules[$rule_id] : null;
+
+                        $user_coupons[] = [
+                            'code' => $coupon_code,
+                            'coupon' => $coupon,
+                            'rule' => $rule,
+                            'rule_id' => $rule_id
+                        ];
+                    } catch (\Exception $e) {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        return $user_coupons;
     }
     
     /**
      * Evento: Usuario hace login
+     * Crea cupones para TODAS las reglas aplicables al usuario
      */
     public function on_user_login($user_login, $user) {
         $user_id = $user->ID;
-        
-        // Obtener mejor regla para este usuario
-        $rule = $this->get_best_rule_for_user($user_id);
-        
-        if (!$rule) {
+
+        // Obtener TODAS las reglas aplicables para este usuario
+        $applicable_rules = $this->get_all_applicable_rules_for_user($user_id);
+
+        if (empty($applicable_rules)) {
             $this->log("Usuario {$user_login} sin reglas aplicables");
             return;
         }
-        
-        // Verificar si ya tiene cupón
-        $existing_coupon = $this->get_user_active_coupon($user_id);
-        
-        if ($existing_coupon) {
-            $this->log("Usuario {$user_login} ya tiene cupón: {$existing_coupon}");
-            return;
-        }
-        
-        // Generar código de cupón
-        $coupon_code = $this->generate_coupon_code($user_id, $rule);
-        
-        if (!$coupon_code) {
-            $this->log("Error generando código de cupón para usuario {$user_login}", 'ERROR');
-            return;
-        }
-        
-        // Crear cupón en WooCommerce
-        $coupon_id = $this->create_wc_coupon($coupon_code, $rule, $user_id);
-        
-        if (!$coupon_id) {
-            $this->log("Error creando cupón WC para usuario {$user_login}", 'ERROR');
-            return;
-        }
-        
-        // Guardar en mapeo
+
         $rule_coupons = $this->get_rule_coupons();
-        
-        if (!isset($rule_coupons[$rule['id']])) {
-            $rule_coupons[$rule['id']] = [
-                'coupon_ids' => [],
-                'user_coupons' => []
-            ];
+        $created_count = 0;
+
+        // Crear un cupón para CADA regla aplicable
+        foreach ($applicable_rules as $rule) {
+            // Verificar si ya tiene cupón para ESTA regla específica
+            if (isset($rule_coupons[$rule['id']]['user_coupons'][$user_id])) {
+                $existing_code = $rule_coupons[$rule['id']]['user_coupons'][$user_id];
+                $this->log("Usuario {$user_login} ya tiene cupón para regla {$rule['name']}: {$existing_code}");
+                continue; // Ya tiene cupón para esta regla, pasar a la siguiente
+            }
+
+            // Generar código de cupón
+            $coupon_code = $this->generate_coupon_code($user_id, $rule);
+
+            if (!$coupon_code) {
+                $this->log("Error generando código de cupón para usuario {$user_login} y regla {$rule['name']}", 'ERROR');
+                continue;
+            }
+
+            // Crear cupón en WooCommerce
+            $coupon_id = $this->create_wc_coupon($coupon_code, $rule, $user_id);
+
+            if (!$coupon_id) {
+                $this->log("Error creando cupón WC para usuario {$user_login} y regla {$rule['name']}", 'ERROR');
+                continue;
+            }
+
+            // Guardar en mapeo
+            if (!isset($rule_coupons[$rule['id']])) {
+                $rule_coupons[$rule['id']] = [
+                    'coupon_ids' => [],
+                    'user_coupons' => []
+                ];
+            }
+
+            $rule_coupons[$rule['id']]['coupon_ids'][] = $coupon_id;
+            $rule_coupons[$rule['id']]['user_coupons'][$user_id] = $coupon_code;
+
+            $created_count++;
+            $this->log("Cupón creado para usuario {$user_login} y regla {$rule['name']}: {$coupon_code}");
         }
-        
-        $rule_coupons[$rule['id']]['coupon_ids'][] = $coupon_id;
-        $rule_coupons[$rule['id']]['user_coupons'][$user_id] = $coupon_code;
-        
+
+        // Guardar todos los cambios
         $this->save_rule_coupons($rule_coupons);
-        
-        $this->log("Sistema completo - Cupón {$coupon_code} asignado a {$user_login}", 'SUCCESS');
+
+        $this->log("Sistema completo - {$created_count} cupón(es) creado(s) para {$user_login}", 'SUCCESS');
     }
     
     /**
@@ -872,6 +969,8 @@ class Module {
             'priority' => isset($_POST['priority']) ? intval($_POST['priority']) : 10,
             'date_from' => sanitize_text_field($_POST['date_from'] ?? ''),
             'date_to' => sanitize_text_field($_POST['date_to'] ?? ''),
+            'time_from' => sanitize_text_field($_POST['time_from'] ?? '00:00'),
+            'time_to' => sanitize_text_field($_POST['time_to'] ?? '23:59'),
             'coupon_config' => [
                 'prefix' => sanitize_text_field($_POST['coupon_prefix'] ?? 'ps'),
                 'name_length' => intval($_POST['coupon_name_length'] ?? 7),
@@ -1024,238 +1123,397 @@ class Module {
     }
     
     /**
-     * Shortcode [mi_cupon] - Muestra el cupón activo del usuario
+     * Shortcode [mi_cupon] - Muestra TODOS los cupones del usuario (activos, futuros, expirados)
      */
     public function render_my_coupon_shortcode($atts) {
         // Verificar que el usuario esté logueado
         if (!is_user_logged_in()) {
             return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
-                <p style="margin: 0; font-size: 16px;">Debes iniciar sesión para ver tu cupón</p>
+                <p style="margin: 0; font-size: 16px;">Debes iniciar sesión para ver tus cupones</p>
             </div>';
         }
 
         $user_id = get_current_user_id();
 
-        // Obtener cupón activo del usuario
-        $coupon_code = $this->get_user_active_coupon($user_id);
+        // Obtener TODOS los cupones del usuario
+        $user_coupons = $this->get_all_user_coupons($user_id);
 
-        if (!$coupon_code) {
+        if (empty($user_coupons)) {
             return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
-                <p style="margin: 0; font-size: 16px;">No tienes cupones activos en este momento</p>
+                <p style="margin: 0; font-size: 16px;">No tienes cupones disponibles</p>
             </div>';
         }
 
-        // Obtener información del cupón de WooCommerce
-        $coupon_id = wc_get_coupon_id_by_code($coupon_code);
-        if (!$coupon_id) {
-            return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
-                <p style="margin: 0; font-size: 16px;">Error al cargar información del cupón</p>
-            </div>';
-        }
+        // Ordenar cupones por fecha de activación (del más próximo al más lejano)
+        usort($user_coupons, function($a, $b) {
+            $rule_a = $a['rule'];
+            $rule_b = $b['rule'];
 
-        try {
-            $coupon = new \WC_Coupon($coupon_id);
+            // Obtener fecha y hora de inicio para cupón A
+            $date_from_a = !empty($rule_a['date_from']) ? $rule_a['date_from'] : '1970-01-01';
+            $time_from_a = isset($rule_a['time_from']) && !empty($rule_a['time_from']) ? $rule_a['time_from'] : '00:00';
+            $datetime_a = strtotime($date_from_a . ' ' . $time_from_a);
 
-            // Obtener información del cupón
-            $discount_type = $coupon->get_discount_type();
-            $discount_amount = $coupon->get_amount();
-            $date_expires = $coupon->get_date_expires();
-            $usage_count = $coupon->get_usage_count();
-            $usage_limit = $coupon->get_usage_limit();
+            // Obtener fecha y hora de inicio para cupón B
+            $date_from_b = !empty($rule_b['date_from']) ? $rule_b['date_from'] : '1970-01-01';
+            $time_from_b = isset($rule_b['time_from']) && !empty($rule_b['time_from']) ? $rule_b['time_from'] : '00:00';
+            $datetime_b = strtotime($date_from_b . ' ' . $time_from_b);
 
-            // Formatear descuento
-            if ($discount_type === 'percent') {
-                $discount_text = $discount_amount . '% de descuento';
-            } else {
-                $discount_text = wc_price($discount_amount) . ' de descuento';
-            }
+            // Ordenar ascendente (el que se activa primero aparece primero)
+            return $datetime_a - $datetime_b;
+        });
 
-            // Formatear fechas
-            $date_from = get_post_meta($coupon_id, '_mad_ps_created', true);
-            $date_from_text = $date_from ? date_i18n('d/m/Y', strtotime($date_from)) : 'N/A';
+        // URL del carrito
+        $cart_url = wc_get_cart_url();
 
-            if ($date_expires) {
-                $date_expires_text = date_i18n('d/m/Y', $date_expires->getTimestamp());
-                $days_remaining = ceil(($date_expires->getTimestamp() - time()) / DAY_IN_SECONDS);
-            } else {
-                $date_expires_text = 'Sin fecha de expiración';
-                $days_remaining = null;
-            }
+        // Zona horaria de Madrid para verificar estado de cupones
+        $timezone = new \DateTimeZone('Europe/Madrid');
+        $now = new \DateTime('now', $timezone);
 
-            // Usos restantes
-            if ($usage_limit) {
-                $uses_remaining = max(0, $usage_limit - $usage_count);
-                $uses_text = $uses_remaining > 0 ? "Te quedan {$uses_remaining} usos" : "Has usado todos los usos disponibles";
-            } else {
-                $uses_text = "Usos ilimitados";
-            }
+        // Buffer de salida
+        ob_start();
 
-            // URL del carrito
-            $cart_url = wc_get_cart_url();
+        // Procesar cada cupón
+        foreach ($user_coupons as $coupon_data) {
+            $coupon_code = $coupon_data['code'];
+            $coupon = $coupon_data['coupon'];
+            $rule = $coupon_data['rule'];
 
-            // Generar HTML del cupón
-            ob_start();
-            ?>
-            <div class="mad-coupon-box" style="
-                max-width: 600px;
-                margin: 0 auto;
-                border: 3px solid #000;
-                background: #fff;
-                color: #000;
-                font-family: inherit;
-            ">
-                <!-- Header -->
-                <div class="mad-coupon-header" style="
+            try {
+
+                // Obtener información del cupón
+                $discount_type = $coupon->get_discount_type();
+                $discount_amount = $coupon->get_amount();
+                $date_expires = $coupon->get_date_expires();
+                $usage_count = $coupon->get_usage_count();
+                $usage_limit = $coupon->get_usage_limit();
+
+                // Determinar estado del cupón basándose en la regla programada
+                $coupon_status = 'active'; // Por defecto activo
+                $status_badge = '';
+                $status_message = '';
+                $activation_date = '';
+
+                // Verificar programación de la regla (fecha y hora en Madrid)
+                if ($rule && !empty($rule['date_from'])) {
+                    $time_from = isset($rule['time_from']) && !empty($rule['time_from']) ? $rule['time_from'] : '00:00';
+                    $datetime_from = \DateTime::createFromFormat('Y-m-d H:i', $rule['date_from'] . ' ' . $time_from, $timezone);
+
+                    if ($datetime_from && $now < $datetime_from) {
+                        // Cupón FUTURO - aún no activo
+                        $coupon_status = 'future';
+                        $status_badge = 'PRÓXIMAMENTE';
+                        $activation_date = $datetime_from->format('d/m/Y H:i');
+                        $status_message = "Este cupón se activará el {$activation_date} (hora Madrid)";
+                    }
+                }
+
+                // Verificar si ha expirado
+                if ($rule && !empty($rule['date_to'])) {
+                    $time_to = isset($rule['time_to']) && !empty($rule['time_to']) ? $rule['time_to'] : '23:59';
+                    $datetime_to = \DateTime::createFromFormat('Y-m-d H:i', $rule['date_to'] . ' ' . $time_to, $timezone);
+
+                    if ($datetime_to && $now > $datetime_to) {
+                        // Cupón EXPIRADO
+                        $coupon_status = 'expired';
+                        $status_badge = 'EXPIRADO';
+                        $status_message = "Este cupón expiró el " . $datetime_to->format('d/m/Y H:i') . " (hora Madrid)";
+                    }
+                }
+
+                // Si está activo, verificar si está por expirar pronto
+                if ($coupon_status === 'active' && $date_expires) {
+                    $days_remaining = ceil(($date_expires->getTimestamp() - time()) / DAY_IN_SECONDS);
+                    if ($days_remaining > 0 && $days_remaining <= 7) {
+                        $status_message = "⏰ ¡Solo quedan {$days_remaining} días!";
+                    }
+                    $status_badge = 'ACTIVO AHORA';
+                }
+
+                // Formatear fechas para mostrar
+                $date_from_text = 'N/A';
+                if ($rule && !empty($rule['date_from'])) {
+                    $time_from_display = isset($rule['time_from']) ? $rule['time_from'] : '00:00';
+                    $date_from_text = date_i18n('d/m/Y', strtotime($rule['date_from'])) . ' a las ' . $time_from_display;
+                }
+
+                $date_to_text = 'Sin expiración';
+                if ($rule && !empty($rule['date_to'])) {
+                    $time_to_display = isset($rule['time_to']) ? $rule['time_to'] : '23:59';
+                    $date_to_text = date_i18n('d/m/Y', strtotime($rule['date_to'])) . ' a las ' . $time_to_display;
+                }
+
+                // Usos restantes
+                if ($usage_limit) {
+                    $uses_remaining = max(0, $usage_limit - $usage_count);
+                    $uses_text = $uses_remaining > 0 ? "Te quedan {$uses_remaining} usos" : "Has usado todos los usos disponibles";
+                } else {
+                    $uses_text = "Usos ilimitados";
+                }
+
+                // Generar HTML del cupón tipo ticket
+                ?>
+                <div class="mad-coupon-ticket" style="
+                    max-width: 500px;
+                    margin: 20px auto;
                     background: #000;
                     color: #fff;
-                    padding: 20px;
-                    text-align: center;
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    position: relative;
                 ">
-                    <h3 style="margin: 0 0 5px 0; font-size: 24px; font-weight: bold;">TU CUPÓN EXCLUSIVO</h3>
-                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">Private Store Member</p>
-                </div>
-
-                <!-- Código del cupón -->
-                <div class="mad-coupon-code" style="
-                    padding: 30px 20px;
-                    text-align: center;
-                    background: #f5f5f5;
-                    border-bottom: 2px dashed #000;
-                ">
-                    <p style="margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Código del Cupón</p>
+                    <!-- Badge de estado en esquina superior derecha -->
+                    <?php if (!empty($status_badge)): ?>
                     <div style="
-                        font-family: 'Courier New', monospace;
-                        font-size: 32px;
-                        font-weight: bold;
-                        letter-spacing: 3px;
-                        padding: 15px;
-                        background: #fff;
-                        border: 2px solid #000;
-                        display: inline-block;
-                    "><?php echo esc_html($coupon_code); ?></div>
-                </div>
-
-                <!-- Beneficios -->
-                <div class="mad-coupon-benefits" style="padding: 30px 20px; text-align: center;">
-                    <div style="margin-bottom: 20px;">
-                        <p style="margin: 0 0 5px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #666;">Tu Descuento</p>
-                        <p style="margin: 0; font-size: 36px; font-weight: bold;"><?php echo esc_html($discount_text); ?></p>
-                    </div>
-
-                    <!-- Información adicional -->
-                    <div style="
-                        display: grid;
-                        grid-template-columns: 1fr 1fr;
-                        gap: 20px;
-                        margin-top: 25px;
-                        padding-top: 25px;
-                        border-top: 1px solid #ddd;
-                    ">
-                        <div>
-                            <p style="margin: 0 0 5px 0; font-size: 12px; text-transform: uppercase; color: #666;">Válido desde</p>
-                            <p style="margin: 0; font-size: 16px; font-weight: bold;"><?php echo esc_html($date_from_text); ?></p>
-                        </div>
-                        <div>
-                            <p style="margin: 0 0 5px 0; font-size: 12px; text-transform: uppercase; color: #666;">Válido hasta</p>
-                            <p style="margin: 0; font-size: 16px; font-weight: bold;"><?php echo esc_html($date_expires_text); ?></p>
-                        </div>
-                    </div>
-
-                    <?php if ($days_remaining !== null && $days_remaining > 0 && $days_remaining <= 7): ?>
-                    <div style="
-                        margin-top: 20px;
-                        padding: 10px;
-                        background: #000;
+                        position: absolute;
+                        top: 10px;
+                        right: 10px;
+                        background: rgba(255, 255, 255, 0.25);
                         color: #fff;
-                        border-radius: 4px;
-                    ">
-                        <p style="margin: 0; font-size: 13px;">⏰ ¡Quedan solo <?php echo $days_remaining; ?> días para usar este cupón!</p>
-                    </div>
+                        padding: 5px 12px;
+                        border-radius: 20px;
+                        font-size: 10px;
+                        font-weight: 700;
+                        text-transform: uppercase;
+                        letter-spacing: 0.5px;
+                        z-index: 10;
+                    "><?php echo esc_html($status_badge); ?></div>
                     <?php endif; ?>
+                <!-- Contenedor de 2 columnas -->
+                <div style="
+                    display: flex;
+                    min-height: 180px;
+                ">
+                    <!-- Columna 1: Descuento -->
+                    <div style="
+                        flex: 1;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        padding: 30px 20px;
+                        border-right: 2px dashed rgba(255, 255, 255, 0.3);
+                    ">
+                        <div style="
+                            font-size: 64px;
+                            font-weight: 900;
+                            line-height: 1;
+                            margin-bottom: 8px;
+                            color: #fff;
+                        ">
+                            <?php
+                            if ($discount_type === 'percent') {
+                                echo esc_html($discount_amount) . '<span style="font-size: 48px;">%</span>';
+                            } else {
+                                echo '<span style="font-size: 36px;">' . wp_strip_all_tags(wc_price($discount_amount, ['currency' => 'EUR'])) . '</span>';
+                            }
+                            ?>
+                        </div>
+                        <div style="
+                            font-size: 13px;
+                            text-transform: uppercase;
+                            letter-spacing: 1px;
+                            color: rgba(255, 255, 255, 0.7);
+                            font-weight: 600;
+                        ">
+                            descuento
+                        </div>
+                    </div>
 
-                    <div style="margin-top: 15px;">
-                        <p style="margin: 0; font-size: 13px; color: #666;"><?php echo esc_html($uses_text); ?></p>
+                    <!-- Columna 2: Información del cupón -->
+                    <div style="
+                        flex: 1.3;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        padding: 30px 25px;
+                    ">
+                        <!-- Código del cupón -->
+                        <div style="margin-bottom: 18px;">
+                            <div style="
+                                font-size: 11px;
+                                text-transform: uppercase;
+                                letter-spacing: 1px;
+                                color: rgba(255, 255, 255, 0.6);
+                                margin-bottom: 6px;
+                                font-weight: 600;
+                            ">Tu cupón</div>
+                            <div style="
+                                font-family: 'Courier New', monospace;
+                                font-size: 18px;
+                                font-weight: bold;
+                                letter-spacing: 1px;
+                                color: #fff;
+                            "><?php echo esc_html($coupon_code); ?></div>
+                        </div>
+
+                        <!-- Fechas de validez -->
+                        <div style="
+                            font-size: 12px;
+                            line-height: 1.6;
+                            color: rgba(255, 255, 255, 0.85);
+                        ">
+                            <div style="margin-bottom: 4px;">
+                                <span style="color: rgba(255, 255, 255, 0.6);">Activo desde:</span>
+                                <strong><?php echo esc_html($date_from_text); ?></strong>
+                            </div>
+                            <div>
+                                <span style="color: rgba(255, 255, 255, 0.6);">Hasta:</span>
+                                <strong><?php echo esc_html($date_to_text); ?></strong>
+                            </div>
+                        </div>
+
+                        <!-- Mensaje de estado -->
+                        <?php if (!empty($status_message)): ?>
+                        <div style="
+                            margin-top: 12px;
+                            padding: 8px 10px;
+                            background: rgba(255, 255, 255, 0.15);
+                            border-left: 3px solid rgba(255, 255, 255, 0.5);
+                            font-size: 11px;
+                            color: rgba(255, 255, 255, 0.95);
+                            font-weight: 600;
+                            border-radius: 3px;
+                        ">
+                            <?php echo esc_html($status_message); ?>
+                        </div>
+                        <?php endif; ?>
                     </div>
                 </div>
 
-                <!-- Botón de acción -->
-                <div class="mad-coupon-action" style="padding: 0 20px 30px;">
+                <?php if ($coupon_status === 'active'): ?>
+                <!-- Botón de aplicar cupón -->
+                <div style="
+                    padding: 0;
+                    border-top: 1px solid rgba(255, 255, 255, 0.1);
+                ">
                     <button
                         onclick="madApplyCoupon('<?php echo esc_js($coupon_code); ?>')"
                         style="
                             width: 100%;
-                            padding: 18px;
-                            background: #000;
+                            padding: 16px;
+                            background: rgba(255, 255, 255, 0.1);
                             color: #fff;
                             border: none;
-                            font-size: 16px;
-                            font-weight: bold;
+                            font-size: 14px;
+                            font-weight: 700;
                             text-transform: uppercase;
                             letter-spacing: 1px;
                             cursor: pointer;
                             transition: all 0.3s ease;
                         "
-                        onmouseover="this.style.background='#333'"
-                        onmouseout="this.style.background='#000'"
+                        onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'"
+                        onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'"
                     >
-                        Aplicar a mi Próxima Compra →
+                        Aplicar cupón →
                     </button>
                 </div>
-
-                <!-- Footer info -->
+                <?php elseif ($coupon_status === 'future'): ?>
+                <!-- Mensaje cupón futuro -->
                 <div style="
-                    padding: 15px 20px;
-                    background: #f5f5f5;
+                    padding: 16px;
+                    background: rgba(255, 255, 255, 0.1);
+                    border-top: 1px solid rgba(255, 255, 255, 0.2);
                     text-align: center;
-                    font-size: 12px;
-                    color: #666;
-                    border-top: 1px solid #ddd;
+                    font-size: 13px;
+                    color: rgba(255, 255, 255, 0.9);
+                    font-weight: 600;
                 ">
-                    <p style="margin: 0;">El cupón se aplicará automáticamente en el carrito</p>
+                    ⏳ Este cupón se activará pronto
                 </div>
-            </div>
+                <?php else: ?>
+                <!-- Mensaje de expirado -->
+                <div style="
+                    padding: 16px;
+                    background: rgba(255, 255, 255, 0.1);
+                    border-top: 1px solid rgba(255, 255, 255, 0.2);
+                    text-align: center;
+                    font-size: 13px;
+                    color: rgba(255, 255, 255, 0.7);
+                    font-weight: 600;
+                ">
+                    Este cupón ha expirado y ya no se puede utilizar
+                </div>
+                <?php endif; ?>
 
-            <script>
-            function madApplyCoupon(couponCode) {
-                // Mostrar mensaje de carga
-                var button = event.target;
-                var originalText = button.innerHTML;
-                button.innerHTML = 'Aplicando...';
-                button.disabled = true;
+                <!-- Info de usos (solo si está activo) -->
+                <?php if ($coupon_status === 'active'): ?>
+                <div style="
+                    padding: 10px 20px;
+                    background: rgba(0, 0, 0, 0.3);
+                    text-align: center;
+                    font-size: 11px;
+                    color: rgba(255, 255, 255, 0.5);
+                ">
+                    <?php echo esc_html($uses_text); ?>
+                </div>
+                <?php endif; ?>
+                </div>
+                <?php
 
-                // Aplicar cupón vía AJAX
-                jQuery.ajax({
-                    url: wc_add_to_cart_params.ajax_url,
-                    type: 'POST',
-                    data: {
-                        action: 'woocommerce_apply_coupon',
-                        security: wc_checkout_params ? wc_checkout_params.apply_coupon_nonce : '',
-                        coupon_code: couponCode
-                    },
-                    success: function(response) {
-                        button.innerHTML = '✓ Cupón Aplicado';
-                        button.style.background = '#4CAF50';
-
-                        // Redirigir al carrito después de 1 segundo
-                        setTimeout(function() {
-                            window.location.href = '<?php echo esc_js($cart_url); ?>';
-                        }, 1000);
-                    },
-                    error: function() {
-                        // Si falla AJAX, redirigir al carrito con el cupón en la URL
-                        window.location.href = '<?php echo esc_js(add_query_arg('apply_coupon', $coupon_code, $cart_url)); ?>';
-                    }
-                });
+            } catch (\Exception $e) {
+                // Error al procesar este cupón, continuar con el siguiente
+                continue;
             }
-            </script>
-            <?php
-            return ob_get_clean();
+        } // Fin del foreach
 
-        } catch (\Exception $e) {
-            return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
-                <p style="margin: 0; font-size: 16px;">Error al cargar el cupón: ' . esc_html($e->getMessage()) . '</p>
-            </div>';
+        // Script y estilos (solo una vez)
+        ?>
+        <script>
+        function madApplyCoupon(couponCode) {
+            // Mostrar mensaje de carga
+            var button = event.target;
+            var originalText = button.innerHTML;
+            button.innerHTML = '⏳ Aplicando...';
+            button.disabled = true;
+
+            // Aplicar cupón vía AJAX
+            jQuery.ajax({
+                url: wc_add_to_cart_params.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'woocommerce_apply_coupon',
+                    security: wc_checkout_params ? wc_checkout_params.apply_coupon_nonce : '',
+                    coupon_code: couponCode
+                },
+                success: function(response) {
+                    button.innerHTML = '✓ Cupón aplicado';
+                    button.style.background = 'rgba(76, 175, 80, 0.3)';
+                    button.style.color = '#4CAF50';
+
+                    // Redirigir al carrito después de 1 segundo
+                    setTimeout(function() {
+                        window.location.href = '<?php echo esc_js($cart_url); ?>';
+                    }, 1000);
+                },
+                error: function() {
+                    // Si falla AJAX, redirigir al carrito con el cupón en la URL
+                    window.location.href = '<?php echo esc_js($cart_url); ?>?apply_coupon=' + couponCode;
+                }
+            });
         }
+        </script>
+
+        <style>
+        /* Responsive para móviles */
+        @media (max-width: 480px) {
+            .mad-coupon-ticket > div:nth-child(2) {
+                flex-direction: column !important;
+            }
+            .mad-coupon-ticket > div:nth-child(2) > div:first-child {
+                border-right: none !important;
+                border-bottom: 2px dashed rgba(255, 255, 255, 0.3) !important;
+                padding: 25px 20px !important;
+            }
+            .mad-coupon-ticket > div:nth-child(2) > div:last-child {
+                padding: 25px 20px !important;
+            }
+        }
+        </style>
+        <?php
+
+        return ob_get_clean();
     }
 
     public function get_log_url() {

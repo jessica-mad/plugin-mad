@@ -66,7 +66,41 @@ class PricingEngine {
         
         $this->logger->info('PricingEngine inicializado');
     }
-    
+
+    /**
+     * Verificar si una regla está activa según fecha y hora (zona horaria Madrid)
+     *
+     * @param array $rule Regla con date_from, date_to, time_from, time_to
+     * @return bool True si la regla está activa en este momento
+     */
+    private function is_rule_active_by_schedule($rule) {
+        // Zona horaria de Madrid
+        $timezone = new \DateTimeZone('Europe/Madrid');
+        $now = new \DateTime('now', $timezone);
+
+        // Si no hay fecha de inicio, continuar
+        if (!empty($rule['date_from'])) {
+            $time_from = isset($rule['time_from']) && !empty($rule['time_from']) ? $rule['time_from'] : '00:00';
+            $datetime_from = \DateTime::createFromFormat('Y-m-d H:i', $rule['date_from'] . ' ' . $time_from, $timezone);
+
+            if ($datetime_from && $now < $datetime_from) {
+                return false;
+            }
+        }
+
+        // Si no hay fecha de fin, continuar
+        if (!empty($rule['date_to'])) {
+            $time_to = isset($rule['time_to']) && !empty($rule['time_to']) ? $rule['time_to'] : '23:59';
+            $datetime_to = \DateTime::createFromFormat('Y-m-d H:i', $rule['date_to'] . ' ' . $time_to, $timezone);
+
+            if ($datetime_to && $now > $datetime_to) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /**
      * Aplicar precio VIP
      */
@@ -156,11 +190,8 @@ class PricingEngine {
                 continue;
             }
 
-            // Verificar fechas
-            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
-                continue;
-            }
-            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
+            // Verificar programación (fecha y hora en zona horaria Madrid)
+            if (!$this->is_rule_active_by_schedule($rule)) {
                 continue;
             }
 
@@ -229,11 +260,8 @@ class PricingEngine {
                 continue;
             }
 
-            // Verificar fechas
-            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
-                continue;
-            }
-            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
+            // Verificar programación (fecha y hora en zona horaria Madrid)
+            if (!$this->is_rule_active_by_schedule($rule)) {
                 continue;
             }
 
@@ -352,11 +380,8 @@ class PricingEngine {
                 continue;
             }
 
-            // Verificar fechas
-            if (!empty($rule['date_from']) && strtotime($rule['date_from']) > time()) {
-                continue;
-            }
-            if (!empty($rule['date_to']) && strtotime($rule['date_to']) < time()) {
+            // Verificar programación (fecha y hora en zona horaria Madrid)
+            if (!$this->is_rule_active_by_schedule($rule)) {
                 continue;
             }
 

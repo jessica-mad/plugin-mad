@@ -5,6 +5,23 @@
 
 defined('ABSPATH') || exit;
 
+// Activar display de errores temporalmente para debug
+@ini_set('display_errors', '1');
+@ini_set('display_startup_errors', '1');
+@error_reporting(E_ALL);
+
+echo '<div class="wrap">';
+echo '<h1>🎫 Cupones Generados - Debug Mode</h1>';
+
+// Verificar que WooCommerce esté activo
+if (!function_exists('WC')) {
+    echo '<div class="notice notice-error"><p><strong>Error:</strong> WooCommerce debe estar activo para usar esta funcionalidad.</p></div>';
+    echo '</div>';
+    return;
+}
+
+echo '<div class="notice notice-info"><p>WooCommerce está activo ✓</p></div>';
+
 // Mensajes
 if (isset($_GET['regenerated'])) {
     echo '<div class="notice notice-success is-dismissible"><p><strong>✓ Cupón regenerado correctamente</strong></p></div>';
@@ -13,13 +30,18 @@ if (isset($_GET['deleted_coupon'])) {
     echo '<div class="notice notice-success is-dismissible"><p><strong>✓ Cupón eliminado correctamente</strong></p></div>';
 }
 
-// Obtener datos
-$rules = get_option('mad_private_shop_rules', []);
-$rule_coupons = get_option('mad_private_shop_rule_coupons', []);
+try {
+    echo '<div class="notice notice-info"><p>Intentando obtener datos...</p></div>';
 
-// DEBUG - comentar después de verificar
-// echo '<pre>Rules: '; print_r($rules); echo '</pre>';
-// echo '<pre>Rule Coupons: '; print_r($rule_coupons); echo '</pre>';
+    // Obtener datos
+    $rules = get_option('mad_private_shop_rules', []);
+    $rule_coupons = get_option('mad_private_shop_rule_coupons', []);
+
+    echo '<div class="notice notice-info"><p>Datos obtenidos: ' . count($rules) . ' reglas, ' . count($rule_coupons) . ' mappings de cupones</p></div>';
+
+// DEBUG - ACTIVADO TEMPORALMENTE
+echo '<pre>Rules: '; print_r($rules); echo '</pre>';
+echo '<pre>Rule Coupons: '; print_r($rule_coupons); echo '</pre>';
 
 // Filtros
 $filter_rule = isset($_GET['filter_rule']) ? sanitize_text_field($_GET['filter_rule']) : '';
@@ -107,17 +129,26 @@ if (!empty($rule_coupons) && is_array($rule_coupons)) {
 // Calcular estadísticas globales
 $stats = [
     'total_generated' => count($all_coupons),
-    'total_used' => count(array_filter($all_coupons, function($c) { return $c['usage_count'] > 0; })),
-    'total_value' => array_sum(array_column($all_coupons, 'total_value')),
-    'total_usage' => array_sum(array_column($all_coupons, 'usage_count')),
+    'total_used' => 0,
+    'total_value' => 0,
+    'total_usage' => 0,
 ];
+
+if (!empty($all_coupons)) {
+    $stats['total_used'] = count(array_filter($all_coupons, function($c) {
+        return isset($c['usage_count']) && $c['usage_count'] > 0;
+    }));
+
+    $total_values = array_column($all_coupons, 'total_value');
+    $stats['total_value'] = !empty($total_values) ? array_sum($total_values) : 0;
+
+    $usage_counts = array_column($all_coupons, 'usage_count');
+    $stats['total_usage'] = !empty($usage_counts) ? array_sum($usage_counts) : 0;
+}
+
+echo '<div class="notice notice-success"><p>Estadísticas calculadas correctamente</p></div>';
 ?>
 
-<div class="wrap">
-    <h1>
-        🎫 Cupones Generados
-    </h1>
-    
     <!-- Tabs de navegación -->
     <nav class="nav-tab-wrapper" style="margin: 20px 0;">
         <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>" 
@@ -162,7 +193,108 @@ $stats = [
             </div>
         </div>
     </div>
-    
+
+    <?php if (!empty($all_coupons)): ?>
+        <!-- Gráfica de Ingresos por Regla -->
+        <?php
+        // Preparar datos para la gráfica
+        $chart_data = [];
+        $chart_colors = ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a', '#30cfd0', '#a8edea', '#ff6e7f'];
+        $color_index = 0;
+
+        foreach ($all_coupons as $coupon) {
+            $rule_id = $coupon['rule_id'];
+            if (!isset($chart_data[$rule_id])) {
+                $chart_data[$rule_id] = [
+                    'name' => $coupon['rule_name'],
+                    'value' => 0,
+                    'count' => 0,
+                    'color' => $chart_colors[$color_index % count($chart_colors)]
+                ];
+                $color_index++;
+            }
+            $chart_data[$rule_id]['value'] += $coupon['total_value'];
+            $chart_data[$rule_id]['count']++;
+        }
+
+        // Ordenar por valor descendente
+        usort($chart_data, function($a, $b) {
+            return $b['value'] - $a['value'];
+        });
+
+        // Calcular valor máximo para la escala de la gráfica
+        $max_value = 0;
+        if (!empty($chart_data)) {
+            $values = array_column($chart_data, 'value');
+            $max_value = !empty($values) ? max($values) : 0;
+        }
+        ?>
+
+        <div class="card" style="max-width: 100%; margin-top: 20px;">
+            <h2 style="padding: 15px; margin: 0; border-bottom: 1px solid #ddd;">📈 Ingresos Generados por Regla</h2>
+            <div style="padding: 30px;">
+                <?php if (!empty($chart_data) && $max_value > 0): ?>
+                    <div style="display: flex; flex-direction: column; gap: 20px;">
+                        <?php foreach ($chart_data as $data):
+                            $percentage = ($data['value'] / $max_value) * 100;
+                        ?>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <!-- Nombre de la regla -->
+                                <div style="min-width: 200px; max-width: 200px;">
+                                    <div style="font-weight: 600; font-size: 14px; margin-bottom: 3px;">
+                                        <?php echo esc_html($data['name']); ?>
+                                    </div>
+                                    <div style="font-size: 11px; color: #666;">
+                                        <?php echo $data['count']; ?> cupón<?php echo $data['count'] > 1 ? 'es' : ''; ?>
+                                    </div>
+                                </div>
+
+                                <!-- Barra de progreso -->
+                                <div style="flex: 1; position: relative;">
+                                    <div style="
+                                        height: 40px;
+                                        background: #f0f0f0;
+                                        border-radius: 8px;
+                                        overflow: hidden;
+                                        position: relative;
+                                    ">
+                                        <div style="
+                                            width: <?php echo $percentage; ?>%;
+                                            height: 100%;
+                                            background: linear-gradient(90deg, <?php echo $data['color']; ?> 0%, <?php echo $data['color']; ?>dd 100%);
+                                            transition: width 0.6s ease;
+                                            display: flex;
+                                            align-items: center;
+                                            padding: 0 15px;
+                                            position: relative;
+                                        ">
+                                            <?php if ($percentage > 30): ?>
+                                                <span style="color: white; font-weight: 600; font-size: 14px; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
+                                                    <?php echo wc_price($data['value']); ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <?php if ($percentage <= 30): ?>
+                                        <div style="position: absolute; left: calc(<?php echo $percentage; ?>% + 10px); top: 50%; transform: translateY(-50%); font-weight: 600; font-size: 14px; color: #333;">
+                                            <?php echo wc_price($data['value']); ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <div style="text-align: center; padding: 40px; color: #666;">
+                        <div style="font-size: 48px; margin-bottom: 15px;">📊</div>
+                        <p>No hay datos de ingresos todavía</p>
+                        <p style="font-size: 13px; color: #999;">Los ingresos aparecerán cuando los usuarios realicen compras usando sus cupones</p>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    <?php endif; ?>
+
     <?php if (empty($all_coupons)): ?>
         <!-- Estado vacío -->
         <div class="card" style="max-width: 100%; margin-top: 20px; text-align: center; padding: 60px 20px;">
@@ -408,7 +540,20 @@ $stats = [
         </div>
         
     <?php endif; ?>
-</div>
+
+<?php
+} catch (Exception $e) {
+    // Mostrar error de forma amigable
+    echo '<div class="notice notice-error">';
+    echo '<p><strong>Error al cargar la página de cupones:</strong></p>';
+    echo '<p>' . esc_html($e->getMessage()) . '</p>';
+    echo '<p><small>Archivo: ' . esc_html($e->getFile()) . ' (Línea ' . $e->getLine() . ')</small></p>';
+    echo '<pre>Stack trace: ' . esc_html($e->getTraceAsString()) . '</pre>';
+    echo '</div>';
+}
+?>
+
+</div><!-- .wrap -->
 
 <style>
 .button-link-delete {

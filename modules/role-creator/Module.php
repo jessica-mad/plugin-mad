@@ -158,6 +158,12 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         check_admin_referer('mads_role_creator_import', 'mads_role_creator_nonce');
 
         $selected_role = isset($_POST['mads_role_creator_role']) ? sanitize_key(wp_unslash($_POST['mads_role_creator_role'])) : '';
+        $import_mode = isset($_POST['mads_role_creator_mode']) ? sanitize_key(wp_unslash($_POST['mads_role_creator_mode'])) : 'sync';
+
+        // Validar modo de importación
+        if (!in_array($import_mode, ['sync', 'create_only', 'update_only'])) {
+            $import_mode = 'sync';
+        }
 
         if (! $selected_role) {
             $this->add_notice('error', __('Debes seleccionar un rol para asignar a los contactos importados.', 'mad-suite'));
@@ -187,13 +193,21 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             return $this->redirect_back();
         }
 
-        $sync = ContactManager::instance()->sync_contacts($result, $selected_role);
+        $sync = ContactManager::instance()->sync_contacts($result, $selected_role, $import_mode);
 
-        $message = sprintf(
-            __('Contactos creados: %1$d. Contactos actualizados: %2$d.', 'mad-suite'),
-            (int) $sync['created'],
-            (int) $sync['updated']
-        );
+        // Construir mensaje según los resultados
+        $message_parts = [];
+        if ($sync['created'] > 0) {
+            $message_parts[] = sprintf(__('Creados: %d', 'mad-suite'), (int) $sync['created']);
+        }
+        if ($sync['updated'] > 0) {
+            $message_parts[] = sprintf(__('Actualizados: %d', 'mad-suite'), (int) $sync['updated']);
+        }
+        if ($sync['skipped'] > 0) {
+            $message_parts[] = sprintf(__('Saltados: %d', 'mad-suite'), (int) $sync['skipped']);
+        }
+
+        $message = __('Importación completada. ', 'mad-suite') . implode(', ', $message_parts) . '.';
 
         $this->add_notice('updated', $message);
 
