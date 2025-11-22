@@ -1093,126 +1093,195 @@ class Module {
             // URL del carrito
             $cart_url = wc_get_cart_url();
 
-            // Generar HTML del cupón
+            // Verificar si el cupón ha expirado
+            $is_expired = false;
+            if ($date_expires) {
+                $is_expired = $date_expires->getTimestamp() < time();
+            }
+
+            // Generar HTML del cupón tipo ticket
             ob_start();
             ?>
-            <div class="mad-coupon-box" style="
-                max-width: 600px;
-                margin: 0 auto;
-                border: 3px solid #000;
-                background: #fff;
-                color: #000;
-                font-family: inherit;
+            <div class="mad-coupon-ticket" style="
+                max-width: 500px;
+                margin: 20px auto;
+                background: #000;
+                color: #fff;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                border-radius: 8px;
+                overflow: hidden;
             ">
-                <!-- Header -->
-                <div class="mad-coupon-header" style="
-                    background: #000;
-                    color: #fff;
-                    padding: 20px;
-                    text-align: center;
+                <!-- Contenedor de 2 columnas -->
+                <div style="
+                    display: flex;
+                    min-height: 180px;
                 ">
-                    <h3 style="margin: 0 0 5px 0; font-size: 24px; font-weight: bold;">TU CUPÓN EXCLUSIVO</h3>
-                    <p style="margin: 0; font-size: 14px; opacity: 0.9;">Private Store Member</p>
-                </div>
-
-                <!-- Código del cupón -->
-                <div class="mad-coupon-code" style="
-                    padding: 30px 20px;
-                    text-align: center;
-                    background: #f5f5f5;
-                    border-bottom: 2px dashed #000;
-                ">
-                    <p style="margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Código del Cupón</p>
+                    <!-- Columna 1: Descuento -->
                     <div style="
-                        font-family: 'Courier New', monospace;
-                        font-size: 32px;
-                        font-weight: bold;
-                        letter-spacing: 3px;
-                        padding: 15px;
-                        background: #fff;
-                        border: 2px solid #000;
-                        display: inline-block;
-                    "><?php echo esc_html($coupon_code); ?></div>
-                </div>
-
-                <!-- Beneficios -->
-                <div class="mad-coupon-benefits" style="padding: 30px 20px; text-align: center;">
-                    <div style="margin-bottom: 20px;">
-                        <p style="margin: 0 0 5px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #666;">Tu Descuento</p>
-                        <p style="margin: 0; font-size: 36px; font-weight: bold;"><?php echo esc_html($discount_text); ?></p>
-                    </div>
-
-                    <!-- Información adicional -->
-                    <div style="
-                        display: grid;
-                        grid-template-columns: 1fr 1fr;
-                        gap: 20px;
-                        margin-top: 25px;
-                        padding-top: 25px;
-                        border-top: 1px solid #ddd;
+                        flex: 1;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        padding: 30px 20px;
+                        border-right: 2px dashed rgba(255, 255, 255, 0.3);
                     ">
-                        <div>
-                            <p style="margin: 0 0 5px 0; font-size: 12px; text-transform: uppercase; color: #666;">Válido desde</p>
-                            <p style="margin: 0; font-size: 16px; font-weight: bold;"><?php echo esc_html($date_from_text); ?></p>
+                        <div style="
+                            font-size: 64px;
+                            font-weight: 900;
+                            line-height: 1;
+                            margin-bottom: 8px;
+                            color: #fff;
+                        ">
+                            <?php
+                            if ($discount_type === 'percent') {
+                                echo esc_html($discount_amount) . '<span style="font-size: 48px;">%</span>';
+                            } else {
+                                echo '<span style="font-size: 36px;">' . wp_strip_all_tags(wc_price($discount_amount, ['currency' => 'EUR'])) . '</span>';
+                            }
+                            ?>
                         </div>
-                        <div>
-                            <p style="margin: 0 0 5px 0; font-size: 12px; text-transform: uppercase; color: #666;">Válido hasta</p>
-                            <p style="margin: 0; font-size: 16px; font-weight: bold;"><?php echo esc_html($date_expires_text); ?></p>
+                        <div style="
+                            font-size: 13px;
+                            text-transform: uppercase;
+                            letter-spacing: 1px;
+                            color: rgba(255, 255, 255, 0.7);
+                            font-weight: 600;
+                        ">
+                            descuento
                         </div>
                     </div>
 
-                    <?php if ($days_remaining !== null && $days_remaining > 0 && $days_remaining <= 7): ?>
+                    <!-- Columna 2: Información del cupón -->
                     <div style="
-                        margin-top: 20px;
-                        padding: 10px;
-                        background: #000;
-                        color: #fff;
-                        border-radius: 4px;
+                        flex: 1.3;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        padding: 30px 25px;
                     ">
-                        <p style="margin: 0; font-size: 13px;">⏰ ¡Quedan solo <?php echo $days_remaining; ?> días para usar este cupón!</p>
-                    </div>
-                    <?php endif; ?>
+                        <!-- Código del cupón -->
+                        <div style="margin-bottom: 18px;">
+                            <div style="
+                                font-size: 11px;
+                                text-transform: uppercase;
+                                letter-spacing: 1px;
+                                color: rgba(255, 255, 255, 0.6);
+                                margin-bottom: 6px;
+                                font-weight: 600;
+                            ">Tu cupón</div>
+                            <div style="
+                                font-family: 'Courier New', monospace;
+                                font-size: 18px;
+                                font-weight: bold;
+                                letter-spacing: 1px;
+                                color: #fff;
+                            "><?php echo esc_html($coupon_code); ?></div>
+                        </div>
 
-                    <div style="margin-top: 15px;">
-                        <p style="margin: 0; font-size: 13px; color: #666;"><?php echo esc_html($uses_text); ?></p>
+                        <!-- Fechas de validez -->
+                        <div style="
+                            font-size: 12px;
+                            line-height: 1.6;
+                            color: rgba(255, 255, 255, 0.85);
+                        ">
+                            <div style="margin-bottom: 4px;">
+                                <span style="color: rgba(255, 255, 255, 0.6);">Válido desde:</span>
+                                <strong><?php echo esc_html($date_from_text); ?></strong>
+                            </div>
+                            <div>
+                                <span style="color: rgba(255, 255, 255, 0.6);">Hasta:</span>
+                                <strong style="<?php echo $is_expired ? 'color: #ff4444; font-weight: 700;' : ''; ?>">
+                                    <?php echo esc_html($date_expires_text); ?>
+                                </strong>
+                                <?php if ($is_expired): ?>
+                                    <span style="
+                                        display: inline-block;
+                                        margin-left: 6px;
+                                        padding: 2px 6px;
+                                        background: #ff4444;
+                                        color: #fff;
+                                        font-size: 10px;
+                                        font-weight: 700;
+                                        border-radius: 3px;
+                                        text-transform: uppercase;
+                                    ">EXPIRADO</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+
+                        <?php if (!$is_expired && $days_remaining !== null && $days_remaining > 0 && $days_remaining <= 7): ?>
+                        <!-- Alerta de días restantes -->
+                        <div style="
+                            margin-top: 12px;
+                            padding: 8px 10px;
+                            background: rgba(255, 255, 255, 0.1);
+                            border-left: 3px solid #ffd700;
+                            font-size: 11px;
+                            color: #ffd700;
+                            font-weight: 600;
+                        ">
+                            ⏰ ¡Solo quedan <?php echo $days_remaining; ?> días!
+                        </div>
+                        <?php endif; ?>
                     </div>
                 </div>
 
-                <!-- Botón de acción -->
-                <div class="mad-coupon-action" style="padding: 0 20px 30px;">
+                <?php if (!$is_expired): ?>
+                <!-- Botón de aplicar cupón -->
+                <div style="
+                    padding: 0;
+                    border-top: 1px solid rgba(255, 255, 255, 0.1);
+                ">
                     <button
                         onclick="madApplyCoupon('<?php echo esc_js($coupon_code); ?>')"
                         style="
                             width: 100%;
-                            padding: 18px;
-                            background: #000;
+                            padding: 16px;
+                            background: rgba(255, 255, 255, 0.1);
                             color: #fff;
                             border: none;
-                            font-size: 16px;
-                            font-weight: bold;
+                            font-size: 14px;
+                            font-weight: 700;
                             text-transform: uppercase;
                             letter-spacing: 1px;
                             cursor: pointer;
                             transition: all 0.3s ease;
                         "
-                        onmouseover="this.style.background='#333'"
-                        onmouseout="this.style.background='#000'"
+                        onmouseover="this.style.background='rgba(255, 255, 255, 0.2)'"
+                        onmouseout="this.style.background='rgba(255, 255, 255, 0.1)'"
                     >
-                        Aplicar a mi Próxima Compra →
+                        Aplicar cupón →
                     </button>
                 </div>
-
-                <!-- Footer info -->
+                <?php else: ?>
+                <!-- Mensaje de expirado -->
                 <div style="
-                    padding: 15px 20px;
-                    background: #f5f5f5;
+                    padding: 16px;
+                    background: rgba(255, 68, 68, 0.2);
+                    border-top: 1px solid rgba(255, 68, 68, 0.3);
                     text-align: center;
-                    font-size: 12px;
-                    color: #666;
-                    border-top: 1px solid #ddd;
+                    font-size: 13px;
+                    color: #ff8888;
+                    font-weight: 600;
                 ">
-                    <p style="margin: 0;">El cupón se aplicará automáticamente en el carrito</p>
+                    Este cupón ha expirado y ya no se puede utilizar
                 </div>
+                <?php endif; ?>
+
+                <!-- Info de usos (solo si no está expirado) -->
+                <?php if (!$is_expired): ?>
+                <div style="
+                    padding: 10px 20px;
+                    background: rgba(0, 0, 0, 0.3);
+                    text-align: center;
+                    font-size: 11px;
+                    color: rgba(255, 255, 255, 0.5);
+                ">
+                    <?php echo esc_html($uses_text); ?>
+                </div>
+                <?php endif; ?>
             </div>
 
             <script>
@@ -1220,7 +1289,7 @@ class Module {
                 // Mostrar mensaje de carga
                 var button = event.target;
                 var originalText = button.innerHTML;
-                button.innerHTML = 'Aplicando...';
+                button.innerHTML = '⏳ Aplicando...';
                 button.disabled = true;
 
                 // Aplicar cupón vía AJAX
@@ -1233,8 +1302,9 @@ class Module {
                         coupon_code: couponCode
                     },
                     success: function(response) {
-                        button.innerHTML = '✓ Cupón Aplicado';
-                        button.style.background = '#4CAF50';
+                        button.innerHTML = '✓ Cupón aplicado';
+                        button.style.background = 'rgba(76, 175, 80, 0.3)';
+                        button.style.color = '#4CAF50';
 
                         // Redirigir al carrito después de 1 segundo
                         setTimeout(function() {
@@ -1248,6 +1318,23 @@ class Module {
                 });
             }
             </script>
+
+            <style>
+            /* Responsive para móviles */
+            @media (max-width: 480px) {
+                .mad-coupon-ticket > div:first-child {
+                    flex-direction: column !important;
+                }
+                .mad-coupon-ticket > div:first-child > div:first-child {
+                    border-right: none !important;
+                    border-bottom: 2px dashed rgba(255, 255, 255, 0.3) !important;
+                    padding: 25px 20px !important;
+                }
+                .mad-coupon-ticket > div:first-child > div:last-child {
+                    padding: 25px 20px !important;
+                }
+            }
+            </style>
             <?php
             return ob_get_clean();
 
