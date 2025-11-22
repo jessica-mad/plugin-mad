@@ -23,13 +23,15 @@ class ContactManager
      *
      * @param array<int, array> $rows
      * @param string            $role
-     * @return array{created:int,updated:int,errors:array}
+     * @param string            $mode Modo: 'sync' (crear+actualizar), 'create_only' (solo crear), 'update_only' (solo actualizar)
+     * @return array{created:int,updated:int,skipped:int,errors:array}
      */
-    public function sync_contacts(array $rows, $role)
+    public function sync_contacts(array $rows, $role, $mode = 'sync')
     {
         $results = [
             'created' => 0,
             'updated' => 0,
+            'skipped' => 0,
             'errors'  => [],
         ];
 
@@ -40,6 +42,14 @@ class ContactManager
             $existing_user = get_user_by('email', $email);
 
             if ($existing_user) {
+                // Usuario existente - verificar si debemos actualizarlo según el modo
+                if ($mode === 'create_only') {
+                    // Modo "solo crear" - saltar usuarios existentes
+                    $results['skipped']++;
+                    continue;
+                }
+
+                // Modo "sync" o "update_only" - actualizar usuario
                 $update = [
                     'ID'         => $existing_user->ID,
                     'user_email' => $email,
@@ -63,6 +73,14 @@ class ContactManager
                 $results['updated']++;
                 $this->maybe_update_meta($existing_user->ID, $row);
             } else {
+                // Usuario NO existente - verificar si debemos crearlo según el modo
+                if ($mode === 'update_only') {
+                    // Modo "solo actualizar" - saltar usuarios nuevos
+                    $results['skipped']++;
+                    continue;
+                }
+
+                // Modo "sync" o "create_only" - crear usuario nuevo
                 $user_login = $row['user_login'];
                 if (! $user_login) {
                     $user_login = sanitize_user(current(explode('@', $email)) ?: $email, true);

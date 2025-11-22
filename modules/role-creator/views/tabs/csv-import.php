@@ -36,14 +36,22 @@ if (! defined('ABSPATH')) {
                         <?php endforeach; ?>
                     </select>
 
+                    <label for="mad-contact-importer-mode" class="mad-role-creator__label">
+                        <?php esc_html_e('Modo de importación', 'mad-suite'); ?>
+                    </label>
+                    <select id="mad-contact-importer-mode" name="mads_role_creator_mode" class="regular-text" required>
+                        <option value="sync"><?php esc_html_e('Crear nuevos y actualizar existentes', 'mad-suite'); ?></option>
+                        <option value="create_only"><?php esc_html_e('Solo crear nuevos (saltar existentes)', 'mad-suite'); ?></option>
+                        <option value="update_only"><?php esc_html_e('Solo actualizar existentes (no crear nuevos)', 'mad-suite'); ?></option>
+                    </select>
+                    <p class="description">
+                        <?php esc_html_e('Determina cómo se procesarán los contactos basándose en si el email ya existe en el sistema.', 'mad-suite'); ?>
+                    </p>
+
                     <label for="mad-contact-importer-file" class="mad-role-creator__label">
                         <?php esc_html_e('Selecciona el archivo CSV', 'mad-suite'); ?>
                     </label>
                     <input type="file" id="mad-contact-importer-file" name="mads_role_creator_csv" accept=".csv" class="regular-text" required />
-
-                    <p class="description">
-                        <?php esc_html_e('Los contactos existentes se actualizarán por email; los nuevos se crearán automáticamente.', 'mad-suite'); ?>
-                    </p>
 
                     <?php submit_button(__('Importar contactos', 'mad-suite')); ?>
                 </form>
@@ -80,10 +88,19 @@ if (! defined('ABSPATH')) {
                 <ul style="line-height: 1.8;">
                     <li><strong><?php esc_html_e('Columna obligatoria:', 'mad-suite'); ?></strong> <?php esc_html_e('email', 'mad-suite'); ?></li>
                     <li><strong><?php esc_html_e('Columnas opcionales:', 'mad-suite'); ?></strong> first_name, last_name, display_name, user_login, user_pass</li>
-                    <li><?php esc_html_e('Los usuarios se identifican por email. Si el email ya existe, el usuario se actualizará.', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('Los usuarios se identifican por email (dato de referencia único).', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Si no se especifica user_login, se generará automáticamente desde el email.', 'mad-suite'); ?></li>
                     <li><?php esc_html_e('Si no se especifica user_pass, se generará una contraseña aleatoria.', 'mad-suite'); ?></li>
-                    <li><?php esc_html_e('El rol seleccionado se asignará a todos los usuarios importados/actualizados.', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('El rol seleccionado se asignará a todos los usuarios procesados.', 'mad-suite'); ?></li>
+                </ul>
+            </div>
+
+            <div class="card" style="margin-top: 20px;">
+                <h3><?php esc_html_e('📋 Modos de Importación', 'mad-suite'); ?></h3>
+                <ul style="line-height: 1.8;">
+                    <li><strong><?php esc_html_e('Crear y actualizar:', 'mad-suite'); ?></strong> <?php esc_html_e('Si el email existe, actualiza el usuario. Si no existe, lo crea.', 'mad-suite'); ?></li>
+                    <li><strong><?php esc_html_e('Solo crear:', 'mad-suite'); ?></strong> <?php esc_html_e('Solo crea usuarios nuevos. Los emails existentes se saltan.', 'mad-suite'); ?></li>
+                    <li><strong><?php esc_html_e('Solo actualizar:', 'mad-suite'); ?></strong> <?php esc_html_e('Solo actualiza usuarios existentes. Los emails nuevos se saltan.', 'mad-suite'); ?></li>
                 </ul>
             </div>
 
