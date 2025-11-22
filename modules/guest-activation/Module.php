@@ -67,6 +67,10 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
         add_action('wp_ajax_mad_find_previous_orders', [$this, 'ajax_find_previous_orders']);
 
+        // Mostrar pedidos en perfil de usuario
+        add_action('show_user_profile', [$this, 'display_user_orders_in_profile']);
+        add_action('edit_user_profile', [$this, 'display_user_orders_in_profile']);
+
         // Cargar estilos y scripts
         add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_scripts']);
     }
@@ -668,6 +672,12 @@ return new class($core ?? null) implements MAD_Suite_Module {
         foreach ($guest_orders as $order_id) {
             $order = wc_get_order($order_id);
             if ($order) {
+                // Guardar metadata indicando que fue un pedido de invitado
+                $order->update_meta_data('_original_customer_id', 0);
+                $order->update_meta_data('_was_guest_order', 'yes');
+                $order->update_meta_data('_assigned_date', current_time('mysql'));
+
+                // Asignar al usuario
                 $order->set_customer_id($user_id);
                 $order->save();
                 $count++;
@@ -715,6 +725,144 @@ return new class($core ?? null) implements MAD_Suite_Module {
         }
 
         return $settings[$key . '_es'] ?? '';
+    }
+
+    /**
+     * Mostrar pedidos en perfil de usuario
+     */
+    public function display_user_orders_in_profile($user) {
+        // Solo mostrar si WooCommerce está activo
+        if (!class_exists('WooCommerce')) {
+            return;
+        }
+
+        // Solo mostrar si el usuario actual tiene permisos
+        if (!current_user_can('edit_users')) {
+            return;
+        }
+
+        $user_id = $user->ID;
+        $user_email = $user->user_email;
+
+        // Obtener todos los pedidos del usuario
+        $orders_data = $this->get_user_orders_with_metadata($user_id, $user_email);
+
+        if (empty($orders_data)) {
+            return;
+        }
+
+        // Renderizar vista
+        $this->render_view('user-orders-table', [
+            'user' => $user,
+            'orders_data' => $orders_data,
+            'total_orders' => count($orders_data),
+        ]);
+    }
+
+    /**
+     * Obtener pedidos del usuario con metadatos
+     */
+    private function get_user_orders_with_metadata($user_id, $user_email) {
+        $orders_data = [];
+
+        // Obtener todos los pedidos del usuario por ID
+        $args = [
+            'customer_id' => $user_id,
+            'limit' => -1,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ];
+
+        $orders = wc_get_orders($args);
+
+        foreach ($orders as $order) {
+            $order_data = $this->extract_order_data($order);
+            $order_data['was_guest'] = $this->was_guest_order($order, $user_id);
+            $orders_data[] = $order_data;
+        }
+
+        // También buscar pedidos que tengan el mismo email pero sin customer_id (fueron de invitado y no se asignaron)
+        $guest_args = [
+            'billing_email' => $user_email,
+            'customer_id' => 0,
+            'limit' => -1,
+            'orderby' => 'date',
+            'order' => 'DESC',
+        ];
+
+        $guest_orders = wc_get_orders($guest_args);
+
+        foreach ($guest_orders as $order) {
+            $order_data = $this->extract_order_data($order);
+            $order_data['was_guest'] = true;
+            $order_data['not_assigned'] = true;
+            $orders_data[] = $order_data;
+        }
+
+        // Ordenar por fecha descendente
+        usort($orders_data, function($a, $b) {
+            return strtotime($b['date']) - strtotime($a['date']);
+        });
+
+        return $orders_data;
+    }
+
+    /**
+     * Extraer datos relevantes de un pedido
+     */
+    private function extract_order_data($order) {
+        return [
+            'id' => $order->get_id(),
+            'number' => $order->get_order_number(),
+            'date' => $order->get_date_created()->date('Y-m-d H:i:s'),
+            'status' => $order->get_status(),
+            'status_name' => wc_get_order_status_name($order->get_status()),
+            'total' => $order->get_total(),
+            'currency' => $order->get_currency(),
+            'items_count' => $order->get_item_count(),
+            'edit_url' => get_edit_post_link($order->get_id()),
+            'customer_id' => $order->get_customer_id(),
+        ];
+    }
+
+    /**
+     * Verificar si un pedido fue originalmente de invitado
+     */
+    private function was_guest_order($order, $current_user_id) {
+        // Si el pedido actualmente no tiene customer_id, es de invitado
+        if ($order->get_customer_id() == 0) {
+            return true;
+        }
+
+        // Verificar metadata específica
+        $was_guest = $order->get_meta('_was_guest_order', true);
+        if ($was_guest === 'yes') {
+            return true;
+        }
+
+        // Si el customer_id es diferente al usuario actual, podría ser que fue reasignado
+        // Verificar si hay metadata que indique que fue de invitado
+        $original_customer_id = $order->get_meta('_original_customer_id', true);
+
+        // Si existe metadata y era 0, fue de invitado
+        if ($original_customer_id !== '' && $original_customer_id == 0) {
+            return true;
+        }
+
+        // Si el pedido tiene customer_id pero queremos marcar los que fueron de invitado,
+        // verificamos la fecha de creación del usuario vs la fecha del pedido
+        $user = get_user_by('id', $current_user_id);
+        if ($user) {
+            $user_registered = strtotime($user->user_registered);
+            $order_date = $order->get_date_created()->getTimestamp();
+
+            // Si el pedido es anterior al registro del usuario, probablemente fue de invitado
+            if ($order_date < $user_registered) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
