@@ -1,0 +1,107 @@
+/**
+ * Estilos de administración para Product Notes
+ */
+
+/* Productos excluidos */
+.madpn-excluded-products {
+    max-width: 600px;
+}
+
+#madpn_product_search {
+    margin-bottom: 10px;
+}
+
+.madpn-search-results {
+    display: none;
+    max-height: 300px;
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.madpn-search-result {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    border-bottom: 1px solid #f0f0f1;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.madpn-search-result:last-child {
+    border-bottom: none;
+}
+
+.madpn-search-result:hover {
+    background: #f6f7f7;
+}
+
+.madpn-search-result .product-title {
+    font-weight: 500;
+    color: #1d2327;
+}
+
+.madpn-search-result .product-sku {
+    color: #787c82;
+    font-size: 13px;
+}
+
+.madpn-search-results .no-results {
+    padding: 15px;
+    text-align: center;
+    color: #787c82;
+    margin: 0;
+}
+
+.madpn-excluded-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 10px 0;
+    min-height: 20px;
+}
+
+.madpn-excluded-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #f0f0f1;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.madpn-excluded-item .product-title {
+    font-weight: 500;
+    color: #1d2327;
+}
+
+.madpn-excluded-item .product-sku {
+    color: #787c82;
+    font-size: 12px;
+}
+
+.madpn-remove-product {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    color: #b32d2e;
+    font-size: 20px;
+    line-height: 1;
+    transition: color 0.2s;
+    margin-left: 4px;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.madpn-remove-product:hover {
+    color: #dc3232;
+}

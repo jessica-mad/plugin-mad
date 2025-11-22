@@ -105,6 +105,15 @@ return new class($core) implements MAD_Suite_Module {
       'madpn_main'
     );
 
+    // Exclusiones de productos
+    add_settings_field(
+      'madpn_excluded_products',
+      __('Productos excluidos', 'mad-suite'),
+      [$this, 'field_excluded_products_callback'],
+      $this->menu_slug(),
+      'madpn_main'
+    );
+
     // Autorender
     add_settings_field(
       'madpn_autorender',
@@ -113,6 +122,12 @@ return new class($core) implements MAD_Suite_Module {
       $this->menu_slug(),
       'madpn_main'
     );
+
+    // AJAX handler para buscar productos
+    add_action('wp_ajax_madpn_search_products', [$this, 'ajax_search_products']);
+
+    // Enqueue scripts admin
+    add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
   }
 
   public function render_settings_page() {
@@ -142,9 +157,10 @@ return new class($core) implements MAD_Suite_Module {
 
   private function get_settings() {
     $defaults = [
-      'default_cats'  => [], // term_ids product_cat
-      'default_tags'  => [], // term_ids product_tag
-      'autorender'    => 1,  // 1 = imprime antes del botón
+      'default_cats'       => [], // term_ids product_cat
+      'default_tags'       => [], // term_ids product_tag
+      'autorender'         => 1,  // 1 = imprime antes del botón
+      'excluded_products'  => [], // product_ids a excluir
     ];
     $option_key = MAD_Suite_Core::option_key( $this->slug );
     $opt = get_option( $option_key, [] );
@@ -173,6 +189,7 @@ return new class($core) implements MAD_Suite_Module {
 
   /**
    * Lógica final de "activado?":
+   * Primero verifica que el producto NO esté excluido.
    * Si ACF existe:
    *   - Si enable_note está activo en el producto => true
    *   - Si no, revisar si el producto cae en categorías/etiquetas por defecto => true/false
@@ -180,6 +197,13 @@ return new class($core) implements MAD_Suite_Module {
    *   - Depender solo de categorías/etiquetas por defecto (o permitir siempre con shortcode)
    */
   private function is_enabled_for_product( $product_id ) {
+    // Verificar si el producto está excluido
+    $settings = $this->get_settings();
+    $excluded = array_map('intval', (array)$settings['excluded_products']);
+    if ( in_array((int)$product_id, $excluded, true) ) {
+      return false;
+    }
+
     if ( $this->is_acf_active() ) {
       $acf_enable = (bool) get_field('enable_note', $product_id);
       if ( $acf_enable ) return true;
@@ -436,16 +460,140 @@ return new class($core) implements MAD_Suite_Module {
     echo '</div>';
   }
 
+  public function field_excluded_products_callback() {
+    $s = $this->get_settings();
+    $excluded = array_map('intval', (array)$s['excluded_products']);
+    $option_key = MAD_Suite_Core::option_key( $this->slug );
+
+    echo '<div class="madpn-excluded-products">';
+    echo '<input type="text" id="madpn_product_search" class="regular-text" placeholder="' . esc_attr__('Buscar productos para excluir...', 'mad-suite') . '" />';
+    echo '<div id="madpn_search_results" class="madpn-search-results"></div>';
+
+    echo '<div id="madpn_excluded_list" class="madpn-excluded-list">';
+    if ( ! empty($excluded) ) {
+      foreach ( $excluded as $product_id ) {
+        $product = wc_get_product($product_id);
+        if ( $product ) {
+          printf(
+            '<div class="madpn-excluded-item" data-product-id="%1$d">
+              <span class="product-title">%2$s</span>
+              <span class="product-sku">#%3$s</span>
+              <button type="button" class="madpn-remove-product">×</button>
+              <input type="hidden" name="%4$s[excluded_products][]" value="%1$d" />
+            </div>',
+            $product_id,
+            esc_html($product->get_name()),
+            $product->get_sku() ? esc_html($product->get_sku()) : $product_id,
+            esc_attr($option_key)
+          );
+        }
+      }
+    }
+    echo '</div>';
+
+    echo '<p class="description">' . esc_html__('Productos excluidos nunca mostrarán el campo de notas, incluso si pertenecen a las categorías/etiquetas configuradas.', 'mad-suite') . '</p>';
+    echo '</div>';
+  }
+
   public function field_autorender_callback() {
     $s = $this->get_settings();
     $option_key = MAD_Suite_Core::option_key( $this->slug );
-    
+
     printf(
       '<label><input type="checkbox" name="%1$s[autorender]" value="1" %2$s /> %3$s</label>',
       esc_attr($option_key),
       checked( (int)$s['autorender'], 1, false ),
       esc_html__('Imprimir el textarea automáticamente antes del botón "Añadir al carrito". (Si lo desmarcas, usa el shortcode)', 'mad-suite')
     );
+  }
+
+  /**
+   * AJAX: Buscar productos
+   */
+  public function ajax_search_products() {
+    check_ajax_referer('madpn_nonce', 'nonce');
+
+    if ( ! current_user_can('manage_options') ) {
+      wp_send_json_error(['message' => __('No tienes permisos.', 'mad-suite')]);
+    }
+
+    $search = sanitize_text_field($_POST['search'] ?? '');
+
+    if ( empty($search) ) {
+      wp_send_json_success(['products' => []]);
+    }
+
+    $args = [
+      'post_type'      => 'product',
+      'posts_per_page' => 20,
+      's'              => $search,
+      'post_status'    => 'publish',
+    ];
+
+    $query = new \WP_Query($args);
+    $products = [];
+
+    if ( $query->have_posts() ) {
+      while ( $query->have_posts() ) {
+        $query->the_post();
+        $product_id = get_the_ID();
+        $product = wc_get_product($product_id);
+
+        $products[] = [
+          'id'    => $product_id,
+          'title' => get_the_title(),
+          'sku'   => $product ? $product->get_sku() : '',
+        ];
+      }
+      wp_reset_postdata();
+    }
+
+    wp_send_json_success(['products' => $products]);
+  }
+
+  /**
+   * Enqueue admin scripts
+   */
+  public function enqueue_admin_scripts($hook) {
+    if ( strpos($hook, $this->menu_slug()) === false ) {
+      return;
+    }
+
+    wp_enqueue_style(
+      'madpn-admin',
+      plugin_dir_url(__FILE__) . 'assets/admin.css',
+      [],
+      '1.0.0'
+    );
+
+    wp_enqueue_script(
+      'madpn-admin',
+      plugin_dir_url(__FILE__) . 'assets/admin.js',
+      ['jquery'],
+      '1.0.0',
+      true
+    );
+
+    wp_localize_script('madpn-admin', 'madpnL10n', [
+      'ajaxUrl' => admin_url('admin-ajax.php'),
+      'nonce'   => wp_create_nonce('madpn_nonce'),
+    ]);
+  }
+
+  /**
+   * JavaScript para manejar la cascada de selección en categorías
+   */
+  private function render_cascade_script() {
+    ?>
+    <script>
+    (function($) {
+      $(document).ready(function() {
+        // No implementamos cascada automática por ahora
+        // El admin puede marcar manualmente las categorías que necesite
+      });
+    })(jQuery);
+    </script>
+    <?php
   }
 
 };
