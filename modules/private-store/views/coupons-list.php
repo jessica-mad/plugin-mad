@@ -162,7 +162,103 @@ $stats = [
             </div>
         </div>
     </div>
-    
+
+    <?php if (!empty($all_coupons)): ?>
+        <!-- Gráfica de Ingresos por Regla -->
+        <?php
+        // Preparar datos para la gráfica
+        $chart_data = [];
+        $chart_colors = ['#667eea', '#f093fb', '#4facfe', '#43e97b', '#fa709a', '#30cfd0', '#a8edea', '#ff6e7f'];
+        $color_index = 0;
+
+        foreach ($all_coupons as $coupon) {
+            $rule_id = $coupon['rule_id'];
+            if (!isset($chart_data[$rule_id])) {
+                $chart_data[$rule_id] = [
+                    'name' => $coupon['rule_name'],
+                    'value' => 0,
+                    'count' => 0,
+                    'color' => $chart_colors[$color_index % count($chart_colors)]
+                ];
+                $color_index++;
+            }
+            $chart_data[$rule_id]['value'] += $coupon['total_value'];
+            $chart_data[$rule_id]['count']++;
+        }
+
+        // Ordenar por valor descendente
+        usort($chart_data, function($a, $b) {
+            return $b['value'] - $a['value'];
+        });
+
+        $max_value = !empty($chart_data) ? max(array_column($chart_data, 'value')) : 1;
+        ?>
+
+        <div class="card" style="max-width: 100%; margin-top: 20px;">
+            <h2 style="padding: 15px; margin: 0; border-bottom: 1px solid #ddd;">📈 Ingresos Generados por Regla</h2>
+            <div style="padding: 30px;">
+                <?php if ($max_value > 0): ?>
+                    <div style="display: flex; flex-direction: column; gap: 20px;">
+                        <?php foreach ($chart_data as $data):
+                            $percentage = ($data['value'] / $max_value) * 100;
+                        ?>
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                <!-- Nombre de la regla -->
+                                <div style="min-width: 200px; max-width: 200px;">
+                                    <div style="font-weight: 600; font-size: 14px; margin-bottom: 3px;">
+                                        <?php echo esc_html($data['name']); ?>
+                                    </div>
+                                    <div style="font-size: 11px; color: #666;">
+                                        <?php echo $data['count']; ?> cupón<?php echo $data['count'] > 1 ? 'es' : ''; ?>
+                                    </div>
+                                </div>
+
+                                <!-- Barra de progreso -->
+                                <div style="flex: 1; position: relative;">
+                                    <div style="
+                                        height: 40px;
+                                        background: #f0f0f0;
+                                        border-radius: 8px;
+                                        overflow: hidden;
+                                        position: relative;
+                                    ">
+                                        <div style="
+                                            width: <?php echo $percentage; ?>%;
+                                            height: 100%;
+                                            background: linear-gradient(90deg, <?php echo $data['color']; ?> 0%, <?php echo $data['color']; ?>dd 100%);
+                                            transition: width 0.6s ease;
+                                            display: flex;
+                                            align-items: center;
+                                            padding: 0 15px;
+                                            position: relative;
+                                        ">
+                                            <?php if ($percentage > 30): ?>
+                                                <span style="color: white; font-weight: 600; font-size: 14px; text-shadow: 0 1px 2px rgba(0,0,0,0.2);">
+                                                    <?php echo wc_price($data['value']); ?>
+                                                </span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    <?php if ($percentage <= 30): ?>
+                                        <div style="position: absolute; left: calc(<?php echo $percentage; ?>% + 10px); top: 50%; transform: translateY(-50%); font-weight: 600; font-size: 14px; color: #333;">
+                                            <?php echo wc_price($data['value']); ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <div style="text-align: center; padding: 40px; color: #666;">
+                        <div style="font-size: 48px; margin-bottom: 15px;">📊</div>
+                        <p>No hay datos de ingresos todavía</p>
+                        <p style="font-size: 13px; color: #999;">Los ingresos aparecerán cuando los usuarios realicen compras usando sus cupones</p>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+    <?php endif; ?>
+
     <?php if (empty($all_coupons)): ?>
         <!-- Estado vacío -->
         <div class="card" style="max-width: 100%; margin-top: 20px; text-align: center; padding: 60px 20px;">
