@@ -516,17 +516,11 @@ return new class($core ?? null) implements MAD_Suite_Module {
     public function enqueue_admin_scripts($hook) {
         $is_settings_page = strpos($hook, $this->menu_slug()) !== false;
 
-        // Verificar si estamos en página de pedido
+        // Verificar si estamos en página de pedido usando get_current_screen()
         $is_order_page = false;
-        if ($hook === 'post.php' || $hook === 'post-new.php') {
-            global $post;
-            if ($post && get_post_type($post->ID) === 'shop_order') {
-                $is_order_page = true;
-            }
-        } elseif ($hook === 'edit.php') {
-            if (isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order') {
-                $is_order_page = true;
-            }
+        $screen = get_current_screen();
+        if ($screen && ($screen->id === 'shop_order' || $screen->post_type === 'shop_order')) {
+            $is_order_page = true;
         }
 
         if (!$is_settings_page && !$is_order_page) {
