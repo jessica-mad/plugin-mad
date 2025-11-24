@@ -1,0 +1,218 @@
+/**
+ * Estilos del módulo FedEx Returns - Admin
+ */
+
+.fedex-returns-metabox {
+    font-size: 13px;
+}
+
+.fedex-return-info {
+    background: #f9f9f9;
+    padding: 15px;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+}
+
+.fedex-return-info h4 {
+    margin-top: 0;
+    color: #0073aa;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+.fedex-return-info p {
+    margin: 12px 0;
+    line-height: 1.6;
+}
+
+.fedex-return-info code {
+    background: #fff;
+    padding: 4px 8px;
+    border-radius: 3px;
+    border: 1px solid #ddd;
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.fedex-status {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.fedex-status-draft {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
+.fedex-status-pending {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
+.fedex-status-in_transit {
+    background: #d1ecf1;
+    color: #0c5460;
+    border: 1px solid #bee5eb;
+}
+
+.fedex-status-delivered {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.fedex-status-cancelled {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+.fedex-return-actions {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #ddd;
+}
+
+.fedex-return-form {
+    padding: 10px 0;
+}
+
+.return-items-section,
+.return-details-section,
+.return-reason-section {
+    margin-bottom: 20px;
+}
+
+.return-items-section h4,
+.return-details-section h4,
+.return-reason-section h4 {
+    margin: 0 0 10px 0;
+    color: #23282d;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.return-items-section table {
+    margin-top: 10px;
+    border: 1px solid #ddd;
+}
+
+.return-items-section th {
+    background: #f5f5f5;
+    font-weight: 600;
+    text-align: left;
+}
+
+.return-items-section th,
+.return-items-section td {
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
+}
+
+.return-items-section tr:last-child td {
+    border-bottom: none;
+}
+
+.return-item-qty {
+    width: 60px !important;
+}
+
+.fedex-return-message {
+    padding: 12px;
+    border-radius: 4px;
+    margin-top: 15px;
+    font-size: 13px;
+}
+
+.fedex-return-message.success {
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+}
+
+.fedex-return-message.error {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+}
+
+/* Columna en lista de pedidos */
+.fedex-return-status {
+    display: block;
+    font-size: 12px;
+}
+
+.fedex-return-status strong {
+    display: block;
+    margin-bottom: 3px;
+}
+
+.fedex-return-status small {
+    color: #666;
+}
+
+/* Test de conexión */
+#test-connection-result {
+    padding: 10px;
+    border-radius: 4px;
+}
+
+#test-connection-result.success {
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+}
+
+#test-connection-result.error {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+}
+
+/* Visor de logs */
+#log-viewer {
+    margin-top: 20px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 15px;
+    background: #fff;
+}
+
+#log-viewer h3 {
+    margin-top: 0;
+    color: #23282d;
+}
+
+#log-viewer pre {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    padding: 15px;
+    overflow-x: auto;
+    max-height: 500px;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+#log-viewer code {
+    font-family: 'Courier New', Courier, monospace;
+}
+
+/* Botones */
+.button.loading {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+    .return-details-section input.small-text {
+        width: 80px;
+    }
+}
