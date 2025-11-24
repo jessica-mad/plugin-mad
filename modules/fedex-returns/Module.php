@@ -514,18 +514,22 @@ return new class($core ?? null) implements MAD_Suite_Module {
      * Cargar scripts y estilos del admin
      */
     public function enqueue_admin_scripts($hook) {
-        $valid_hooks = [
-            'post.php',
-            'post-new.php',
-            'edit.php',
-        ];
-
         $is_settings_page = strpos($hook, $this->menu_slug()) !== false;
-        $is_order_page = in_array($hook, $valid_hooks) &&
-                         isset($_GET['post_type']) &&
-                         $_GET['post_type'] === 'shop_order';
 
-        if (!$is_settings_page && !$is_order_page && $hook !== 'shop_order') {
+        // Verificar si estamos en página de pedido
+        $is_order_page = false;
+        if ($hook === 'post.php' || $hook === 'post-new.php') {
+            global $post;
+            if ($post && get_post_type($post->ID) === 'shop_order') {
+                $is_order_page = true;
+            }
+        } elseif ($hook === 'edit.php') {
+            if (isset($_GET['post_type']) && $_GET['post_type'] === 'shop_order') {
+                $is_order_page = true;
+            }
+        }
+
+        if (!$is_settings_page && !$is_order_page) {
             return;
         }
 
