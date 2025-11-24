@@ -119,8 +119,8 @@ class MAD_FedEx_Return_Manager {
         $settings = $this->get_module_settings();
 
         // Validar configuración del remitente
-        if (empty($settings['sender_name']) || empty($settings['sender_address_line1'])) {
-            return new WP_Error('missing_sender', __('Configuración del remitente incompleta.', 'mad-suite'));
+        if (empty($settings['sender_name']) || empty($settings['sender_address_line1']) || empty($settings['sender_phone'])) {
+            return new WP_Error('missing_sender', __('Configuración del remitente incompleta. Asegúrate de completar nombre, dirección y teléfono en MAD Plugins > FedEx Returns > Información del Remitente.', 'mad-suite'));
         }
 
         // Datos del remitente (donde se devolverán los productos - tu almacén)
