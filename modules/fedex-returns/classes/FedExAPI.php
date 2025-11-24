@@ -17,6 +17,7 @@ class MAD_FedEx_API {
     const ENDPOINT_SHIP = '/ship/v1/shipments';
     const ENDPOINT_TRACK = '/track/v1/trackingnumbers';
     const ENDPOINT_RATE = '/rate/v1/rates/quotes';
+    const ENDPOINT_UPLOAD_DOCS = '/document/v1/etds/upload';
 
     public function __construct($settings, $logger) {
         $this->settings = $settings;
@@ -189,16 +190,36 @@ class MAD_FedEx_API {
             ],
         ];
 
-        // Agregar documento de factura si existe
-        if (!empty($shipment_data['invoice_url'])) {
-            $payload['requestedShipment']['shippingDocumentSpecification'] = [
-                'shippingDocumentTypes' => ['COMMERCIAL_INVOICE'],
-                'commercialInvoiceDetail' => [
-                    'documentFormat' => [
-                        'imageType' => 'PDF',
-                        'stockType' => 'PAPER_LETTER',
-                    ],
-                ],
+        // Agregar ETD (Electronic Trade Documents) si hay document ID
+        if (!empty($shipment_data['doc_id'])) {
+            $payload['requestedShipment']['shipmentSpecialServices'] = [
+                'specialServiceTypes' => ['ELECTRONIC_TRADE_DOCUMENTS'],
+                'etdDetail' => [
+                    'attachedDocuments' => [
+                        [
+                            'documentId' => $shipment_data['doc_id'],
+                            'documentType' => 'COMMERCIAL_INVOICE'
+                        ]
+                    ]
+                ]
+            ];
+        }
+
+        // Agregar información del envío original si existe (para devoluciones)
+        if (!empty($shipment_data['original_tracking'])) {
+            if (!isset($payload['requestedShipment']['shipmentSpecialServices'])) {
+                $payload['requestedShipment']['shipmentSpecialServices'] = [
+                    'specialServiceTypes' => []
+                ];
+            }
+
+            // Agregar servicio de devolución
+            if (!in_array('RETURN_SHIPMENT', $payload['requestedShipment']['shipmentSpecialServices']['specialServiceTypes'])) {
+                $payload['requestedShipment']['shipmentSpecialServices']['specialServiceTypes'][] = 'RETURN_SHIPMENT';
+            }
+
+            $payload['requestedShipment']['shipmentSpecialServices']['returnShipmentDetail'] = [
+                'returnType' => 'PRINT_RETURN_LABEL'
             ];
         }
 
@@ -314,6 +335,90 @@ class MAD_FedEx_API {
         }
 
         return $rateReplyDetails;
+    }
+
+    /**
+     * Subir documento a FedEx (ETD - Electronic Trade Documents)
+     */
+    public function upload_document($file_path, $document_type = 'COMMERCIAL_INVOICE', $workflow = 'ETDPreShipment') {
+        if (!file_exists($file_path) || !is_readable($file_path)) {
+            return new WP_Error('file_not_found', __('Archivo no encontrado o no legible.', 'mad-suite'));
+        }
+
+        // Verificar tamaño del archivo (máximo 5MB)
+        $file_size = filesize($file_path);
+        $max_size = 5 * 1024 * 1024; // 5MB
+
+        if ($file_size > $max_size) {
+            return new WP_Error('file_too_large', sprintf(
+                __('El archivo es demasiado grande (%s). Máximo permitido: 5MB', 'mad-suite'),
+                size_format($file_size)
+            ));
+        }
+
+        // Leer y codificar el archivo en Base64
+        $file_content = file_get_contents($file_path);
+        if ($file_content === false) {
+            return new WP_Error('file_read_error', __('No se pudo leer el archivo.', 'mad-suite'));
+        }
+
+        $file_base64 = base64_encode($file_content);
+        $filename = basename($file_path);
+
+        // Preparar payload para FedEx
+        $payload = [
+            'workflowName' => $workflow,
+            'name' => pathinfo($filename, PATHINFO_FILENAME),
+            'contentType' => 'application/pdf',
+            'meta' => [
+                'imageType' => 'PDF',
+                'imageIndex' => 'IMAGE_1'
+            ],
+            'rules' => [
+                'workflowName' => $workflow,
+                'carrierCode' => 'FDXE'
+            ],
+            'document' => [
+                'name' => $filename,
+                'contentType' => 'application/pdf',
+                'content' => $file_base64
+            ],
+            'shipDocumentType' => $document_type
+        ];
+
+        $this->logger->log(sprintf(
+            'Subiendo documento a FedEx: %s (%s)',
+            $filename,
+            size_format($file_size)
+        ));
+
+        $response = $this->make_request(self::ENDPOINT_UPLOAD_DOCS, 'POST', $payload);
+
+        if (is_wp_error($response)) {
+            $this->logger->error('Error al subir documento a FedEx: ' . $response->get_error_message());
+            return $response;
+        }
+
+        // Extraer document ID de la respuesta
+        $output = $response['output'] ?? [];
+        $doc_id = $output['documentId'] ?? $output['docId'] ?? '';
+
+        if (empty($doc_id)) {
+            $this->logger->error('FedEx no devolvió document ID');
+            return new WP_Error('no_doc_id', __('FedEx no devolvió el ID del documento.', 'mad-suite'));
+        }
+
+        $this->logger->log(sprintf(
+            'Documento subido exitosamente a FedEx. Document ID: %s',
+            $doc_id
+        ));
+
+        return [
+            'success' => true,
+            'doc_id' => $doc_id,
+            'filename' => $filename,
+            'size' => $file_size,
+        ];
     }
 
     /**

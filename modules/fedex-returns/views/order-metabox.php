@@ -137,6 +137,35 @@ if (!defined('ABSPATH')) exit;
                 </p>
             </div>
 
+            <div class="original-shipment-section" style="margin-top: 15px;">
+                <h4><?php echo esc_html__('Información del Envío Original', 'mad-suite'); ?></h4>
+
+                <p>
+                    <label for="original-tracking-code">
+                        <?php echo esc_html__('Tracking Code (Envío Original):', 'mad-suite'); ?>
+                    </label>
+                    <input type="text" id="original-tracking-code" class="regular-text"
+                           placeholder="<?php echo esc_attr__('Ej: 123456789012', 'mad-suite'); ?>">
+                    <span class="description"><?php echo esc_html__('Número de tracking del envío original', 'mad-suite'); ?></span>
+                </p>
+
+                <p>
+                    <label for="original-dated">
+                        <?php echo esc_html__('Fecha del Envío Original:', 'mad-suite'); ?>
+                    </label>
+                    <input type="date" id="original-dated" class="regular-text">
+                </p>
+
+                <p>
+                    <label for="original-dua-number">
+                        <?php echo esc_html__('Número DUA:', 'mad-suite'); ?>
+                    </label>
+                    <input type="text" id="original-dua-number" class="regular-text"
+                           placeholder="<?php echo esc_attr__('Declaración Única Aduanera', 'mad-suite'); ?>">
+                    <span class="description"><?php echo esc_html__('Número de declaración aduanera (si aplica)', 'mad-suite'); ?></span>
+                </p>
+            </div>
+
             <?php if ($settings['require_return_reason']): ?>
                 <div class="return-reason-section" style="margin-top: 15px;">
                     <h4><?php echo esc_html__('Motivo de Devolución', 'mad-suite'); ?> <span style="color: red;">*</span></h4>
@@ -290,6 +319,13 @@ jQuery(document).ready(function($) {
             height: parseInt($('#return-height').val())
         };
 
+        // Obtener información del envío original
+        var originalShipment = {
+            tracking_code: $('#original-tracking-code').val().trim(),
+            dated: $('#original-dated').val(),
+            dua_number: $('#original-dua-number').val().trim()
+        };
+
         if (!confirm('<?php echo esc_js(__('¿Estás seguro de crear una devolución en FedEx?', 'mad-suite')); ?>')) {
             return;
         }
@@ -307,7 +343,8 @@ jQuery(document).ready(function($) {
                 return_items: JSON.stringify(returnItems),
                 return_reason: returnReason,
                 weight: weight,
-                dimensions: JSON.stringify(dimensions)
+                dimensions: JSON.stringify(dimensions),
+                original_shipment: JSON.stringify(originalShipment)
             },
             success: function(response) {
                 if (response.success) {

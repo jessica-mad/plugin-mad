@@ -321,6 +321,7 @@ return new class($core ?? null) implements MAD_Suite_Module {
         $return_reason = isset($_POST['return_reason']) ? sanitize_textarea_field($_POST['return_reason']) : '';
         $weight = isset($_POST['weight']) ? floatval($_POST['weight']) : 0;
         $dimensions = isset($_POST['dimensions']) ? json_decode(stripslashes($_POST['dimensions']), true) : [];
+        $original_shipment = isset($_POST['original_shipment']) ? json_decode(stripslashes($_POST['original_shipment']), true) : [];
 
         if (!$order_id) {
             wp_send_json_error(['message' => __('ID de pedido inválido.', 'mad-suite')]);
@@ -337,12 +338,12 @@ return new class($core ?? null) implements MAD_Suite_Module {
         }
 
         // Obtener factura existente si está habilitado
-        $invoice_url = '';
+        $invoice_path = '';
         $settings = $this->get_settings();
         if ($settings['attach_existing_invoice'] ?? true) {
             $invoice_result = $this->invoice_handler->create_return_invoice($order, $return_items, $return_reason);
             if (!is_wp_error($invoice_result)) {
-                $invoice_url = $invoice_result['url'];
+                $invoice_path = $invoice_result['path']; // Usar path en lugar de URL
             } else {
                 $this->logger->log(sprintf(
                     'No se encontró factura existente para pedido #%d: %s',
@@ -359,7 +360,8 @@ return new class($core ?? null) implements MAD_Suite_Module {
             $return_reason,
             $weight,
             $dimensions,
-            $invoice_url
+            $invoice_path,
+            $original_shipment
         );
 
         if (is_wp_error($result)) {
