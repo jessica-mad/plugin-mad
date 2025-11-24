@@ -137,7 +137,6 @@ return new class($core ?? null) implements MAD_Suite_Module {
             'fedex_api_key' => '',
             'fedex_api_secret' => '',
             'fedex_account_number' => '',
-            'fedex_meter_number' => '',
             'fedex_environment' => 'test', // test o production
 
             // Valores por defecto
@@ -194,9 +193,6 @@ return new class($core ?? null) implements MAD_Suite_Module {
         }
         if (isset($input['fedex_account_number'])) {
             $sanitized['fedex_account_number'] = sanitize_text_field($input['fedex_account_number']);
-        }
-        if (isset($input['fedex_meter_number'])) {
-            $sanitized['fedex_meter_number'] = sanitize_text_field($input['fedex_meter_number']);
         }
         if (isset($input['fedex_environment'])) {
             $sanitized['fedex_environment'] = in_array($input['fedex_environment'], ['test', 'production'])

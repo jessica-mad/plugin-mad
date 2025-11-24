@@ -25,12 +25,13 @@ Módulo de integración con FedEx para gestionar devoluciones de pedidos de WooC
 Ve a **MAD Plugins > FedEx Returns > Credenciales FedEx** y completa:
 
 - **Ambiente**: Selecciona Test (Sandbox) o Producción
-- **API Key**: Tu clave API de FedEx
-- **API Secret**: Tu secreto API de FedEx
+- **API Key**: Tu clave API de FedEx (Client ID)
+- **API Secret**: Tu secreto API de FedEx (Client Secret)
 - **Número de Cuenta**: Tu número de cuenta FedEx
-- **Meter Number**: Tu Meter Number de FedEx
 
 **Nota**: Para obtener credenciales, regístrate en [FedEx Developer Portal](https://developer.fedex.com/)
+
+**Importante**: Este módulo usa la **API REST v1 de FedEx** que solo requiere API Key y Secret. El Meter Number (usado en las APIs SOAP antiguas) **NO es necesario**.
 
 ### 2. Información del Remitente
 

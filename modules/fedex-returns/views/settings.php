@@ -155,18 +155,6 @@ $option_key = MAD_Suite_Core::option_key($module->slug());
                 </tr>
                 <tr>
                     <th scope="row">
-                        <label for="fedex_meter_number"><?php echo esc_html__('Meter Number', 'mad-suite'); ?></label>
-                    </th>
-                    <td>
-                        <input type="text" name="<?php echo esc_attr($option_key); ?>[fedex_meter_number]" id="fedex_meter_number"
-                               value="<?php echo esc_attr($settings['fedex_meter_number']); ?>" class="regular-text">
-                        <p class="description">
-                            <?php echo esc_html__('Tu Meter Number de FedEx.', 'mad-suite'); ?>
-                        </p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row">
                         <label><?php echo esc_html__('Probar Conexión', 'mad-suite'); ?></label>
                     </th>
                     <td>
