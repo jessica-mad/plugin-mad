@@ -70,8 +70,26 @@ class MAD_FedEx_API {
 
         if ($status_code !== 200) {
             $error_message = $body['errors'][0]['message'] ?? __('Error desconocido al autenticar con FedEx.', 'mad-suite');
-            $this->logger->error('Error de autenticación FedEx: ' . $error_message);
-            return new WP_Error('auth_failed', $error_message);
+            $error_code = $body['errors'][0]['code'] ?? 'UNKNOWN';
+
+            // Log detallado para debugging
+            $this->logger->error(sprintf(
+                'Error de autenticación FedEx [%d]: %s (Código: %s) - API Key: %s... - Ambiente: %s',
+                $status_code,
+                $error_message,
+                $error_code,
+                substr($api_key, 0, 8),
+                $this->settings['fedex_environment'] ?? 'test'
+            ));
+
+            // Log de toda la respuesta para debugging
+            $this->logger->error('Respuesta completa de FedEx: ' . wp_json_encode($body));
+
+            return new WP_Error('auth_failed', sprintf(
+                __('Error de autenticación FedEx: %s (Código: %s)', 'mad-suite'),
+                $error_message,
+                $error_code
+            ));
         }
 
         $this->access_token = $body['access_token'];

@@ -333,9 +333,20 @@ return new class($core ?? null) implements MAD_Suite_Module {
             wp_send_json_error(['message' => __('Debes seleccionar al menos un producto para devolver.', 'mad-suite')]);
         }
 
+        // Verificar que las credenciales de FedEx estén configuradas
+        $settings = $this->get_settings();
+        $api_key = $settings['fedex_api_key'] ?? '';
+        $api_secret = $settings['fedex_api_secret'] ?? '';
+        $account_number = $settings['fedex_account_number'] ?? '';
+
+        if (empty($api_key) || empty($api_secret) || empty($account_number)) {
+            wp_send_json_error([
+                'message' => __('Las credenciales de FedEx no están configuradas. Por favor ve a MAD Plugins > FedEx Returns > Credenciales FedEx para configurarlas.', 'mad-suite')
+            ]);
+        }
+
         // Obtener factura existente si está habilitado
         $invoice_path = '';
-        $settings = $this->get_settings();
         if ($settings['attach_existing_invoice'] ?? true) {
             $invoice_result = $this->invoice_handler->create_return_invoice($order, $return_items, $return_reason);
             if (!is_wp_error($invoice_result)) {
