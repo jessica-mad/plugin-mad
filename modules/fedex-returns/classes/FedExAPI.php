@@ -208,6 +208,11 @@ class MAD_FedEx_API {
             ],
         ];
 
+        // Agregar información de customs si es envío internacional
+        if (!empty($shipment_data['customs_detail'])) {
+            $payload['requestedShipment']['customsClearanceDetail'] = $shipment_data['customs_detail'];
+        }
+
         // Agregar ETD (Electronic Trade Documents) si hay document ID
         if (!empty($shipment_data['doc_id'])) {
             $payload['requestedShipment']['shipmentSpecialServices'] = [

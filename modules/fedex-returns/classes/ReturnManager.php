@@ -167,8 +167,11 @@ class MAD_FedEx_Return_Manager {
             ],
         ];
 
-        // Preparar paquetes con HS codes
-        $packages = $this->prepare_packages($return_items, $weight, $dimensions, $order);
+        // Detectar si es envío internacional
+        $is_international = $shipper['address']['countryCode'] !== $recipient['address']['countryCode'];
+
+        // Preparar paquetes (sin customs)
+        $packages = $this->prepare_packages($return_items, $weight, $dimensions, $order, $is_international);
 
         if (is_wp_error($packages)) {
             return $packages;
@@ -180,7 +183,19 @@ class MAD_FedEx_Return_Manager {
             'packages' => $packages,
             'service_type' => $settings['default_service_type'] ?? 'FEDEX_GROUND',
             'packaging_type' => $settings['default_packaging_type'] ?? 'YOUR_PACKAGING',
+            'is_international' => $is_international,
         ];
+
+        // Agregar información de customs solo si es internacional
+        if ($is_international) {
+            $customs_detail = $this->prepare_customs_detail($return_items, $order);
+            if ($customs_detail) {
+                $shipment_data['customs_detail'] = $customs_detail;
+                $this->logger->log('Envío internacional detectado - agregando información de customs');
+            }
+        } else {
+            $this->logger->log('Envío doméstico detectado - no se requiere información de customs');
+        }
 
         // Agregar document ID si existe
         if (!empty($doc_id)) {
@@ -200,7 +215,7 @@ class MAD_FedEx_Return_Manager {
     /**
      * Preparar información de paquetes
      */
-    private function prepare_packages($return_items, $weight, $dimensions, $order) {
+    private function prepare_packages($return_items, $weight, $dimensions, $order, $is_international = false) {
         $settings = $this->get_module_settings();
 
         // Calcular peso total si no se proporcionó
@@ -225,9 +240,6 @@ class MAD_FedEx_Return_Manager {
         $weight_unit = $settings['default_weight_unit'] ?? 'KG';
         $dimension_unit = $settings['default_dimension_unit'] ?? 'CM';
 
-        // Extraer HS codes de los productos
-        $commodities = $this->extract_hs_codes($return_items, $order);
-
         $packages = [
             [
                 'weight' => [
@@ -243,14 +255,29 @@ class MAD_FedEx_Return_Manager {
             ],
         ];
 
-        // Agregar información de commodities si hay HS codes
-        if (!empty($commodities)) {
-            $packages[0]['customsClearanceDetail'] = [
-                'commodities' => $commodities
-            ];
-        }
+        // NO agregar customsClearanceDetail aquí - se manejará en el nivel del shipment si es internacional
+        // Los packages solo contienen peso y dimensiones
 
         return $packages;
+    }
+
+    /**
+     * Preparar información de customs (solo para envíos internacionales)
+     */
+    private function prepare_customs_detail($return_items, $order) {
+        // Extraer HS codes de los productos
+        $commodities = $this->extract_hs_codes($return_items, $order);
+
+        if (empty($commodities)) {
+            return null;
+        }
+
+        return [
+            'dutiesPayment' => [
+                'paymentType' => 'SENDER'
+            ],
+            'commodities' => $commodities
+        ];
     }
 
     /**
