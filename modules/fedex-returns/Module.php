@@ -129,7 +129,7 @@ return new class($core ?? null) implements MAD_Suite_Module {
     public function get_settings() {
         $defaults = [
             // Configuración general
-            'enable_auto_invoice' => 1,
+            'attach_existing_invoice' => 1,
             'allow_partial_returns' => 1,
             'require_return_reason' => 1,
 
@@ -157,10 +157,6 @@ return new class($core ?? null) implements MAD_Suite_Module {
             'sender_postal_code' => '',
             'sender_country' => '',
 
-            // Opciones de factura
-            'invoice_logo_url' => '',
-            'invoice_footer_text' => '',
-
             // Logs
             'enable_logging' => 1,
             'log_api_requests' => 1,
@@ -179,8 +175,8 @@ return new class($core ?? null) implements MAD_Suite_Module {
         $sanitized = [];
 
         // Configuración general
-        if (isset($input['enable_auto_invoice'])) {
-            $sanitized['enable_auto_invoice'] = !empty($input['enable_auto_invoice']) ? 1 : 0;
+        if (isset($input['attach_existing_invoice'])) {
+            $sanitized['attach_existing_invoice'] = !empty($input['attach_existing_invoice']) ? 1 : 0;
         }
         if (isset($input['allow_partial_returns'])) {
             $sanitized['allow_partial_returns'] = !empty($input['allow_partial_returns']) ? 1 : 0;
@@ -232,14 +228,6 @@ return new class($core ?? null) implements MAD_Suite_Module {
             if (isset($input[$field])) {
                 $sanitized[$field] = sanitize_text_field($input[$field]);
             }
-        }
-
-        // Opciones de factura
-        if (isset($input['invoice_logo_url'])) {
-            $sanitized['invoice_logo_url'] = esc_url_raw($input['invoice_logo_url']);
-        }
-        if (isset($input['invoice_footer_text'])) {
-            $sanitized['invoice_footer_text'] = sanitize_textarea_field($input['invoice_footer_text']);
         }
 
         // Logs
@@ -348,16 +336,16 @@ return new class($core ?? null) implements MAD_Suite_Module {
             wp_send_json_error(['message' => __('Debes seleccionar al menos un producto para devolver.', 'mad-suite')]);
         }
 
-        // Crear factura de devolución si está habilitado
+        // Obtener factura existente si está habilitado
         $invoice_url = '';
         $settings = $this->get_settings();
-        if ($settings['enable_auto_invoice']) {
+        if ($settings['attach_existing_invoice'] ?? true) {
             $invoice_result = $this->invoice_handler->create_return_invoice($order, $return_items, $return_reason);
             if (!is_wp_error($invoice_result)) {
                 $invoice_url = $invoice_result['url'];
             } else {
                 $this->logger->log(sprintf(
-                    'Error al crear factura de devolución para pedido #%d: %s',
+                    'No se encontró factura existente para pedido #%d: %s',
                     $order_id,
                     $invoice_result->get_error_message()
                 ));

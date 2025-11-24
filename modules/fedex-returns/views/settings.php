@@ -36,13 +36,13 @@ $option_key = MAD_Suite_Core::option_key($module->slug());
             <table class="form-table">
                 <tr>
                     <th scope="row">
-                        <label for="enable_auto_invoice"><?php echo esc_html__('Generar Factura Automáticamente', 'mad-suite'); ?></label>
+                        <label for="attach_existing_invoice"><?php echo esc_html__('Adjuntar Factura al Envío', 'mad-suite'); ?></label>
                     </th>
                     <td>
-                        <input type="checkbox" name="<?php echo esc_attr($option_key); ?>[enable_auto_invoice]" id="enable_auto_invoice"
-                               value="1" <?php checked($settings['enable_auto_invoice'], 1); ?>>
+                        <input type="checkbox" name="<?php echo esc_attr($option_key); ?>[attach_existing_invoice]" id="attach_existing_invoice"
+                               value="1" <?php checked($settings['attach_existing_invoice'] ?? 1, 1); ?>>
                         <p class="description">
-                            <?php echo esc_html__('Genera automáticamente una factura de devolución al crear un envío de devolución.', 'mad-suite'); ?>
+                            <?php echo esc_html__('Adjunta automáticamente la factura existente del pedido a la devolución de FedEx. Las facturas son generadas por tu plugin de facturas instalado.', 'mad-suite'); ?>
                         </p>
                     </td>
                 </tr>
@@ -316,30 +316,6 @@ $option_key = MAD_Suite_Core::option_key($module->slug());
                         <input type="text" name="<?php echo esc_attr($option_key); ?>[sender_country]" id="sender_country"
                                value="<?php echo esc_attr($settings['sender_country']); ?>" class="regular-text" placeholder="MX">
                         <p class="description"><?php echo esc_html__('Código de país de 2 letras (ej: MX, US, CA)', 'mad-suite'); ?></p>
-                    </td>
-                </tr>
-            </table>
-
-            <h3><?php echo esc_html__('Configuración de Factura', 'mad-suite'); ?></h3>
-            <table class="form-table">
-                <tr>
-                    <th scope="row">
-                        <label for="invoice_logo_url"><?php echo esc_html__('URL del Logo', 'mad-suite'); ?></label>
-                    </th>
-                    <td>
-                        <input type="url" name="<?php echo esc_attr($option_key); ?>[invoice_logo_url]" id="invoice_logo_url"
-                               value="<?php echo esc_attr($settings['invoice_logo_url']); ?>" class="regular-text">
-                        <p class="description"><?php echo esc_html__('URL del logo que aparecerá en las facturas de devolución.', 'mad-suite'); ?></p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row">
-                        <label for="invoice_footer_text"><?php echo esc_html__('Texto del Pie de Página', 'mad-suite'); ?></label>
-                    </th>
-                    <td>
-                        <textarea name="<?php echo esc_attr($option_key); ?>[invoice_footer_text]" id="invoice_footer_text"
-                                  rows="3" class="large-text"><?php echo esc_textarea($settings['invoice_footer_text']); ?></textarea>
-                        <p class="description"><?php echo esc_html__('Texto que aparecerá al final de las facturas de devolución.', 'mad-suite'); ?></p>
                     </td>
                 </tr>
             </table>

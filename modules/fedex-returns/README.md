@@ -6,7 +6,7 @@ Módulo de integración con FedEx para gestionar devoluciones de pedidos de WooC
 
 - **Integración con API de FedEx**: Conexión directa con la API de FedEx para crear envíos de devolución
 - **Gestión de Devoluciones**: Crear devoluciones desde la interfaz de administración de pedidos
-- **Facturas de Devolución**: Generación automática de facturas en formato PDF/HTML
+- **Facturas de Devolución**: Adjunta automáticamente las facturas existentes generadas por tu plugin de facturas
 - **Seguimiento**: Tracking de envíos de devolución directamente desde WooCommerce
 - **Borradores en FedEx**: Las devoluciones se crean como borradores en FedEx para revisión
 - **Logs Detallados**: Sistema de logging para auditoría y debugging
@@ -51,7 +51,7 @@ Configura la dirección de tu almacén donde llegarán las devoluciones:
 
 ### 4. Opciones Generales
 
-- ✅ Generar Factura Automáticamente
+- ✅ Adjuntar Factura al Envío (usa facturas existentes generadas por tu plugin de facturas)
 - ✅ Permitir Devoluciones Parciales
 - ✅ Requerir Motivo de Devolución
 - ✅ Habilitar Logs
@@ -70,7 +70,7 @@ Configura la dirección de tu almacén donde llegarán las devoluciones:
    - Haz clic en **Crear Devolución en FedEx**
 
 4. El sistema:
-   - Genera automáticamente una factura de devolución (si está habilitado)
+   - Busca y adjunta la factura existente del pedido (si está habilitado)
    - Crea el envío en FedEx como borrador
    - Obtiene el tracking number
    - Descarga la etiqueta de envío
@@ -111,20 +111,23 @@ El módulo maneja automáticamente:
 
 ## Facturas de Devolución
 
-Las facturas se generan automáticamente con:
-- Logo de la tienda (configurable)
-- Información del pedido original
-- Detalles del cliente
-- Productos a devolver
-- Motivo de devolución
-- Total a devolver
+El módulo utiliza las facturas existentes generadas por tu plugin de facturas instalado (como **PDF Invoices & Packing Slips for WooCommerce**).
 
-### Formatos Soportados
+### Búsqueda Inteligente de Facturas
 
-- **PDF**: Si DOMPDF está instalado o wkhtmltopdf disponible
-- **HTML**: Fallback si no hay biblioteca PDF
+El sistema busca automáticamente las facturas en:
+- **Adjuntos del pedido**: PDFs adjuntos que contengan "invoice" o "factura" en el nombre
+- **Meta del pedido**: Rutas guardadas por plugins de facturas
+- **Directorios comunes**: `/woocommerce_pdf_invoices`, `/invoices`, `/wpo_wcpdf`
 
-Las facturas se adjuntan al pedido y se pueden enviar con el paquete de devolución.
+### Compatibilidad
+
+Compatible con los principales plugins de facturas:
+- PDF Invoices & Packing Slips for WooCommerce
+- WooCommerce PDF Invoices & Packing Slips
+- Otros plugins que adjuntan PDFs al pedido
+
+Las facturas encontradas se adjuntan automáticamente a la devolución de FedEx.
 
 ## Logs y Debugging
 
@@ -201,11 +204,15 @@ Para reportar problemas o solicitar nuevas características, contacta con el equ
 
 ## Changelog
 
+### Versión 1.0.1
+- Cambio a uso de facturas existentes generadas por plugins externos
+- Búsqueda inteligente de facturas en múltiples ubicaciones
+- Compatibilidad con plugins de facturas populares
+
 ### Versión 1.0.0
 - Lanzamiento inicial
 - Integración con FedEx API REST v1
 - Creación de devoluciones
-- Generación de facturas
 - Sistema de tracking
 - Logs y debugging
 
