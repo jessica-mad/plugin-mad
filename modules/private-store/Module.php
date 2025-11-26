@@ -115,10 +115,12 @@ class Module {
         // Si WPML está activo, obtener ID del idioma original
         if (function_exists('wpml_object_id_filter')) {
             $original_id = apply_filters('wpml_object_id', $id, $type, true, null);
+            $this->log("get_original_id - ID: {$id}, Type: {$type}, Original: {$original_id}");
             return $original_id ?: $id;
         }
 
         // Si no hay WPML, retornar el mismo ID
+        $this->log("get_original_id - WPML no activo, retornando ID: {$id}");
         return $id;
     }
 
