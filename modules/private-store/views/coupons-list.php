@@ -22,6 +22,20 @@ if (isset($_GET['regenerated'])) {
 if (isset($_GET['deleted_coupon'])) {
     echo '<div class="notice notice-success is-dismissible"><p><strong>✓ Cupón eliminado correctamente</strong></p></div>';
 }
+if (isset($_GET['synced'])) {
+    $deleted = isset($_GET['deleted']) ? intval($_GET['deleted']) : 0;
+    $kept = isset($_GET['kept']) ? intval($_GET['kept']) : 0;
+    $disabled = isset($_GET['disabled']) ? intval($_GET['disabled']) : 0;
+
+    echo '<div class="notice notice-success is-dismissible">';
+    echo '<p><strong>✓ Sincronización completada</strong></p>';
+    echo '<ul>';
+    echo '<li>Reglas desactivadas/eliminadas: ' . $disabled . '</li>';
+    echo '<li>Cupones eliminados: ' . $deleted . '</li>';
+    echo '<li>Cupones activos mantenidos: ' . $kept . '</li>';
+    echo '</ul>';
+    echo '</div>';
+}
 
 try {
     // Obtener datos
@@ -118,16 +132,33 @@ try {
 
     <!-- Tabs de navegación -->
     <nav class="nav-tab-wrapper" style="margin: 20px 0;">
-        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>" 
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>"
            class="nav-tab">
             📋 Reglas de Descuento
         </a>
-        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>" 
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>"
            class="nav-tab nav-tab-active">
             🎫 Cupones Generados
         </a>
     </nav>
-    
+
+    <!-- Botón de sincronización -->
+    <div style="margin: 20px 0; padding: 15px; background: #fff; border: 1px solid #ccd0d4; border-radius: 4px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <h3 style="margin: 0 0 8px 0;">🔄 Sincronizar Cupones</h3>
+                <p style="margin: 0; color: #666;">
+                    Elimina cupones de reglas desactivadas o eliminadas. Los cupones de reglas activas se mantienen intactos.
+                </p>
+            </div>
+            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=sync_private_shop_coupons'), 'sync_coupons', 'nonce'); ?>"
+               class="button button-primary button-large"
+               onclick="return confirm('¿Estás segura de que deseas sincronizar los cupones?\n\nEsto eliminará todos los cupones de reglas desactivadas o eliminadas.');">
+                🔄 Sincronizar Ahora
+            </a>
+        </div>
+    </div>
+
     <!-- Estadísticas -->
     <div class="card" style="max-width: 100%; margin-top: 20px;">
         <h2 style="padding: 15px; margin: 0; border-bottom: 1px solid #ddd;">📊 Estadísticas Globales</h2>

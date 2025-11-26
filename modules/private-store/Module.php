@@ -93,6 +93,9 @@ class Module {
         add_action('woocommerce_coupon_options', [$this, 'add_coupon_schedule_fields'], 10, 2);
         add_action('woocommerce_coupon_options_save', [$this, 'save_coupon_schedule_fields'], 10, 2);
 
+        // Acción de sincronización de cupones
+        add_action('admin_post_sync_private_shop_coupons', [$this, 'admin_sync_coupons']);
+
         $this->log('Module initialized', 'SUCCESS');
     }
     
@@ -399,12 +402,23 @@ class Module {
 
     /**
      * Obtiene TODOS los cupones del usuario (activos, futuros y expirados)
+     * Solo devuelve cupones de reglas activas
      */
     private function get_all_user_coupons($user_id) {
         $rule_coupons = $this->get_rule_coupons();
+        $rules = $this->get_discount_rules();
         $user_coupons = [];
 
         foreach ($rule_coupons as $rule_id => $data) {
+            // Verificar que la regla existe y está activa
+            if (!isset($rules[$rule_id])) {
+                continue; // Regla eliminada
+            }
+
+            if (empty($rules[$rule_id]['enabled'])) {
+                continue; // Regla desactivada - no mostrar cupón
+            }
+
             if (isset($data['user_coupons'][$user_id])) {
                 $coupon_code = $data['user_coupons'][$user_id];
 
@@ -414,14 +428,10 @@ class Module {
                     try {
                         $coupon = new \WC_Coupon($coupon_id);
 
-                        // Obtener regla asociada para fechas programadas
-                        $rules = $this->get_discount_rules();
-                        $rule = isset($rules[$rule_id]) ? $rules[$rule_id] : null;
-
                         $user_coupons[] = [
                             'code' => $coupon_code,
                             'coupon' => $coupon,
-                            'rule' => $rule,
+                            'rule' => $rules[$rule_id],
                             'rule_id' => $rule_id
                         ];
                     } catch (\Exception $e) {
@@ -601,6 +611,7 @@ class Module {
 
     /**
      * Valida fecha y hora programada del cupón según timezone de Madrid
+     * También valida que la regla asociada esté activa
      * Esta función se ejecuta antes que handle_manual_coupon (prioridad 5 vs 10)
      */
     public function validate_coupon_schedule($valid, $coupon) {
@@ -610,9 +621,25 @@ class Module {
         }
 
         // Obtener metadata del cupón
+        $rule_id = $coupon->get_meta('_mad_ps_rule_id', true);
         $date_from = $coupon->get_meta('_mad_ps_date_from', true);
         $time_from = $coupon->get_meta('_mad_ps_time_from', true);
         $time_to = $coupon->get_meta('_mad_ps_time_to', true);
+
+        // Si es un cupón de Private Shop, verificar que la regla esté activa
+        if (!empty($rule_id)) {
+            $rules = $this->get_discount_rules();
+
+            // Verificar que la regla exista
+            if (!isset($rules[$rule_id])) {
+                throw new \Exception('Este cupón ya no es válido - la regla asociada fue eliminada');
+            }
+
+            // Verificar que la regla esté habilitada
+            if (empty($rules[$rule_id]['enabled'])) {
+                throw new \Exception('Este cupón no está disponible temporalmente');
+            }
+        }
 
         // Si no tiene configuración de horario, permitir (cupón normal de WC)
         if (empty($date_from) && empty($time_from) && empty($time_to)) {
@@ -1235,7 +1262,80 @@ class Module {
         ], admin_url('admin.php')));
         exit;
     }
-    
+
+    /**
+     * Sincronizar cupones con estado de reglas
+     * Elimina cupones de reglas desactivadas o eliminadas
+     */
+    public function admin_sync_coupons() {
+        if (!isset($_GET['nonce']) ||
+            !wp_verify_nonce($_GET['nonce'], 'sync_coupons') ||
+            !current_user_can('manage_options')) {
+            wp_die('Error de seguridad');
+        }
+
+        $rules = $this->get_discount_rules();
+        $rule_coupons = $this->get_rule_coupons();
+
+        $stats = [
+            'total_rules' => count($rules),
+            'disabled_rules' => 0,
+            'deleted_coupons' => 0,
+            'kept_coupons' => 0,
+            'errors' => []
+        ];
+
+        // Recorrer todas las reglas que tienen cupones
+        foreach ($rule_coupons as $rule_id => $data) {
+            // Verificar si la regla existe y está activa
+            $rule_exists = isset($rules[$rule_id]);
+            $rule_enabled = $rule_exists && !empty($rules[$rule_id]['enabled']);
+
+            // Si la regla no existe o está desactivada, eliminar sus cupones
+            if (!$rule_exists || !$rule_enabled) {
+                $stats['disabled_rules']++;
+
+                if (isset($data['user_coupons']) && is_array($data['user_coupons'])) {
+                    foreach ($data['user_coupons'] as $user_id => $coupon_code) {
+                        try {
+                            $coupon_id = wc_get_coupon_id_by_code($coupon_code);
+                            if ($coupon_id) {
+                                // Eliminar el cupón de WooCommerce
+                                wp_delete_post($coupon_id, true);
+                                $stats['deleted_coupons']++;
+                                $this->log("Cupón eliminado por regla desactivada: $coupon_code (Regla: $rule_id)");
+                            }
+                        } catch (\Exception $e) {
+                            $stats['errors'][] = "Error al eliminar cupón $coupon_code: " . $e->getMessage();
+                        }
+                    }
+
+                    // Eliminar el mapping de esta regla
+                    unset($rule_coupons[$rule_id]);
+                }
+            } else {
+                // Regla activa, contar cupones mantenidos
+                if (isset($data['user_coupons'])) {
+                    $stats['kept_coupons'] += count($data['user_coupons']);
+                }
+            }
+        }
+
+        // Guardar mappings actualizados
+        $this->save_rule_coupons($rule_coupons);
+
+        // Redirigir con estadísticas
+        wp_redirect(add_query_arg([
+            'page' => 'mad-private-shop',
+            'action' => 'coupons',
+            'synced' => 'true',
+            'deleted' => $stats['deleted_coupons'],
+            'kept' => $stats['kept_coupons'],
+            'disabled' => $stats['disabled_rules']
+        ], admin_url('admin.php')));
+        exit;
+    }
+
     /**
      * Agregar campos personalizados de programación en el editor de cupones
      */
