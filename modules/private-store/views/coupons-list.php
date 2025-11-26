@@ -28,109 +28,103 @@ try {
     $rules = get_option('mad_private_shop_rules', []);
     $rule_coupons = get_option('mad_private_shop_rule_coupons', []);
 
-// Filtros
-$filter_rule = isset($_GET['filter_rule']) ? sanitize_text_field($_GET['filter_rule']) : '';
+    // Filtros
+    $filter_rule = isset($_GET['filter_rule']) ? sanitize_text_field($_GET['filter_rule']) : '';
 
-// Recopilar todos los cupones
-$all_coupons = [];
+    // Recopilar todos los cupones
+    $all_coupons = [];
 
-if (!empty($rule_coupons) && is_array($rule_coupons)) {
-    foreach ($rule_coupons as $rule_id => $data) {
-        if (!isset($rules[$rule_id])) {
-            continue; // Regla eliminada
-        }
-        
-        $rule = $rules[$rule_id];
-        
-        if (!empty($filter_rule) && $filter_rule !== $rule_id) {
-            continue; // Filtro aplicado
-        }
-        
-        if (!isset($data['user_coupons']) || !is_array($data['user_coupons'])) {
-            continue;
-        }
-        
-        foreach ($data['user_coupons'] as $user_id => $coupon_code) {
-            $user = get_userdata($user_id);
-            if (!$user) {
+    if (!empty($rule_coupons) && is_array($rule_coupons)) {
+        foreach ($rule_coupons as $rule_id => $data) {
+            if (!isset($rules[$rule_id])) {
+                continue; // Regla eliminada
+            }
+
+            $rule = $rules[$rule_id];
+
+            if (!empty($filter_rule) && $filter_rule !== $rule_id) {
+                continue; // Filtro aplicado
+            }
+
+            if (!isset($data['user_coupons']) || !is_array($data['user_coupons'])) {
                 continue;
             }
-            
-            // Buscar cupón en WooCommerce - método compatible
-            $coupon_post = get_page_by_title($coupon_code, OBJECT, 'shop_coupon');
-            if (!$coupon_post) {
-                // Intentar búsqueda alternativa
+
+            foreach ($data['user_coupons'] as $user_id => $coupon_code) {
+                $user = get_userdata($user_id);
+                if (!$user) {
+                    continue;
+                }
+
+                // Buscar cupón - usar método recomendado
                 $coupon_id = wc_get_coupon_id_by_code($coupon_code);
                 if (!$coupon_id) {
                     continue; // Cupón eliminado
                 }
-            } else {
-                $coupon_id = $coupon_post->ID;
-            }
-            
-            try {
-                $coupon = new WC_Coupon($coupon_id);
-                if (!$coupon->get_id()) {
+
+                try {
+                    $coupon = new WC_Coupon($coupon_id);
+                    if (!$coupon->get_id()) {
+                        continue;
+                    }
+
+                    $usage_count = $coupon->get_usage_count();
+
+                    // Calcular valor de compras
+                    $total_value = 0;
+                    if (function_exists('wc_get_orders')) {
+                        $orders = wc_get_orders([
+                            'limit' => -1,
+                            'coupon' => $coupon_code,
+                            'status' => ['completed', 'processing']
+                        ]);
+
+                        foreach ($orders as $order) {
+                            $total_value += $order->get_total();
+                        }
+                    }
+
+                    $all_coupons[] = [
+                        'coupon_id' => $coupon_id,
+                        'coupon_code' => $coupon_code,
+                        'user_id' => $user_id,
+                        'user_name' => $user->display_name,
+                        'user_email' => $user->user_email,
+                        'rule_id' => $rule_id,
+                        'rule_name' => $rule['name'],
+                        'rule_discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : '€'),
+                        'usage_count' => $usage_count,
+                        'total_value' => $total_value,
+                        'created' => get_post_meta($coupon_id, '_mad_ps_created', true),
+                    ];
+                } catch (Exception $e) {
+                    // Error al cargar cupón - continuar
                     continue;
                 }
-                
-                $usage_count = $coupon->get_usage_count();
-                
-                // Calcular valor de compras
-                $total_value = 0;
-                if (function_exists('wc_get_orders')) {
-                    $orders = wc_get_orders([
-                        'limit' => -1,
-                        'coupon' => $coupon_code,
-                        'status' => ['completed', 'processing']
-                    ]);
-                    
-                    foreach ($orders as $order) {
-                        $total_value += $order->get_total();
-                    }
-                }
-                
-                $all_coupons[] = [
-                    'coupon_id' => $coupon_id,
-                    'coupon_code' => $coupon_code,
-                    'user_id' => $user_id,
-                    'user_name' => $user->display_name,
-                    'user_email' => $user->user_email,
-                    'rule_id' => $rule_id,
-                    'rule_name' => $rule['name'],
-                    'rule_discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : '€'),
-                    'usage_count' => $usage_count,
-                    'total_value' => $total_value,
-                    'created' => get_post_meta($coupon_id, '_mad_ps_created', true),
-                ];
-            } catch (Exception $e) {
-                // Error al cargar cupón - continuar
-                continue;
             }
         }
     }
-}
 
-// Calcular estadísticas globales
-$stats = [
-    'total_generated' => count($all_coupons),
-    'total_used' => 0,
-    'total_value' => 0,
-    'total_usage' => 0,
-];
+    // Calcular estadísticas globales
+    $stats = [
+        'total_generated' => count($all_coupons),
+        'total_used' => 0,
+        'total_value' => 0,
+        'total_usage' => 0,
+    ];
 
-if (!empty($all_coupons)) {
-    $stats['total_used'] = count(array_filter($all_coupons, function($c) {
-        return isset($c['usage_count']) && $c['usage_count'] > 0;
-    }));
+    if (!empty($all_coupons)) {
+        $stats['total_used'] = count(array_filter($all_coupons, function($c) {
+            return isset($c['usage_count']) && $c['usage_count'] > 0;
+        }));
 
-    $total_values = array_column($all_coupons, 'total_value');
-    $stats['total_value'] = !empty($total_values) ? array_sum($total_values) : 0;
+        $total_values = array_column($all_coupons, 'total_value');
+        $stats['total_value'] = !empty($total_values) ? array_sum($total_values) : 0;
 
-    $usage_counts = array_column($all_coupons, 'usage_count');
-    $stats['total_usage'] = !empty($usage_counts) ? array_sum($usage_counts) : 0;
-}
-?>
+        $usage_counts = array_column($all_coupons, 'usage_count');
+        $stats['total_usage'] = !empty($usage_counts) ? array_sum($usage_counts) : 0;
+    }
+    ?>
 
     <!-- Tabs de navegación -->
     <nav class="nav-tab-wrapper" style="margin: 20px 0;">
