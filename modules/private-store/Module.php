@@ -140,6 +140,32 @@ class Module {
 
         return array_unique($original_ids);
     }
+
+    /**
+     * Convierte IDs de términos al idioma actual del sitio
+     * Compatible con WPML
+     */
+    private function get_current_language_term_ids($term_ids, $taxonomy = 'product_cat') {
+        if (empty($term_ids)) {
+            return [];
+        }
+
+        // Si WPML no está activo, retornar los mismos IDs
+        if (!function_exists('wpml_object_id_filter')) {
+            return $term_ids;
+        }
+
+        $current_ids = [];
+        foreach ($term_ids as $term_id) {
+            // Convertir al idioma actual (false = idioma actual, no original)
+            $current_id = apply_filters('wpml_object_id', $term_id, $taxonomy, false);
+            if ($current_id) {
+                $current_ids[] = $current_id;
+            }
+        }
+
+        return array_unique($current_ids);
+    }
     
     /**
      * Obtiene mapeo de cupones por regla
@@ -801,22 +827,22 @@ class Module {
             $this->log("show_discount_preview - Comparación productos: applies=" . ($applies ? 'true' : 'false'));
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
-            $original_categories = $this->get_original_term_ids($categories, 'product_cat');
-            $applies = !empty(array_intersect($rule['target_ids'], $original_categories));
+            $current_target_categories = $this->get_current_language_term_ids($rule['target_ids'], 'product_cat');
+            $applies = !empty(array_intersect($current_target_categories, $categories));
             $this->log(sprintf(
-                "show_discount_preview - Categorías: check_id cats=%s, original cats=%s, applies=%s",
+                "show_discount_preview - Categorías: producto cats=%s, target cats traducidos=%s, applies=%s",
                 implode(',', $categories),
-                implode(',', $original_categories),
+                implode(',', $current_target_categories),
                 $applies ? 'true' : 'false'
             ));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
-            $original_tags = $this->get_original_term_ids($tags, 'product_tag');
-            $applies = !empty(array_intersect($rule['target_ids'], $original_tags));
+            $current_target_tags = $this->get_current_language_term_ids($rule['target_ids'], 'product_tag');
+            $applies = !empty(array_intersect($current_target_tags, $tags));
             $this->log(sprintf(
-                "show_discount_preview - Tags: check_id tags=%s, original tags=%s, applies=%s",
+                "show_discount_preview - Tags: producto tags=%s, target tags traducidos=%s, applies=%s",
                 implode(',', $tags),
-                implode(',', $original_tags),
+                implode(',', $current_target_tags),
                 $applies ? 'true' : 'false'
             ));
         }
@@ -894,12 +920,12 @@ class Module {
             $applies = in_array($original_id, $rule['target_ids']);
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
-            $original_categories = $this->get_original_term_ids($categories, 'product_cat');
-            $applies = !empty(array_intersect($rule['target_ids'], $original_categories));
+            $current_target_categories = $this->get_current_language_term_ids($rule['target_ids'], 'product_cat');
+            $applies = !empty(array_intersect($current_target_categories, $categories));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
-            $original_tags = $this->get_original_term_ids($tags, 'product_tag');
-            $applies = !empty(array_intersect($rule['target_ids'], $original_tags));
+            $current_target_tags = $this->get_current_language_term_ids($rule['target_ids'], 'product_tag');
+            $applies = !empty(array_intersect($current_target_tags, $tags));
         }
 
         if (!$applies) {
@@ -974,12 +1000,12 @@ class Module {
             $applies = in_array($original_id, $rule['target_ids']);
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
-            $original_categories = $this->get_original_term_ids($categories, 'product_cat');
-            $applies = !empty(array_intersect($rule['target_ids'], $original_categories));
+            $current_target_categories = $this->get_current_language_term_ids($rule['target_ids'], 'product_cat');
+            $applies = !empty(array_intersect($current_target_categories, $categories));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
-            $original_tags = $this->get_original_term_ids($tags, 'product_tag');
-            $applies = !empty(array_intersect($rule['target_ids'], $original_tags));
+            $current_target_tags = $this->get_current_language_term_ids($rule['target_ids'], 'product_tag');
+            $applies = !empty(array_intersect($current_target_tags, $tags));
         }
 
         if (!$applies) {
