@@ -771,6 +771,7 @@ class Module {
 
         // Si no hay regla aplicable, retornar precio normal
         if (!$rule) {
+            $this->log("show_discount_preview - No hay regla para usuario {$user_id}");
             return $price_html;
         }
 
@@ -782,21 +783,44 @@ class Module {
         // Obtener ID original (si WPML está activo)
         $original_id = $this->get_original_id($check_id, 'post');
 
+        $this->log(sprintf(
+            "show_discount_preview - Producto: %s, check_id: %s, original_id: %s, apply_to: %s, target_ids: %s",
+            $product->get_name(),
+            $check_id,
+            $original_id,
+            $rule['apply_to'],
+            implode(',', $rule['target_ids'])
+        ));
+
         $applies = false;
 
         if ($rule['apply_to'] === 'products') {
             $applies = in_array($original_id, $rule['target_ids']);
+            $this->log("show_discount_preview - Comparación productos: applies=" . ($applies ? 'true' : 'false'));
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
             $original_categories = $this->get_original_term_ids($categories, 'product_cat');
             $applies = !empty(array_intersect($rule['target_ids'], $original_categories));
+            $this->log(sprintf(
+                "show_discount_preview - Categorías: check_id cats=%s, original cats=%s, applies=%s",
+                implode(',', $categories),
+                implode(',', $original_categories),
+                $applies ? 'true' : 'false'
+            ));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
             $original_tags = $this->get_original_term_ids($tags, 'product_tag');
             $applies = !empty(array_intersect($rule['target_ids'], $original_tags));
+            $this->log(sprintf(
+                "show_discount_preview - Tags: check_id tags=%s, original tags=%s, applies=%s",
+                implode(',', $tags),
+                implode(',', $original_tags),
+                $applies ? 'true' : 'false'
+            ));
         }
 
         if (!$applies) {
+            $this->log("show_discount_preview - Producto no aplica a la regla");
             return $price_html;
         }
 
