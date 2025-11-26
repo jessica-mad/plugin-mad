@@ -1035,6 +1035,10 @@ class Module {
             case 'coupons':
                 include __DIR__ . '/views/coupons-list.php';
                 break;
+            case 'test-include':
+                // Test de inclusión
+                include __DIR__ . '/views/test-include.php';
+                break;
             case 'debug':
                 // Diagnóstico básico
                 include __DIR__ . '/views/coupons-debug.php';
