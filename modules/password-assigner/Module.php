@@ -145,6 +145,8 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
             // URLs y páginas
             'redirect_url' => '',
+            'redirect_url_es' => '',
+            'redirect_url_en' => '',
             'redirect_after_login_es' => '',
             'redirect_after_login_en' => '',
             'exclude_admin' => 1,
@@ -252,6 +254,12 @@ return new class($core ?? null) implements MAD_Suite_Module {
         // URLs y páginas (solo si vienen en el input)
         if (isset($input['redirect_url'])) {
             $sanitized['redirect_url'] = esc_url_raw($input['redirect_url']);
+        }
+        if (isset($input['redirect_url_es'])) {
+            $sanitized['redirect_url_es'] = esc_url_raw($input['redirect_url_es']);
+        }
+        if (isset($input['redirect_url_en'])) {
+            $sanitized['redirect_url_en'] = esc_url_raw($input['redirect_url_en']);
         }
         if (isset($input['redirect_after_login_es'])) {
             $sanitized['redirect_after_login_es'] = esc_url_raw($input['redirect_after_login_es']);
@@ -640,17 +648,40 @@ return new class($core ?? null) implements MAD_Suite_Module {
             return;
         }
 
+        // Determinar URL de login según idioma
+        $login_url = '';
+
+        if (!empty($settings['enable_wpml'])) {
+            $is_english = (strpos($current_url, '/en/') !== false);
+
+            if ($is_english && !empty($settings['redirect_url_en'])) {
+                $login_url = $settings['redirect_url_en'];
+            } elseif (!$is_english && !empty($settings['redirect_url_es'])) {
+                $login_url = $settings['redirect_url_es'];
+            }
+        } else {
+            // Si WPML no está habilitado, usar la versión española o la genérica
+            if (!empty($settings['redirect_url_es'])) {
+                $login_url = $settings['redirect_url_es'];
+            }
+        }
+
+        // Fallback a redirect_url genérica si no hay URL específica
+        if (empty($login_url) && !empty($settings['redirect_url'])) {
+            $login_url = $settings['redirect_url'];
+        }
+
         // Excluir la página de login para evitar bucles infinitos
-        if (!empty($settings['redirect_url'])) {
-            $redirect_page_id = url_to_postid($settings['redirect_url']);
+        if (!empty($login_url)) {
+            $redirect_page_id = url_to_postid($login_url);
             if ($redirect_page_id && is_page($redirect_page_id)) {
                 return;
             }
         }
 
         // Redirigir a la página de login
-        if (!empty($settings['redirect_url'])) {
-            wp_safe_redirect($settings['redirect_url']);
+        if (!empty($login_url)) {
+            wp_safe_redirect($login_url);
             exit;
         } else {
             // Si no hay página configurada, mostrar mensaje simple
