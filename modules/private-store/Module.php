@@ -598,6 +598,11 @@ class Module {
      * Maneja cupón manual vs automático
      */
     public function handle_manual_coupon($valid, $coupon) {
+        // Permitir que administradores en backend usen cupones sin restricciones
+        if (is_admin() && current_user_can('manage_woocommerce')) {
+            return $valid;
+        }
+
         if (!is_user_logged_in() || !WC()->cart) {
             return $valid;
         }

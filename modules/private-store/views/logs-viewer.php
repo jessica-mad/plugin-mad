@@ -11,7 +11,8 @@ if (!current_user_can('manage_options')) {
     wp_die('No tienes permisos para acceder a esta página');
 }
 
-$log_dir = WP_CONTENT_DIR . '/uploads/mad-private-shop-logs';
+$upload_dir = wp_upload_dir();
+$log_dir = $upload_dir['basedir'] . '/mad-suite-logs';
 $log_files = [];
 
 if (is_dir($log_dir)) {
