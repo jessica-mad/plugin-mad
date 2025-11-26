@@ -780,7 +780,7 @@ class Module {
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
         // Obtener ID original (si WPML está activo)
-        $original_id = $this->get_original_id($check_id, 'post_product');
+        $original_id = $this->get_original_id($check_id, 'post');
 
         $applies = false;
 
@@ -860,7 +860,7 @@ class Module {
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
         // Obtener ID original (si WPML está activo)
-        $original_id = $this->get_original_id($check_id, 'post_product');
+        $original_id = $this->get_original_id($check_id, 'post');
 
         $applies = false;
 
@@ -940,7 +940,7 @@ class Module {
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
         // Obtener ID original (si WPML está activo)
-        $original_id = $this->get_original_id($check_id, 'post_product');
+        $original_id = $this->get_original_id($check_id, 'post');
 
         $applies = false;
 
