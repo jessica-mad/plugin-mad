@@ -1036,8 +1036,12 @@ class Module {
                 include __DIR__ . '/views/coupons-list.php';
                 break;
             case 'debug':
-                // Diagnóstico temporal
+                // Diagnóstico básico
                 include __DIR__ . '/views/coupons-debug.php';
+                break;
+            case 'debug-deep':
+                // Diagnóstico profundo
+                include __DIR__ . '/views/coupons-debug-deep.php';
                 break;
             default:
                 include __DIR__ . '/views/rules-list.php';
