@@ -72,6 +72,9 @@ class Module {
         
         // Cupón manual
         add_filter('woocommerce_coupon_is_valid', [$this, 'handle_manual_coupon'], 10, 2);
+
+        // Validación de fecha/hora programada en cupones
+        add_filter('woocommerce_coupon_is_valid', [$this, 'validate_coupon_schedule'], 5, 2);
         
         // Visualización de precio con descuento
         add_filter('woocommerce_get_price_html', [$this, 'show_discount_preview'], 99, 2);
@@ -85,6 +88,10 @@ class Module {
 
         // Shortcodes
         add_shortcode('mi_cupon', [$this, 'render_my_coupon_shortcode']);
+
+        // Editor de cupones - Agregar campos personalizados de fecha/hora
+        add_action('woocommerce_coupon_options', [$this, 'add_coupon_schedule_fields'], 10, 2);
+        add_action('woocommerce_coupon_options_save', [$this, 'save_coupon_schedule_fields'], 10, 2);
 
         $this->log('Module initialized', 'SUCCESS');
     }
@@ -320,16 +327,28 @@ class Module {
         $coupon->set_email_restrictions([$user->user_email]);
         $coupon->set_usage_limit(0); // Ilimitado
         $coupon->set_usage_limit_per_user(0); // Ilimitado
-        
-        // Fechas
+
+        // Fechas - Solo fecha de expiración (WooCommerce nativo)
         if (!empty($rule['date_to'])) {
-            $coupon->set_date_expires(strtotime($rule['date_to']));
+            $time_to = isset($rule['time_to']) && !empty($rule['time_to']) ? $rule['time_to'] : '23:59';
+            $coupon->set_date_expires(strtotime($rule['date_to'] . ' ' . $time_to));
         }
-        
-        // Meta personalizada
+
+        // Meta personalizada - Guardar fecha/hora de inicio (para validación manual)
         $coupon->update_meta_data('_mad_ps_rule_id', $rule['id']);
         $coupon->update_meta_data('_mad_ps_user_id', $user_id);
         $coupon->update_meta_data('_mad_ps_created', current_time('mysql'));
+
+        // Guardar fecha y hora de inicio de la regla
+        if (!empty($rule['date_from'])) {
+            $coupon->update_meta_data('_mad_ps_date_from', $rule['date_from']);
+        }
+        if (!empty($rule['time_from'])) {
+            $coupon->update_meta_data('_mad_ps_time_from', $rule['time_from']);
+        }
+        if (!empty($rule['time_to'])) {
+            $coupon->update_meta_data('_mad_ps_time_to', $rule['time_to']);
+        }
         
         $coupon->save();
         
@@ -579,7 +598,72 @@ class Module {
         
         return false;
     }
-    
+
+    /**
+     * Valida fecha y hora programada del cupón según timezone de Madrid
+     * Esta función se ejecuta antes que handle_manual_coupon (prioridad 5 vs 10)
+     */
+    public function validate_coupon_schedule($valid, $coupon) {
+        // Si ya es inválido, retornar
+        if (!$valid) {
+            return $valid;
+        }
+
+        // Obtener metadata del cupón
+        $date_from = $coupon->get_meta('_mad_ps_date_from', true);
+        $time_from = $coupon->get_meta('_mad_ps_time_from', true);
+        $time_to = $coupon->get_meta('_mad_ps_time_to', true);
+
+        // Si no tiene configuración de horario, permitir (cupón normal de WC)
+        if (empty($date_from) && empty($time_from) && empty($time_to)) {
+            return $valid;
+        }
+
+        // Zona horaria de Madrid
+        $timezone = new \DateTimeZone('Europe/Madrid');
+        $now = new \DateTime('now', $timezone);
+
+        // Validar fecha y hora de inicio
+        if (!empty($date_from)) {
+            $time_start = !empty($time_from) ? $time_from : '00:00';
+            $datetime_from = \DateTime::createFromFormat('Y-m-d H:i', $date_from . ' ' . $time_start, $timezone);
+
+            if ($datetime_from && $now < $datetime_from) {
+                // Cupón aún no activo
+                $activation_date = $datetime_from->format('d/m/Y H:i');
+                throw new \Exception(
+                    sprintf(
+                        'Este cupón estará disponible a partir del %s (hora Madrid)',
+                        $activation_date
+                    )
+                );
+            }
+        }
+
+        // Validar hora de fin (solo si no hay fecha de expiración o si estamos en el día de expiración)
+        // La fecha de expiración ya la maneja WooCommerce nativamente
+        $date_expires = $coupon->get_date_expires();
+        if (!empty($time_to) && $date_expires) {
+            // Verificar si hoy es el día de expiración
+            $expires_date = new \DateTime('@' . $date_expires->getTimestamp(), $timezone);
+            $today = $now->format('Y-m-d');
+            $expires_day = $expires_date->format('Y-m-d');
+
+            if ($today === $expires_day) {
+                // Estamos en el día de expiración, verificar la hora
+                $time_end = $time_to;
+                $datetime_to = \DateTime::createFromFormat('Y-m-d H:i', $expires_day . ' ' . $time_end, $timezone);
+
+                if ($datetime_to && $now > $datetime_to) {
+                    // Cupón ya expiró por hora
+                    throw new \Exception('Este cupón ya no está disponible');
+                }
+            }
+        }
+
+        return $valid;
+    }
+
     /**
      * Muestra preview de descuento en producto
      * IMPORTANTE: Esta función SOLO muestra el descuento visualmente.
@@ -861,19 +945,37 @@ class Module {
                 $coupon->set_product_categories([]);
             }
             
-            // Actualizar fechas
+            // Actualizar fechas - Incluir hora de expiración
             if (!empty($rule['date_to'])) {
-                $coupon->set_date_expires(strtotime($rule['date_to']));
+                $time_to = isset($rule['time_to']) && !empty($rule['time_to']) ? $rule['time_to'] : '23:59';
+                $coupon->set_date_expires(strtotime($rule['date_to'] . ' ' . $time_to));
             } else {
                 $coupon->set_date_expires(null);
             }
-            
+
+            // Actualizar metadata de fecha/hora de inicio
+            if (!empty($rule['date_from'])) {
+                $coupon->update_meta_data('_mad_ps_date_from', $rule['date_from']);
+            } else {
+                $coupon->delete_meta_data('_mad_ps_date_from');
+            }
+            if (!empty($rule['time_from'])) {
+                $coupon->update_meta_data('_mad_ps_time_from', $rule['time_from']);
+            } else {
+                $coupon->delete_meta_data('_mad_ps_time_from');
+            }
+            if (!empty($rule['time_to'])) {
+                $coupon->update_meta_data('_mad_ps_time_to', $rule['time_to']);
+            } else {
+                $coupon->delete_meta_data('_mad_ps_time_to');
+            }
+
             // Actualizar config
             if (isset($rule['coupon_config'])) {
                 $coupon->set_exclude_sale_items($rule['coupon_config']['exclude_sale_items'] ?? true);
                 $coupon->set_individual_use($rule['coupon_config']['individual_use'] ?? true);
             }
-            
+
             $coupon->save();
             $updated++;
         }
@@ -1122,6 +1224,103 @@ class Module {
         exit;
     }
     
+    /**
+     * Agregar campos personalizados de programación en el editor de cupones
+     */
+    public function add_coupon_schedule_fields($coupon_id, $coupon) {
+        // Obtener valores actuales
+        $date_from = $coupon->get_meta('_mad_ps_date_from', true);
+        $time_from = $coupon->get_meta('_mad_ps_time_from', true);
+        $time_to = $coupon->get_meta('_mad_ps_time_to', true);
+
+        echo '<div class="options_group">';
+        echo '<p class="form-field"><strong style="color: #7b1fa2;">🕐 Programación Horaria (Private Shop)</strong></p>';
+        echo '<p class="description" style="margin-left: 12px; margin-bottom: 15px;">Configura fecha y horas de activación del cupón según zona horaria de Madrid. Estos campos son gestionados automáticamente por Private Shop.</p>';
+
+        // Fecha de inicio
+        woocommerce_wp_text_input([
+            'id' => '_mad_ps_date_from',
+            'label' => 'Fecha de inicio',
+            'description' => 'Fecha desde la cual el cupón estará activo (formato: YYYY-MM-DD)',
+            'desc_tip' => true,
+            'type' => 'date',
+            'value' => $date_from,
+            'custom_attributes' => [
+                'pattern' => '[0-9]{4}-[0-9]{2}-[0-9]{2}'
+            ]
+        ]);
+
+        // Hora de inicio
+        woocommerce_wp_text_input([
+            'id' => '_mad_ps_time_from',
+            'label' => 'Hora de inicio',
+            'description' => 'Hora desde la cual el cupón estará activo (formato: HH:MM, ej: 08:00)',
+            'desc_tip' => true,
+            'type' => 'time',
+            'value' => $time_from ?: '00:00',
+            'custom_attributes' => [
+                'pattern' => '[0-9]{2}:[0-9]{2}'
+            ]
+        ]);
+
+        // Hora de fin
+        woocommerce_wp_text_input([
+            'id' => '_mad_ps_time_to',
+            'label' => 'Hora de fin',
+            'description' => 'Hora hasta la cual el cupón estará activo en el día de expiración (formato: HH:MM, ej: 23:59)',
+            'desc_tip' => true,
+            'type' => 'time',
+            'value' => $time_to ?: '23:59',
+            'custom_attributes' => [
+                'pattern' => '[0-9]{2}:[0-9]{2}'
+            ]
+        ]);
+
+        echo '<p class="description" style="margin-left: 12px; padding: 10px; background: #e7f5fe; border-left: 4px solid #2196F3; margin-top: 10px;">';
+        echo '<strong>ℹ️ Importante:</strong> La fecha de expiración se configura en el campo "Fecha de caducidad del cupón" arriba. ';
+        echo 'La hora de fin solo se aplicará en el día de expiración configurado.';
+        echo '</p>';
+
+        echo '</div>';
+    }
+
+    /**
+     * Guardar campos personalizados de programación
+     */
+    public function save_coupon_schedule_fields($coupon_id, $coupon) {
+        // Fecha de inicio
+        if (isset($_POST['_mad_ps_date_from'])) {
+            $date_from = sanitize_text_field($_POST['_mad_ps_date_from']);
+            if (!empty($date_from)) {
+                $coupon->update_meta_data('_mad_ps_date_from', $date_from);
+            } else {
+                $coupon->delete_meta_data('_mad_ps_date_from');
+            }
+        }
+
+        // Hora de inicio
+        if (isset($_POST['_mad_ps_time_from'])) {
+            $time_from = sanitize_text_field($_POST['_mad_ps_time_from']);
+            if (!empty($time_from)) {
+                $coupon->update_meta_data('_mad_ps_time_from', $time_from);
+            } else {
+                $coupon->delete_meta_data('_mad_ps_time_from');
+            }
+        }
+
+        // Hora de fin
+        if (isset($_POST['_mad_ps_time_to'])) {
+            $time_to = sanitize_text_field($_POST['_mad_ps_time_to']);
+            if (!empty($time_to)) {
+                $coupon->update_meta_data('_mad_ps_time_to', $time_to);
+            } else {
+                $coupon->delete_meta_data('_mad_ps_time_to');
+            }
+        }
+
+        $coupon->save_meta_data();
+    }
+
     /**
      * Shortcode [mi_cupon] - Muestra TODOS los cupones del usuario (activos, futuros, expirados)
      */

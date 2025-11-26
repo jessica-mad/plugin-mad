@@ -5,13 +5,8 @@
 
 defined('ABSPATH') || exit;
 
-// Activar display de errores temporalmente para debug
-@ini_set('display_errors', '1');
-@ini_set('display_startup_errors', '1');
-@error_reporting(E_ALL);
-
 echo '<div class="wrap">';
-echo '<h1>🎫 Cupones Generados - Debug Mode</h1>';
+echo '<h1>🎫 Cupones Generados</h1>';
 
 // Verificar que WooCommerce esté activo
 if (!function_exists('WC')) {
@@ -19,8 +14,6 @@ if (!function_exists('WC')) {
     echo '</div>';
     return;
 }
-
-echo '<div class="notice notice-info"><p>WooCommerce está activo ✓</p></div>';
 
 // Mensajes
 if (isset($_GET['regenerated'])) {
@@ -31,17 +24,9 @@ if (isset($_GET['deleted_coupon'])) {
 }
 
 try {
-    echo '<div class="notice notice-info"><p>Intentando obtener datos...</p></div>';
-
     // Obtener datos
     $rules = get_option('mad_private_shop_rules', []);
     $rule_coupons = get_option('mad_private_shop_rule_coupons', []);
-
-    echo '<div class="notice notice-info"><p>Datos obtenidos: ' . count($rules) . ' reglas, ' . count($rule_coupons) . ' mappings de cupones</p></div>';
-
-// DEBUG - ACTIVADO TEMPORALMENTE
-echo '<pre>Rules: '; print_r($rules); echo '</pre>';
-echo '<pre>Rule Coupons: '; print_r($rule_coupons); echo '</pre>';
 
 // Filtros
 $filter_rule = isset($_GET['filter_rule']) ? sanitize_text_field($_GET['filter_rule']) : '';
@@ -145,8 +130,6 @@ if (!empty($all_coupons)) {
     $usage_counts = array_column($all_coupons, 'usage_count');
     $stats['total_usage'] = !empty($usage_counts) ? array_sum($usage_counts) : 0;
 }
-
-echo '<div class="notice notice-success"><p>Estadísticas calculadas correctamente</p></div>';
 ?>
 
     <!-- Tabs de navegación -->
