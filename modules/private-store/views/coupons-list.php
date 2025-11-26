@@ -70,19 +70,9 @@ try {
 
                     $usage_count = $coupon->get_usage_count();
 
-                    // Calcular valor de compras
+                    // NOTA: Cálculo de valor de compras desactivado temporalmente
+                    // para evitar agotamiento de memoria con muchas órdenes
                     $total_value = 0;
-                    if (function_exists('wc_get_orders')) {
-                        $orders = wc_get_orders([
-                            'limit' => -1,
-                            'coupon' => $coupon_code,
-                            'status' => ['completed', 'processing']
-                        ]);
-
-                        foreach ($orders as $order) {
-                            $total_value += $order->get_total();
-                        }
-                    }
 
                     $all_coupons[] = [
                         'coupon_id' => $coupon_id,
