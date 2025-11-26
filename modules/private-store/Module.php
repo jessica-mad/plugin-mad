@@ -653,6 +653,11 @@ class Module {
             return $valid;
         }
 
+        // Permitir que administradores en backend usen cupones sin restricciones
+        if (is_admin() && current_user_can('manage_woocommerce')) {
+            return $valid;
+        }
+
         // Obtener metadata del cupón
         $rule_id = $coupon->get_meta('_mad_ps_rule_id', true);
         $date_from = $coupon->get_meta('_mad_ps_date_from', true);
