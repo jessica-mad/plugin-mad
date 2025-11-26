@@ -1026,7 +1026,7 @@ class Module {
      */
     public function render_admin_page() {
         $action = isset($_GET['action']) ? $_GET['action'] : 'list';
-        
+
         switch ($action) {
             case 'edit':
             case 'new':
@@ -1034,6 +1034,10 @@ class Module {
                 break;
             case 'coupons':
                 include __DIR__ . '/views/coupons-list.php';
+                break;
+            case 'debug':
+                // Diagnóstico temporal
+                include __DIR__ . '/views/coupons-debug.php';
                 break;
             default:
                 include __DIR__ . '/views/rules-list.php';
