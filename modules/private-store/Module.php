@@ -105,6 +105,39 @@ class Module {
     private function get_discount_rules() {
         return get_option('mad_private_shop_rules', []);
     }
+
+    /**
+     * Obtiene el ID original de un objeto (compatible con WPML)
+     * Si WPML está activo, obtiene el ID del idioma original
+     * Si no, retorna el mismo ID
+     */
+    private function get_original_id($id, $type = 'post') {
+        // Si WPML está activo, obtener ID del idioma original
+        if (function_exists('wpml_object_id_filter')) {
+            $original_id = apply_filters('wpml_object_id', $id, $type, true, null);
+            return $original_id ?: $id;
+        }
+
+        // Si no hay WPML, retornar el mismo ID
+        return $id;
+    }
+
+    /**
+     * Obtiene los IDs originales de un array de términos (categorías/tags)
+     * Compatible con WPML
+     */
+    private function get_original_term_ids($term_ids, $taxonomy = 'product_cat') {
+        if (empty($term_ids)) {
+            return [];
+        }
+
+        $original_ids = [];
+        foreach ($term_ids as $term_id) {
+            $original_ids[] = $this->get_original_id($term_id, $taxonomy);
+        }
+
+        return array_unique($original_ids);
+    }
     
     /**
      * Obtiene mapeo de cupones por regla
@@ -710,21 +743,26 @@ class Module {
             return $price_html;
         }
 
-        // Verificar si este producto aplica a la regla
+        // Verificar si este producto aplica a la regla (compatible con WPML)
         $product_id = $product->get_id();
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
+        // Obtener ID original (si WPML está activo)
+        $original_id = $this->get_original_id($check_id, 'post_product');
+
         $applies = false;
 
         if ($rule['apply_to'] === 'products') {
-            $applies = in_array($check_id, $rule['target_ids']);
+            $applies = in_array($original_id, $rule['target_ids']);
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
-            $applies = !empty(array_intersect($rule['target_ids'], $categories));
+            $original_categories = $this->get_original_term_ids($categories, 'product_cat');
+            $applies = !empty(array_intersect($rule['target_ids'], $original_categories));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
-            $applies = !empty(array_intersect($rule['target_ids'], $tags));
+            $original_tags = $this->get_original_term_ids($tags, 'product_tag');
+            $applies = !empty(array_intersect($rule['target_ids'], $original_tags));
         }
 
         if (!$applies) {
@@ -785,21 +823,26 @@ class Module {
             return $price_html;
         }
 
-        // Verificar si este producto aplica a la regla
+        // Verificar si este producto aplica a la regla (compatible con WPML)
         $product_id = $product->get_id();
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
+        // Obtener ID original (si WPML está activo)
+        $original_id = $this->get_original_id($check_id, 'post_product');
+
         $applies = false;
 
         if ($rule['apply_to'] === 'products') {
-            $applies = in_array($check_id, $rule['target_ids']);
+            $applies = in_array($original_id, $rule['target_ids']);
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
-            $applies = !empty(array_intersect($rule['target_ids'], $categories));
+            $original_categories = $this->get_original_term_ids($categories, 'product_cat');
+            $applies = !empty(array_intersect($rule['target_ids'], $original_categories));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
-            $applies = !empty(array_intersect($rule['target_ids'], $tags));
+            $original_tags = $this->get_original_term_ids($tags, 'product_tag');
+            $applies = !empty(array_intersect($rule['target_ids'], $original_tags));
         }
 
         if (!$applies) {
@@ -860,21 +903,26 @@ class Module {
             return $subtotal_html;
         }
 
-        // Verificar si este producto aplica a la regla
+        // Verificar si este producto aplica a la regla (compatible con WPML)
         $product_id = $product->get_id();
         $parent_id = $product->get_parent_id();
         $check_id = $parent_id > 0 ? $parent_id : $product_id;
 
+        // Obtener ID original (si WPML está activo)
+        $original_id = $this->get_original_id($check_id, 'post_product');
+
         $applies = false;
 
         if ($rule['apply_to'] === 'products') {
-            $applies = in_array($check_id, $rule['target_ids']);
+            $applies = in_array($original_id, $rule['target_ids']);
         } else if ($rule['apply_to'] === 'categories') {
             $categories = wp_get_post_terms($check_id, 'product_cat', ['fields' => 'ids']);
-            $applies = !empty(array_intersect($rule['target_ids'], $categories));
+            $original_categories = $this->get_original_term_ids($categories, 'product_cat');
+            $applies = !empty(array_intersect($rule['target_ids'], $original_categories));
         } else if ($rule['apply_to'] === 'tags') {
             $tags = wp_get_post_terms($check_id, 'product_tag', ['fields' => 'ids']);
-            $applies = !empty(array_intersect($rule['target_ids'], $tags));
+            $original_tags = $this->get_original_term_ids($tags, 'product_tag');
+            $applies = !empty(array_intersect($rule['target_ids'], $original_tags));
         }
 
         if (!$applies) {
