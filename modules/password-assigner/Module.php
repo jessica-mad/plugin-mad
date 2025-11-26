@@ -145,6 +145,8 @@ return new class($core ?? null) implements MAD_Suite_Module {
 
             // URLs y páginas
             'redirect_url' => '',
+            'redirect_after_login_es' => '',
+            'redirect_after_login_en' => '',
             'exclude_admin' => 1,
             'exclude_urls' => '',
             'exclude_pages' => [], // IDs de páginas a excluir
@@ -250,6 +252,12 @@ return new class($core ?? null) implements MAD_Suite_Module {
         // URLs y páginas (solo si vienen en el input)
         if (isset($input['redirect_url'])) {
             $sanitized['redirect_url'] = esc_url_raw($input['redirect_url']);
+        }
+        if (isset($input['redirect_after_login_es'])) {
+            $sanitized['redirect_after_login_es'] = esc_url_raw($input['redirect_after_login_es']);
+        }
+        if (isset($input['redirect_after_login_en'])) {
+            $sanitized['redirect_after_login_en'] = esc_url_raw($input['redirect_after_login_en']);
         }
         if (isset($input['exclude_admin']) || array_key_exists('exclude_admin', $input)) {
             $sanitized['exclude_admin'] = !empty($input['exclude_admin']) && $input['exclude_admin'] == '1' ? 1 : 0;
@@ -688,12 +696,31 @@ return new class($core ?? null) implements MAD_Suite_Module {
         $settings = $this->get_settings();
         $submitted_password = $_POST['mads_password'] ?? '';
 
-        if ($submitted_password === $settings['password']) {
+        // Comparación case-insensitive
+        if (strtolower($submitted_password) === strtolower($settings['password'])) {
             // Contraseña correcta
             $this->grant_access();
 
-            // Redirigir al home
-            wp_safe_redirect(home_url('/'));
+            // Determinar URL de redirección según idioma
+            $redirect_url = home_url('/');
+
+            if (!empty($settings['enable_wpml'])) {
+                $current_url = $_SERVER['REQUEST_URI'] ?? '';
+                $is_english = (strpos($current_url, '/en/') !== false);
+
+                if ($is_english && !empty($settings['redirect_after_login_en'])) {
+                    $redirect_url = $settings['redirect_after_login_en'];
+                } elseif (!$is_english && !empty($settings['redirect_after_login_es'])) {
+                    $redirect_url = $settings['redirect_after_login_es'];
+                }
+            } else {
+                // Si WPML no está habilitado, usar solo la versión española
+                if (!empty($settings['redirect_after_login_es'])) {
+                    $redirect_url = $settings['redirect_after_login_es'];
+                }
+            }
+
+            wp_safe_redirect($redirect_url);
             exit;
         } else {
             // Contraseña incorrecta - redirigir con error

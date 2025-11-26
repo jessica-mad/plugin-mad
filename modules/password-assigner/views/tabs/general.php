@@ -140,6 +140,113 @@ if (!defined('ABSPATH')) exit;
 
         <tr>
             <th scope="row">
+                <label for="redirect_after_login_es">
+                    <?php _e('Redirección después del login', 'mad-suite'); ?>
+                </label>
+            </th>
+            <td>
+                <div style="margin-bottom: 15px;">
+                    <label for="redirect_after_login_es" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Página de destino (español):', 'mad-suite'); ?></strong>
+                    </label>
+                    <?php
+                    wp_dropdown_pages([
+                        'name' => $option_key . '[redirect_after_login_es_page]',
+                        'id' => 'redirect_after_login_es_page',
+                        'selected' => url_to_postid($settings['redirect_after_login_es']),
+                        'show_option_none' => __('-- Home (por defecto) --', 'mad-suite'),
+                        'option_none_value' => '',
+                    ]);
+                    ?>
+                    <p class="description">
+                        <?php _e('Página a la que se redirigirá al usuario después de ingresar la contraseña correcta (versión en español).', 'mad-suite'); ?>
+                    </p>
+
+                    <input type="hidden"
+                           name="<?php echo esc_attr($option_key); ?>[redirect_after_login_es]"
+                           id="redirect_after_login_es"
+                           value="<?php echo esc_attr($settings['redirect_after_login_es']); ?>">
+                </div>
+
+                <div id="redirect_after_login_en_wrapper">
+                    <label for="redirect_after_login_en" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Página de destino (inglés):', 'mad-suite'); ?></strong>
+                    </label>
+                    <?php
+                    wp_dropdown_pages([
+                        'name' => $option_key . '[redirect_after_login_en_page]',
+                        'id' => 'redirect_after_login_en_page',
+                        'selected' => url_to_postid($settings['redirect_after_login_en']),
+                        'show_option_none' => __('-- Home (por defecto) --', 'mad-suite'),
+                        'option_none_value' => '',
+                    ]);
+                    ?>
+                    <p class="description">
+                        <?php _e('Página a la que se redirigirá al usuario después de ingresar la contraseña correcta (versión en inglés).', 'mad-suite'); ?>
+                    </p>
+
+                    <input type="hidden"
+                           name="<?php echo esc_attr($option_key); ?>[redirect_after_login_en]"
+                           id="redirect_after_login_en"
+                           value="<?php echo esc_attr($settings['redirect_after_login_en']); ?>">
+                </div>
+
+                <script>
+                    jQuery(document).ready(function($) {
+                        // Handler para redirección ES
+                        $('#redirect_after_login_es_page').on('change', function() {
+                            var pageId = $(this).val();
+                            if (pageId) {
+                                $.ajax({
+                                    url: ajaxurl,
+                                    type: 'POST',
+                                    data: {
+                                        action: 'get_page_permalink',
+                                        page_id: pageId
+                                    },
+                                    success: function(response) {
+                                        if (response.success) {
+                                            $('#redirect_after_login_es').val(response.data.permalink);
+                                        }
+                                    }
+                                });
+                            } else {
+                                $('#redirect_after_login_es').val('');
+                            }
+                        });
+
+                        // Handler para redirección EN
+                        $('#redirect_after_login_en_page').on('change', function() {
+                            var pageId = $(this).val();
+                            if (pageId) {
+                                $.ajax({
+                                    url: ajaxurl,
+                                    type: 'POST',
+                                    data: {
+                                        action: 'get_page_permalink',
+                                        page_id: pageId
+                                    },
+                                    success: function(response) {
+                                        if (response.success) {
+                                            $('#redirect_after_login_en').val(response.data.permalink);
+                                        }
+                                    }
+                                });
+                            } else {
+                                $('#redirect_after_login_en').val('');
+                            }
+                        });
+
+                        // Trigger change al cargar
+                        $('#redirect_after_login_es_page').trigger('change');
+                        $('#redirect_after_login_en_page').trigger('change');
+                    });
+                </script>
+            </td>
+        </tr>
+
+        <tr>
+            <th scope="row">
                 <?php _e('Mensajes personalizados', 'mad-suite'); ?>
             </th>
             <td>
@@ -272,11 +379,13 @@ if (!defined('ABSPATH')) exit;
         // Toggle de campos en inglés
         function toggleEnglishFields() {
             if ($('#enable_wpml').is(':checked')) {
+                $('#redirect_after_login_en_wrapper').show();
                 $('#message_en_wrapper').show();
                 $('#form_intro_en_wrapper').show();
                 $('#placeholder_en_wrapper').show();
                 $('#button_text_en_wrapper').show();
             } else {
+                $('#redirect_after_login_en_wrapper').hide();
                 $('#message_en_wrapper').hide();
                 $('#form_intro_en_wrapper').hide();
                 $('#placeholder_en_wrapper').hide();
