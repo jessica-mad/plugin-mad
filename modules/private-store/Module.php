@@ -648,13 +648,24 @@ class Module {
      * Esta función se ejecuta antes que handle_manual_coupon (prioridad 5 vs 10)
      */
     public function validate_coupon_schedule($valid, $coupon) {
+        // Log de contexto
+        $this->log(sprintf(
+            'validate_coupon_schedule - Cupón: %s, Valid: %s, is_admin: %s, manage_woocommerce: %s',
+            $coupon->get_code(),
+            $valid ? 'true' : 'false',
+            is_admin() ? 'true' : 'false',
+            current_user_can('manage_woocommerce') ? 'true' : 'false'
+        ));
+
         // Si ya es inválido, retornar
         if (!$valid) {
+            $this->log('validate_coupon_schedule - Cupón ya es inválido, retornando');
             return $valid;
         }
 
         // Permitir que administradores en backend usen cupones sin restricciones
         if (is_admin() && current_user_can('manage_woocommerce')) {
+            $this->log('validate_coupon_schedule - Admin en backend, permitiendo cupón sin validación');
             return $valid;
         }
 
@@ -664,17 +675,27 @@ class Module {
         $time_from = $coupon->get_meta('_mad_ps_time_from', true);
         $time_to = $coupon->get_meta('_mad_ps_time_to', true);
 
+        $this->log(sprintf(
+            'validate_coupon_schedule - Metadata: rule_id=%s, date_from=%s, time_from=%s, time_to=%s',
+            $rule_id ?: 'ninguno',
+            $date_from ?: 'ninguno',
+            $time_from ?: 'ninguno',
+            $time_to ?: 'ninguno'
+        ));
+
         // Si es un cupón de Private Shop, verificar que la regla esté activa
         if (!empty($rule_id)) {
             $rules = $this->get_discount_rules();
 
             // Verificar que la regla exista
             if (!isset($rules[$rule_id])) {
+                $this->log('validate_coupon_schedule - Regla no existe, bloqueando cupón');
                 throw new \Exception('Este cupón ya no es válido - la regla asociada fue eliminada');
             }
 
             // Verificar que la regla esté habilitada
             if (empty($rules[$rule_id]['enabled'])) {
+                $this->log('validate_coupon_schedule - Regla desactivada, bloqueando cupón');
                 throw new \Exception('Este cupón no está disponible temporalmente');
             }
         }
