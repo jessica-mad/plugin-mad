@@ -118,6 +118,13 @@ class PricingEngine {
             return $price;
         }
 
+        // IMPORTANTE: Si el producto tiene sale_price activo de WooCommerce, respetarlo
+        // Esto permite edición masiva de sale prices y aplicar cupones sobre ellos
+        if ($product->is_on_sale() && $product->get_sale_price()) {
+            $this->logger->debug("Producto {$product->get_id()} tiene sale_price nativo, respetando WooCommerce");
+            return $price; // Dejar que WooCommerce maneje el sale_price
+        }
+
         $product_id = $product->get_id();
         $original_price = $price;
 

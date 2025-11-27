@@ -383,11 +383,12 @@ class Module {
         }
         
         // Configuración del cupón desde la regla
-        $exclude_sale = isset($rule['coupon_config']['exclude_sale_items']) 
-            ? $rule['coupon_config']['exclude_sale_items'] 
-            : true;
-        $individual = isset($rule['coupon_config']['individual_use']) 
-            ? $rule['coupon_config']['individual_use'] 
+        // IMPORTANTE: Por defecto FALSE para permitir stack de sale_price + cupón
+        $exclude_sale = isset($rule['coupon_config']['exclude_sale_items'])
+            ? $rule['coupon_config']['exclude_sale_items']
+            : false;
+        $individual = isset($rule['coupon_config']['individual_use'])
+            ? $rule['coupon_config']['individual_use']
             : true;
             
         $coupon->set_exclude_sale_items($exclude_sale);
@@ -865,6 +866,12 @@ class Module {
             return $price_html;
         }
 
+        // IMPORTANTE: Si el producto tiene sale_price de WooCommerce, no mostrar preview
+        // El sale_price ya está visible y el cupón se aplicará en el carrito
+        if ($product->is_on_sale() && $product->get_sale_price()) {
+            return $price_html;
+        }
+
         $user_id = get_current_user_id();
         $rule = $this->get_best_rule_for_user($user_id);
 
@@ -963,6 +970,13 @@ class Module {
             return $price_html;
         }
 
+        // IMPORTANTE: Si el producto tiene sale_price de WooCommerce, no modificar
+        // El sale_price ya está aplicado y el cupón se muestra en totales
+        $product = $cart_item['data'];
+        if ($product && $product->is_on_sale() && $product->get_sale_price()) {
+            return $price_html;
+        }
+
         $user_id = get_current_user_id();
         $rule = $this->get_best_rule_for_user($user_id);
 
@@ -972,7 +986,6 @@ class Module {
         }
 
         // Obtener el producto del item del carrito
-        $product = $cart_item['data'];
         if (!$product) {
             return $price_html;
         }
@@ -1043,6 +1056,13 @@ class Module {
             return $subtotal_html;
         }
 
+        // IMPORTANTE: Si el producto tiene sale_price de WooCommerce, no modificar
+        // El sale_price ya está aplicado y el cupón se muestra en totales
+        $product = $cart_item['data'];
+        if ($product && $product->is_on_sale() && $product->get_sale_price()) {
+            return $subtotal_html;
+        }
+
         $user_id = get_current_user_id();
         $rule = $this->get_best_rule_for_user($user_id);
 
@@ -1052,7 +1072,6 @@ class Module {
         }
 
         // Obtener el producto del item del carrito
-        $product = $cart_item['data'];
         if (!$product) {
             return $subtotal_html;
         }
@@ -1200,8 +1219,9 @@ class Module {
             }
 
             // Actualizar config
+            // IMPORTANTE: Por defecto FALSE para permitir stack de sale_price + cupón
             if (isset($rule['coupon_config'])) {
-                $coupon->set_exclude_sale_items($rule['coupon_config']['exclude_sale_items'] ?? true);
+                $coupon->set_exclude_sale_items($rule['coupon_config']['exclude_sale_items'] ?? false);
                 $coupon->set_individual_use($rule['coupon_config']['individual_use'] ?? true);
             }
 
@@ -1320,6 +1340,7 @@ class Module {
             'coupon_config' => [
                 'prefix' => sanitize_text_field($_POST['coupon_prefix'] ?? 'ps'),
                 'name_length' => intval($_POST['coupon_name_length'] ?? 7),
+                // IMPORTANTE: Solo TRUE si está marcado, default FALSE para stack con sale_price
                 'exclude_sale_items' => isset($_POST['exclude_sale_items']),
                 'individual_use' => isset($_POST['individual_use']),
             ]
