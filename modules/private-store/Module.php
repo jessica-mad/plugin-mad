@@ -61,15 +61,21 @@ class Module {
         add_action('admin_post_toggle_private_shop_rule', [$this, 'toggle_discount_rule']);
         add_action('admin_post_regenerate_user_coupon', [$this, 'admin_regenerate_coupon']);
         add_action('admin_post_delete_user_coupon', [$this, 'admin_delete_coupon']);
+
+        // Perfil de usuario - gestión de cupones
+        add_action('show_user_profile', [$this, 'show_user_coupons_section']);
+        add_action('edit_user_profile', [$this, 'show_user_coupons_section']);
+        add_action('admin_post_generate_user_coupons', [$this, 'admin_generate_user_coupons']);
         
         // Usuario Login/Logout
         add_action('wp_login', [$this, 'on_user_login'], 10, 2);
         add_action('wp_logout', [$this, 'on_user_logout']);
         
-        // Carrito
+        // Carrito y Checkout - generación automática de cupones
         add_action('woocommerce_add_to_cart', [$this, 'auto_apply_user_coupon'], 10, 6);
         add_action('woocommerce_before_cart', [$this, 'auto_apply_user_coupon_on_cart']);
-        
+        add_action('woocommerce_before_checkout', [$this, 'on_before_checkout']);
+
         // Cupón manual
         add_filter('woocommerce_coupon_is_valid', [$this, 'handle_manual_coupon'], 10, 2);
 
@@ -509,15 +515,38 @@ class Module {
      * Evento: Usuario hace login
      * Crea cupones para TODAS las reglas aplicables al usuario
      */
-    public function on_user_login($user_login, $user) {
-        $user_id = $user->ID;
+    /**
+     * Asegura que el usuario tenga todos los cupones necesarios
+     * Incluye sistema de cache para evitar verificaciones repetidas
+     *
+     * @param int $user_id ID del usuario
+     * @param bool $force Si es true, ignora cache y fuerza regeneración
+     * @return int Número de cupones creados
+     */
+    private function ensure_user_has_coupons($user_id, $force = false) {
+        // Cache: evitar verificaciones repetidas (salvo que sea forzado)
+        if (!$force) {
+            $cache_key = 'mad_ps_coupons_verified_' . $user_id;
+            if (get_transient($cache_key)) {
+                return 0; // Ya verificado recientemente
+            }
+        }
+
+        $user = get_userdata($user_id);
+        if (!$user) {
+            return 0;
+        }
 
         // Obtener TODAS las reglas aplicables para este usuario
         $applicable_rules = $this->get_all_applicable_rules_for_user($user_id);
 
         if (empty($applicable_rules)) {
-            $this->log("Usuario {$user_login} sin reglas aplicables");
-            return;
+            $this->log("Usuario {$user->user_login} sin reglas aplicables");
+            // Marcar como verificado aunque no tenga reglas
+            if (!$force) {
+                set_transient($cache_key, true, HOUR_IN_SECONDS);
+            }
+            return 0;
         }
 
         $rule_coupons = $this->get_rule_coupons();
@@ -528,7 +557,7 @@ class Module {
             // Verificar si ya tiene cupón para ESTA regla específica
             if (isset($rule_coupons[$rule['id']]['user_coupons'][$user_id])) {
                 $existing_code = $rule_coupons[$rule['id']]['user_coupons'][$user_id];
-                $this->log("Usuario {$user_login} ya tiene cupón para regla {$rule['name']}: {$existing_code}");
+                $this->log("Usuario {$user->user_login} ya tiene cupón para regla {$rule['name']}: {$existing_code}");
                 continue; // Ya tiene cupón para esta regla, pasar a la siguiente
             }
 
@@ -536,7 +565,7 @@ class Module {
             $coupon_code = $this->generate_coupon_code($user_id, $rule);
 
             if (!$coupon_code) {
-                $this->log("Error generando código de cupón para usuario {$user_login} y regla {$rule['name']}", 'ERROR');
+                $this->log("Error generando código de cupón para usuario {$user->user_login} y regla {$rule['name']}", 'ERROR');
                 continue;
             }
 
@@ -544,7 +573,7 @@ class Module {
             $coupon_id = $this->create_wc_coupon($coupon_code, $rule, $user_id);
 
             if (!$coupon_id) {
-                $this->log("Error creando cupón WC para usuario {$user_login} y regla {$rule['name']}", 'ERROR');
+                $this->log("Error creando cupón WC para usuario {$user->user_login} y regla {$rule['name']}", 'ERROR');
                 continue;
             }
 
@@ -560,25 +589,49 @@ class Module {
             $rule_coupons[$rule['id']]['user_coupons'][$user_id] = $coupon_code;
 
             $created_count++;
-            $this->log("Cupón creado para usuario {$user_login} y regla {$rule['name']}: {$coupon_code}");
+            $this->log("Cupón creado para usuario {$user->user_login} y regla {$rule['name']}: {$coupon_code}");
         }
 
         // Guardar todos los cambios
-        $this->save_rule_coupons($rule_coupons);
+        if ($created_count > 0) {
+            $this->save_rule_coupons($rule_coupons);
+            $this->log("Sistema completo - {$created_count} cupón(es) creado(s) para {$user->user_login}", 'SUCCESS');
+        }
 
-        $this->log("Sistema completo - {$created_count} cupón(es) creado(s) para {$user_login}", 'SUCCESS');
+        // Marcar como verificado por 1 hora (salvo que sea forzado)
+        if (!$force) {
+            set_transient($cache_key, true, HOUR_IN_SECONDS);
+        }
+
+        return $created_count;
+    }
+
+    /**
+     * Hook de login - genera cupones al iniciar sesión
+     */
+    public function on_user_login($user_login, $user) {
+        $this->ensure_user_has_coupons($user->ID);
     }
     
     /**
      * Evento: Usuario hace logout
+     * Remueve cupones del carrito y limpia cache
      */
     public function on_user_logout() {
+        $user_id = get_current_user_id();
+
+        // Limpiar cache de verificación de cupones
+        if ($user_id) {
+            $cache_key = 'mad_ps_coupons_verified_' . $user_id;
+            delete_transient($cache_key);
+        }
+
         if (!WC()->cart) {
             return;
         }
-        
+
         $applied_coupons = WC()->cart->get_applied_coupons();
-        
+
         foreach ($applied_coupons as $coupon_code) {
             // Remover solo cupones que sean del sistema (formato: prefix_name_id)
             if (preg_match('/^[a-z0-9]+_[a-z0-9]+_\d+$/', $coupon_code)) {
@@ -587,18 +640,36 @@ class Module {
             }
         }
     }
+
+    /**
+     * Evento: Antes de checkout
+     * Asegura que el usuario tenga cupones antes del checkout
+     */
+    public function on_before_checkout() {
+        if (!is_user_logged_in()) {
+            return;
+        }
+
+        $user_id = get_current_user_id();
+        $this->ensure_user_has_coupons($user_id);
+    }
     
     /**
      * Auto-aplicar cupón al añadir al carrito
+     * Asegura que el usuario tenga cupones antes de aplicar
      */
     public function auto_apply_user_coupon() {
         if (!is_user_logged_in() || !WC()->cart) {
             return;
         }
-        
+
         $user_id = get_current_user_id();
+
+        // Asegurar que el usuario tenga cupones (con cache)
+        $this->ensure_user_has_coupons($user_id);
+
         $coupon_code = $this->get_user_active_coupon($user_id);
-        
+
         if (!$coupon_code) {
             return;
         }
@@ -1394,6 +1465,98 @@ class Module {
             'action' => 'coupons',
             'deleted_coupon' => 'true'
         ], admin_url('admin.php')));
+        exit;
+    }
+
+    /**
+     * Muestra sección de cupones en el perfil del usuario
+     */
+    public function show_user_coupons_section($user) {
+        if (!current_user_can('edit_users')) {
+            return;
+        }
+
+        $user_id = $user->ID;
+        $applicable_rules = $this->get_all_applicable_rules_for_user($user_id);
+        $rule_coupons = $this->get_rule_coupons();
+
+        ?>
+        <h2>Cupones Private Shop</h2>
+        <table class="form-table">
+            <tr>
+                <th>Cupones activos</th>
+                <td>
+                    <?php if (empty($applicable_rules)): ?>
+                        <p>Este usuario no tiene reglas de descuento aplicables.</p>
+                    <?php else: ?>
+                        <table class="widefat">
+                            <thead>
+                                <tr>
+                                    <th>Regla</th>
+                                    <th>Código de cupón</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($applicable_rules as $rule): ?>
+                                    <?php
+                                    $has_coupon = isset($rule_coupons[$rule['id']]['user_coupons'][$user_id]);
+                                    $coupon_code = $has_coupon ? $rule_coupons[$rule['id']]['user_coupons'][$user_id] : '-';
+                                    $status = $has_coupon ? '✓ Generado' : '✗ Pendiente';
+                                    $status_class = $has_coupon ? 'dashicons-yes' : 'dashicons-no-alt';
+                                    ?>
+                                    <tr>
+                                        <td><?php echo esc_html($rule['name']); ?></td>
+                                        <td><code><?php echo esc_html($coupon_code); ?></code></td>
+                                        <td><span class="dashicons <?php echo $status_class; ?>"></span> <?php echo $status; ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+
+                        <p class="description">
+                            Si falta algún cupón o quieres regenerarlos, usa el botón de abajo.
+                        </p>
+
+                        <form method="post" action="<?php echo admin_url('admin-post.php'); ?>" style="margin-top: 15px;">
+                            <input type="hidden" name="action" value="generate_user_coupons">
+                            <input type="hidden" name="user_id" value="<?php echo $user_id; ?>">
+                            <?php wp_nonce_field('generate_user_coupons_' . $user_id, 'nonce'); ?>
+                            <button type="submit" class="button button-primary">
+                                Generar/Actualizar cupones
+                            </button>
+                        </form>
+                    <?php endif; ?>
+                </td>
+            </tr>
+        </table>
+        <?php
+    }
+
+    /**
+     * Genera cupones para un usuario desde el perfil (acción manual del admin)
+     */
+    public function admin_generate_user_coupons() {
+        if (!isset($_POST['nonce']) ||
+            !isset($_POST['user_id']) ||
+            !current_user_can('edit_users')) {
+            wp_die('Error de seguridad');
+        }
+
+        $user_id = intval($_POST['user_id']);
+
+        if (!wp_verify_nonce($_POST['nonce'], 'generate_user_coupons_' . $user_id)) {
+            wp_die('Error de seguridad');
+        }
+
+        // Generar cupones forzando (sin cache)
+        $created_count = $this->ensure_user_has_coupons($user_id, true);
+
+        // Redirect de vuelta al perfil con mensaje
+        wp_redirect(add_query_arg([
+            'user_id' => $user_id,
+            'coupons_generated' => $created_count
+        ], admin_url('user-edit.php')));
         exit;
     }
 
