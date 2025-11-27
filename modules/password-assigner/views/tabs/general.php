@@ -82,37 +82,67 @@ if (!defined('ABSPATH')) exit;
 
         <tr>
             <th scope="row">
-                <label for="redirect_url">
+                <label for="redirect_url_es">
                     <?php _e('Página de login', 'mad-suite'); ?>
                 </label>
             </th>
             <td>
-                <?php
-                wp_dropdown_pages([
-                    'name' => $option_key . '[redirect_url_page]',
-                    'id' => 'redirect_url_page',
-                    'selected' => url_to_postid($settings['redirect_url']),
-                    'show_option_none' => __('-- Selecciona una página --', 'mad-suite'),
-                    'option_none_value' => '',
-                ]);
-                ?>
-                <p class="description">
-                    <?php _e('Página donde se mostrará el formulario de contraseña. Los usuarios serán redirigidos a esta página cuando intenten acceder al sitio.', 'mad-suite'); ?>
-                    <br>
-                    <?php _e('Recuerda agregar el shortcode <code>[password_access_form]</code> en esta página.', 'mad-suite'); ?>
-                </p>
+                <div style="margin-bottom: 15px;">
+                    <label for="redirect_url_es" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Página de login (español):', 'mad-suite'); ?></strong>
+                    </label>
+                    <?php
+                    wp_dropdown_pages([
+                        'name' => $option_key . '[redirect_url_es_page]',
+                        'id' => 'redirect_url_es_page',
+                        'selected' => url_to_postid($settings['redirect_url_es']),
+                        'show_option_none' => __('-- Selecciona una página --', 'mad-suite'),
+                        'option_none_value' => '',
+                    ]);
+                    ?>
+                    <p class="description">
+                        <?php _e('Página donde se mostrará el formulario de contraseña (versión en español).', 'mad-suite'); ?>
+                        <br>
+                        <?php _e('Recuerda agregar el shortcode <code>[password_access_form]</code> en esta página.', 'mad-suite'); ?>
+                    </p>
 
-                <input type="hidden"
-                       name="<?php echo esc_attr($option_key); ?>[redirect_url]"
-                       id="redirect_url"
-                       value="<?php echo esc_attr($settings['redirect_url']); ?>">
+                    <input type="hidden"
+                           name="<?php echo esc_attr($option_key); ?>[redirect_url_es]"
+                           id="redirect_url_es"
+                           value="<?php echo esc_attr($settings['redirect_url_es']); ?>">
+                </div>
+
+                <div id="redirect_url_en_wrapper">
+                    <label for="redirect_url_en" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Página de login (inglés):', 'mad-suite'); ?></strong>
+                    </label>
+                    <?php
+                    wp_dropdown_pages([
+                        'name' => $option_key . '[redirect_url_en_page]',
+                        'id' => 'redirect_url_en_page',
+                        'selected' => url_to_postid($settings['redirect_url_en']),
+                        'show_option_none' => __('-- Selecciona una página --', 'mad-suite'),
+                        'option_none_value' => '',
+                    ]);
+                    ?>
+                    <p class="description">
+                        <?php _e('Página donde se mostrará el formulario de contraseña (versión en inglés).', 'mad-suite'); ?>
+                        <br>
+                        <?php _e('Recuerda agregar el shortcode <code>[password_access_form]</code> en esta página.', 'mad-suite'); ?>
+                    </p>
+
+                    <input type="hidden"
+                           name="<?php echo esc_attr($option_key); ?>[redirect_url_en]"
+                           id="redirect_url_en"
+                           value="<?php echo esc_attr($settings['redirect_url_en']); ?>">
+                </div>
 
                 <script>
                     jQuery(document).ready(function($) {
-                        $('#redirect_url_page').on('change', function() {
+                        // Handler para página de login ES
+                        $('#redirect_url_es_page').on('change', function() {
                             var pageId = $(this).val();
                             if (pageId) {
-                                // Hacer una petición AJAX para obtener el permalink
                                 $.ajax({
                                     url: ajaxurl,
                                     type: 'POST',
@@ -122,17 +152,147 @@ if (!defined('ABSPATH')) exit;
                                     },
                                     success: function(response) {
                                         if (response.success) {
-                                            $('#redirect_url').val(response.data.permalink);
+                                            $('#redirect_url_es').val(response.data.permalink);
                                         }
                                     }
                                 });
                             } else {
-                                $('#redirect_url').val('');
+                                $('#redirect_url_es').val('');
                             }
                         });
 
-                        // Trigger change al cargar para asegurar que el campo hidden tenga el valor correcto
-                        $('#redirect_url_page').trigger('change');
+                        // Handler para página de login EN
+                        $('#redirect_url_en_page').on('change', function() {
+                            var pageId = $(this).val();
+                            if (pageId) {
+                                $.ajax({
+                                    url: ajaxurl,
+                                    type: 'POST',
+                                    data: {
+                                        action: 'get_page_permalink',
+                                        page_id: pageId
+                                    },
+                                    success: function(response) {
+                                        if (response.success) {
+                                            $('#redirect_url_en').val(response.data.permalink);
+                                        }
+                                    }
+                                });
+                            } else {
+                                $('#redirect_url_en').val('');
+                            }
+                        });
+
+                        // Trigger change al cargar
+                        $('#redirect_url_es_page').trigger('change');
+                        $('#redirect_url_en_page').trigger('change');
+                    });
+                </script>
+            </td>
+        </tr>
+
+        <tr>
+            <th scope="row">
+                <label for="redirect_after_login_es">
+                    <?php _e('Redirección después del login', 'mad-suite'); ?>
+                </label>
+            </th>
+            <td>
+                <div style="margin-bottom: 15px;">
+                    <label for="redirect_after_login_es" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Página de destino (español):', 'mad-suite'); ?></strong>
+                    </label>
+                    <?php
+                    wp_dropdown_pages([
+                        'name' => $option_key . '[redirect_after_login_es_page]',
+                        'id' => 'redirect_after_login_es_page',
+                        'selected' => url_to_postid($settings['redirect_after_login_es']),
+                        'show_option_none' => __('-- Home (por defecto) --', 'mad-suite'),
+                        'option_none_value' => '',
+                    ]);
+                    ?>
+                    <p class="description">
+                        <?php _e('Página a la que se redirigirá al usuario después de ingresar la contraseña correcta (versión en español).', 'mad-suite'); ?>
+                    </p>
+
+                    <input type="hidden"
+                           name="<?php echo esc_attr($option_key); ?>[redirect_after_login_es]"
+                           id="redirect_after_login_es"
+                           value="<?php echo esc_attr($settings['redirect_after_login_es']); ?>">
+                </div>
+
+                <div id="redirect_after_login_en_wrapper">
+                    <label for="redirect_after_login_en" style="display: block; margin-bottom: 5px;">
+                        <strong><?php _e('Página de destino (inglés):', 'mad-suite'); ?></strong>
+                    </label>
+                    <?php
+                    wp_dropdown_pages([
+                        'name' => $option_key . '[redirect_after_login_en_page]',
+                        'id' => 'redirect_after_login_en_page',
+                        'selected' => url_to_postid($settings['redirect_after_login_en']),
+                        'show_option_none' => __('-- Home (por defecto) --', 'mad-suite'),
+                        'option_none_value' => '',
+                    ]);
+                    ?>
+                    <p class="description">
+                        <?php _e('Página a la que se redirigirá al usuario después de ingresar la contraseña correcta (versión en inglés).', 'mad-suite'); ?>
+                    </p>
+
+                    <input type="hidden"
+                           name="<?php echo esc_attr($option_key); ?>[redirect_after_login_en]"
+                           id="redirect_after_login_en"
+                           value="<?php echo esc_attr($settings['redirect_after_login_en']); ?>">
+                </div>
+
+                <script>
+                    jQuery(document).ready(function($) {
+                        // Handler para redirección ES
+                        $('#redirect_after_login_es_page').on('change', function() {
+                            var pageId = $(this).val();
+                            if (pageId) {
+                                $.ajax({
+                                    url: ajaxurl,
+                                    type: 'POST',
+                                    data: {
+                                        action: 'get_page_permalink',
+                                        page_id: pageId
+                                    },
+                                    success: function(response) {
+                                        if (response.success) {
+                                            $('#redirect_after_login_es').val(response.data.permalink);
+                                        }
+                                    }
+                                });
+                            } else {
+                                $('#redirect_after_login_es').val('');
+                            }
+                        });
+
+                        // Handler para redirección EN
+                        $('#redirect_after_login_en_page').on('change', function() {
+                            var pageId = $(this).val();
+                            if (pageId) {
+                                $.ajax({
+                                    url: ajaxurl,
+                                    type: 'POST',
+                                    data: {
+                                        action: 'get_page_permalink',
+                                        page_id: pageId
+                                    },
+                                    success: function(response) {
+                                        if (response.success) {
+                                            $('#redirect_after_login_en').val(response.data.permalink);
+                                        }
+                                    }
+                                });
+                            } else {
+                                $('#redirect_after_login_en').val('');
+                            }
+                        });
+
+                        // Trigger change al cargar
+                        $('#redirect_after_login_es_page').trigger('change');
+                        $('#redirect_after_login_en_page').trigger('change');
                     });
                 </script>
             </td>
@@ -272,11 +432,15 @@ if (!defined('ABSPATH')) exit;
         // Toggle de campos en inglés
         function toggleEnglishFields() {
             if ($('#enable_wpml').is(':checked')) {
+                $('#redirect_url_en_wrapper').show();
+                $('#redirect_after_login_en_wrapper').show();
                 $('#message_en_wrapper').show();
                 $('#form_intro_en_wrapper').show();
                 $('#placeholder_en_wrapper').show();
                 $('#button_text_en_wrapper').show();
             } else {
+                $('#redirect_url_en_wrapper').hide();
+                $('#redirect_after_login_en_wrapper').hide();
                 $('#message_en_wrapper').hide();
                 $('#form_intro_en_wrapper').hide();
                 $('#placeholder_en_wrapper').hide();

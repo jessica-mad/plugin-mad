@@ -5,13 +5,8 @@
 
 defined('ABSPATH') || exit;
 
-// Activar display de errores temporalmente para debug
-@ini_set('display_errors', '1');
-@ini_set('display_startup_errors', '1');
-@error_reporting(E_ALL);
-
 echo '<div class="wrap">';
-echo '<h1>🎫 Cupones Generados - Debug Mode</h1>';
+echo '<h1>🎫 Cupones Generados</h1>';
 
 // Verificar que WooCommerce esté activo
 if (!function_exists('WC')) {
@@ -20,8 +15,6 @@ if (!function_exists('WC')) {
     return;
 }
 
-echo '<div class="notice notice-info"><p>WooCommerce está activo ✓</p></div>';
-
 // Mensajes
 if (isset($_GET['regenerated'])) {
     echo '<div class="notice notice-success is-dismissible"><p><strong>✓ Cupón regenerado correctamente</strong></p></div>';
@@ -29,138 +22,143 @@ if (isset($_GET['regenerated'])) {
 if (isset($_GET['deleted_coupon'])) {
     echo '<div class="notice notice-success is-dismissible"><p><strong>✓ Cupón eliminado correctamente</strong></p></div>';
 }
+if (isset($_GET['synced'])) {
+    $deleted = isset($_GET['deleted']) ? intval($_GET['deleted']) : 0;
+    $kept = isset($_GET['kept']) ? intval($_GET['kept']) : 0;
+    $disabled = isset($_GET['disabled']) ? intval($_GET['disabled']) : 0;
+
+    echo '<div class="notice notice-success is-dismissible">';
+    echo '<p><strong>✓ Sincronización completada</strong></p>';
+    echo '<ul>';
+    echo '<li>Reglas desactivadas/eliminadas: ' . $disabled . '</li>';
+    echo '<li>Cupones eliminados: ' . $deleted . '</li>';
+    echo '<li>Cupones activos mantenidos: ' . $kept . '</li>';
+    echo '</ul>';
+    echo '</div>';
+}
 
 try {
-    echo '<div class="notice notice-info"><p>Intentando obtener datos...</p></div>';
-
     // Obtener datos
     $rules = get_option('mad_private_shop_rules', []);
     $rule_coupons = get_option('mad_private_shop_rule_coupons', []);
 
-    echo '<div class="notice notice-info"><p>Datos obtenidos: ' . count($rules) . ' reglas, ' . count($rule_coupons) . ' mappings de cupones</p></div>';
+    // Filtros
+    $filter_rule = isset($_GET['filter_rule']) ? sanitize_text_field($_GET['filter_rule']) : '';
 
-// DEBUG - ACTIVADO TEMPORALMENTE
-echo '<pre>Rules: '; print_r($rules); echo '</pre>';
-echo '<pre>Rule Coupons: '; print_r($rule_coupons); echo '</pre>';
+    // Recopilar todos los cupones
+    $all_coupons = [];
 
-// Filtros
-$filter_rule = isset($_GET['filter_rule']) ? sanitize_text_field($_GET['filter_rule']) : '';
+    if (!empty($rule_coupons) && is_array($rule_coupons)) {
+        foreach ($rule_coupons as $rule_id => $data) {
+            if (!isset($rules[$rule_id])) {
+                continue; // Regla eliminada
+            }
 
-// Recopilar todos los cupones
-$all_coupons = [];
+            $rule = $rules[$rule_id];
 
-if (!empty($rule_coupons) && is_array($rule_coupons)) {
-    foreach ($rule_coupons as $rule_id => $data) {
-        if (!isset($rules[$rule_id])) {
-            continue; // Regla eliminada
-        }
-        
-        $rule = $rules[$rule_id];
-        
-        if (!empty($filter_rule) && $filter_rule !== $rule_id) {
-            continue; // Filtro aplicado
-        }
-        
-        if (!isset($data['user_coupons']) || !is_array($data['user_coupons'])) {
-            continue;
-        }
-        
-        foreach ($data['user_coupons'] as $user_id => $coupon_code) {
-            $user = get_userdata($user_id);
-            if (!$user) {
+            if (!empty($filter_rule) && $filter_rule !== $rule_id) {
+                continue; // Filtro aplicado
+            }
+
+            if (!isset($data['user_coupons']) || !is_array($data['user_coupons'])) {
                 continue;
             }
-            
-            // Buscar cupón en WooCommerce - método compatible
-            $coupon_post = get_page_by_title($coupon_code, OBJECT, 'shop_coupon');
-            if (!$coupon_post) {
-                // Intentar búsqueda alternativa
+
+            foreach ($data['user_coupons'] as $user_id => $coupon_code) {
+                $user = get_userdata($user_id);
+                if (!$user) {
+                    continue;
+                }
+
+                // Buscar cupón - usar método recomendado
                 $coupon_id = wc_get_coupon_id_by_code($coupon_code);
                 if (!$coupon_id) {
                     continue; // Cupón eliminado
                 }
-            } else {
-                $coupon_id = $coupon_post->ID;
-            }
-            
-            try {
-                $coupon = new WC_Coupon($coupon_id);
-                if (!$coupon->get_id()) {
+
+                try {
+                    $coupon = new WC_Coupon($coupon_id);
+                    if (!$coupon->get_id()) {
+                        continue;
+                    }
+
+                    $usage_count = $coupon->get_usage_count();
+
+                    // NOTA: Cálculo de valor de compras desactivado temporalmente
+                    // para evitar agotamiento de memoria con muchas órdenes
+                    $total_value = 0;
+
+                    $all_coupons[] = [
+                        'coupon_id' => $coupon_id,
+                        'coupon_code' => $coupon_code,
+                        'user_id' => $user_id,
+                        'user_name' => $user->display_name,
+                        'user_email' => $user->user_email,
+                        'rule_id' => $rule_id,
+                        'rule_name' => $rule['name'],
+                        'rule_discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : '€'),
+                        'usage_count' => $usage_count,
+                        'total_value' => $total_value,
+                        'created' => get_post_meta($coupon_id, '_mad_ps_created', true),
+                    ];
+                } catch (Exception $e) {
+                    // Error al cargar cupón - continuar
                     continue;
                 }
-                
-                $usage_count = $coupon->get_usage_count();
-                
-                // Calcular valor de compras
-                $total_value = 0;
-                if (function_exists('wc_get_orders')) {
-                    $orders = wc_get_orders([
-                        'limit' => -1,
-                        'coupon' => $coupon_code,
-                        'status' => ['completed', 'processing']
-                    ]);
-                    
-                    foreach ($orders as $order) {
-                        $total_value += $order->get_total();
-                    }
-                }
-                
-                $all_coupons[] = [
-                    'coupon_id' => $coupon_id,
-                    'coupon_code' => $coupon_code,
-                    'user_id' => $user_id,
-                    'user_name' => $user->display_name,
-                    'user_email' => $user->user_email,
-                    'rule_id' => $rule_id,
-                    'rule_name' => $rule['name'],
-                    'rule_discount' => $rule['discount_value'] . ($rule['discount_type'] === 'percentage' ? '%' : '€'),
-                    'usage_count' => $usage_count,
-                    'total_value' => $total_value,
-                    'created' => get_post_meta($coupon_id, '_mad_ps_created', true),
-                ];
-            } catch (Exception $e) {
-                // Error al cargar cupón - continuar
-                continue;
             }
         }
     }
-}
 
-// Calcular estadísticas globales
-$stats = [
-    'total_generated' => count($all_coupons),
-    'total_used' => 0,
-    'total_value' => 0,
-    'total_usage' => 0,
-];
+    // Calcular estadísticas globales
+    $stats = [
+        'total_generated' => count($all_coupons),
+        'total_used' => 0,
+        'total_value' => 0,
+        'total_usage' => 0,
+    ];
 
-if (!empty($all_coupons)) {
-    $stats['total_used'] = count(array_filter($all_coupons, function($c) {
-        return isset($c['usage_count']) && $c['usage_count'] > 0;
-    }));
+    if (!empty($all_coupons)) {
+        $stats['total_used'] = count(array_filter($all_coupons, function($c) {
+            return isset($c['usage_count']) && $c['usage_count'] > 0;
+        }));
 
-    $total_values = array_column($all_coupons, 'total_value');
-    $stats['total_value'] = !empty($total_values) ? array_sum($total_values) : 0;
+        $total_values = array_column($all_coupons, 'total_value');
+        $stats['total_value'] = !empty($total_values) ? array_sum($total_values) : 0;
 
-    $usage_counts = array_column($all_coupons, 'usage_count');
-    $stats['total_usage'] = !empty($usage_counts) ? array_sum($usage_counts) : 0;
-}
-
-echo '<div class="notice notice-success"><p>Estadísticas calculadas correctamente</p></div>';
-?>
+        $usage_counts = array_column($all_coupons, 'usage_count');
+        $stats['total_usage'] = !empty($usage_counts) ? array_sum($usage_counts) : 0;
+    }
+    ?>
 
     <!-- Tabs de navegación -->
     <nav class="nav-tab-wrapper" style="margin: 20px 0;">
-        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>" 
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop'], admin_url('admin.php')); ?>"
            class="nav-tab">
             📋 Reglas de Descuento
         </a>
-        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>" 
+        <a href="<?php echo add_query_arg(['page' => 'mad-private-shop', 'action' => 'coupons'], admin_url('admin.php')); ?>"
            class="nav-tab nav-tab-active">
             🎫 Cupones Generados
         </a>
     </nav>
-    
+
+    <!-- Botón de sincronización -->
+    <div style="margin: 20px 0; padding: 15px; background: #fff; border: 1px solid #ccd0d4; border-radius: 4px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <h3 style="margin: 0 0 8px 0;">🔄 Sincronizar Cupones</h3>
+                <p style="margin: 0; color: #666;">
+                    Elimina cupones de reglas desactivadas o eliminadas. Los cupones de reglas activas se mantienen intactos.
+                </p>
+            </div>
+            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=sync_private_shop_coupons'), 'sync_coupons', 'nonce'); ?>"
+               class="button button-primary button-large"
+               onclick="return confirm('¿Estás segura de que deseas sincronizar los cupones?\n\nEsto eliminará todos los cupones de reglas desactivadas o eliminadas.');">
+                🔄 Sincronizar Ahora
+            </a>
+        </div>
+    </div>
+
     <!-- Estadísticas -->
     <div class="card" style="max-width: 100%; margin-top: 20px;">
         <h2 style="padding: 15px; margin: 0; border-bottom: 1px solid #ddd;">📊 Estadísticas Globales</h2>
