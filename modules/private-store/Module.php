@@ -81,7 +81,10 @@ class Module {
 
         // Validación de fecha/hora programada en cupones
         add_filter('woocommerce_coupon_is_valid', [$this, 'validate_coupon_schedule'], 5, 2);
-        
+
+        // IMPORTANTE: Calcular descuento de cupón sobre precio REGULAR, no sobre sale_price
+        add_filter('woocommerce_coupon_get_discount_amount', [$this, 'calculate_coupon_on_regular_price'], 10, 5);
+
         // Visualización de precio con descuento
         add_filter('woocommerce_get_price_html', [$this, 'show_discount_preview'], 99, 2);
 
@@ -853,6 +856,76 @@ class Module {
         }
 
         return $valid;
+    }
+
+    /**
+     * Calcular descuento de cupón sobre precio REGULAR, no sobre sale_price
+     * IMPORTANTE: Clientes VIP obtienen descuentos sobre precio base, ignorando ofertas
+     *
+     * @param float $discount Descuento original calculado por WooCommerce
+     * @param float $discounting_amount Precio sobre el que se calcula (normalmente precio actual)
+     * @param array|null $cart_item Item del carrito
+     * @param bool $single Si es un item individual
+     * @param WC_Coupon $coupon Objeto del cupón
+     * @return float Descuento recalculado sobre precio regular
+     */
+    public function calculate_coupon_on_regular_price($discount, $discounting_amount, $cart_item, $single, $coupon) {
+        // Solo aplicar para cupones del sistema Private Shop
+        $rule_id = $coupon->get_meta('_mad_ps_rule_id', true);
+
+        if (empty($rule_id)) {
+            // No es un cupón de Private Shop, dejar cálculo por defecto
+            return $discount;
+        }
+
+        // Verificar que tengamos el cart_item
+        if (empty($cart_item) || !isset($cart_item['data'])) {
+            return $discount;
+        }
+
+        $product = $cart_item['data'];
+
+        // Obtener precio REGULAR del producto (ignorar sale_price)
+        $regular_price = floatval($product->get_regular_price());
+
+        if ($regular_price <= 0) {
+            return $discount;
+        }
+
+        // Obtener tipo y valor del descuento del cupón
+        $discount_type = $coupon->get_discount_type();
+        $coupon_amount = $coupon->get_amount();
+
+        $this->log(sprintf(
+            "calculate_coupon_on_regular_price - Producto: %s, Regular: %s, Cupón: %s, Tipo: %s, Monto: %s",
+            $product->get_name(),
+            $regular_price,
+            $coupon->get_code(),
+            $discount_type,
+            $coupon_amount
+        ));
+
+        // Calcular descuento sobre precio REGULAR
+        if ($discount_type === 'percent') {
+            // Descuento porcentual sobre precio regular
+            $new_discount = ($regular_price * $coupon_amount) / 100;
+        } else {
+            // Descuento fijo (mantener original)
+            $new_discount = $discount;
+        }
+
+        // Considerar cantidad si no es single
+        if (!$single && isset($cart_item['quantity'])) {
+            $new_discount = $new_discount * $cart_item['quantity'];
+        }
+
+        $this->log(sprintf(
+            "calculate_coupon_on_regular_price - Descuento original: %s, Nuevo descuento: %s",
+            $discount,
+            $new_discount
+        ));
+
+        return $new_discount;
     }
 
     /**
