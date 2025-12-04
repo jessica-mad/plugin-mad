@@ -226,7 +226,13 @@ class ProductFeedGenerator {
         }
 
         // Google Product Category
-        $google_category = $this->category_mapper->get_product_category($product_id);
+        // For variations, get category from parent product
+        $category_product_id = $product_id;
+        if ($product->is_type('variation')) {
+            $category_product_id = $product->get_parent_id();
+        }
+
+        $google_category = $this->category_mapper->get_product_category($category_product_id);
         if ($google_category) {
             $data['google_product_category'] = $google_category['id'];
         }
@@ -238,7 +244,13 @@ class ProductFeedGenerator {
         }
 
         // Custom Labels (from tags)
-        $custom_labels = $this->tag_mapper->get_product_custom_labels($product_id);
+        // For variations, get tags from parent product
+        $tags_product_id = $product_id;
+        if ($product->is_type('variation')) {
+            $tags_product_id = $product->get_parent_id();
+        }
+
+        $custom_labels = $this->tag_mapper->get_product_custom_labels($tags_product_id);
         if (!empty($custom_labels)) {
             $formatted_labels = $this->tag_mapper->format_for_feed($custom_labels);
             $data = array_merge($data, $formatted_labels);
