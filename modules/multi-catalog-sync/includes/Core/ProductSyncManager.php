@@ -320,12 +320,46 @@ class ProductSyncManager {
             $counts[$destination_name] = [
                 'items' => 0,
                 'errors' => 0,
+                'last_sync_items' => 0,
+                'last_sync_errors' => 0,
             ];
         }
 
-        // Update counts
-        $counts[$destination_name]['items'] = isset($result['synced']) ? $result['synced'] : 0;
-        $counts[$destination_name]['errors'] = isset($result['failed']) ? $result['failed'] : 0;
+        // Accumulate total items (add successfully synced to total)
+        $synced_count = isset($result['synced']) ? (int) $result['synced'] : 0;
+        $failed_count = isset($result['failed']) ? (int) $result['failed'] : 0;
+
+        // Update accumulated totals
+        $counts[$destination_name]['items'] += $synced_count;
+
+        // Store last sync stats separately
+        $counts[$destination_name]['last_sync_items'] = $synced_count;
+        $counts[$destination_name]['last_sync_errors'] = $failed_count;
+        $counts[$destination_name]['last_sync_time'] = current_time('timestamp');
+
+        update_option('mcs_destination_counts', $counts);
+    }
+
+    /**
+     * Reset destination counts (useful for troubleshooting)
+     *
+     * @param string|null $destination_name Specific destination or null for all
+     */
+    public function reset_destination_counts($destination_name = null){
+        $counts = get_option('mcs_destination_counts', []);
+
+        if ($destination_name) {
+            // Reset specific destination
+            $counts[$destination_name] = [
+                'items' => 0,
+                'errors' => 0,
+                'last_sync_items' => 0,
+                'last_sync_errors' => 0,
+            ];
+        } else {
+            // Reset all destinations
+            $counts = [];
+        }
 
         update_option('mcs_destination_counts', $counts);
     }
