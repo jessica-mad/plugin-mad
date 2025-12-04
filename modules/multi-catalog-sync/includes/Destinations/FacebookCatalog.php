@@ -65,27 +65,8 @@ class FacebookCatalog implements DestinationInterface {
             ];
         }
 
-        // Format product data for Facebook API
-        $fb_product = $this->format_product_for_api($product_data);
-
-        // Make API request (Facebook uses batch or items endpoint)
-        $endpoint = sprintf('%s/%s/products', $this->api_base_url, $this->catalog_id);
-
-        $response = $this->make_api_request('POST', $endpoint, $fb_product);
-
-        if ($response['success']) {
-            $this->logger->info(sprintf('Product %s synced to Facebook Catalog', $product_data['id']));
-            return [
-                'success' => true,
-                'message' => __('Producto sincronizado exitosamente', 'mad-suite'),
-            ];
-        } else {
-            $this->logger->log_product_error($product_data['id'], 'facebook', $response['message']);
-            return [
-                'success' => false,
-                'message' => $response['message'],
-            ];
-        }
+        // Facebook requires batch endpoint even for single products
+        return $this->sync_batch([$product_data]);
     }
 
     /**
@@ -134,8 +115,9 @@ class FacebookCatalog implements DestinationInterface {
             ];
         }
 
-        // Use batch endpoint
-        $endpoint = sprintf('%s/%s/batch', $this->api_base_url, $this->catalog_id);
+        // Use items_batch endpoint (correct endpoint for 2024)
+        // Note: item_type parameter is required
+        $endpoint = sprintf('%s/%s/items_batch?item_type=PRODUCT_ITEM', $this->api_base_url, $this->catalog_id);
 
         $response = $this->make_api_request('POST', $endpoint, [
             'requests' => $batch_data,
@@ -145,15 +127,21 @@ class FacebookCatalog implements DestinationInterface {
             // Parse batch response
             $handles = isset($response['data']['handles']) ? $response['data']['handles'] : [];
 
+            $this->logger->info(sprintf('Facebook batch response: %d handles received', count($handles)));
+
             foreach ($handles as $index => $handle) {
                 if (isset($handle['id'])) {
                     $synced++;
+                    $product_id = isset($products_data[$index]['id']) ? $products_data[$index]['id'] : 'unknown';
+                    $this->logger->info(sprintf('Product %s synced to Facebook (handle: %s)', $product_id, $handle['id']));
                 } else {
                     $failed++;
                     $product_id = isset($products_data[$index]['id']) ? $products_data[$index]['id'] : 'unknown';
+                    $error_msg = isset($handle['error']) ? json_encode($handle['error']) : __('Error desconocido', 'mad-suite');
+                    $this->logger->error(sprintf('Product %s failed on Facebook: %s', $product_id, $error_msg));
                     $errors[] = [
                         'product_id' => $product_id,
-                        'message' => isset($handle['error']) ? $handle['error'] : __('Error desconocido', 'mad-suite'),
+                        'message' => isset($handle['error']['message']) ? $handle['error']['message'] : $error_msg,
                     ];
                 }
             }

@@ -243,6 +243,35 @@ $next_sync = $this->get_next_scheduled_sync();
             <?php esc_html_e('📥 Ver Logs', 'mad-suite'); ?>
         </a>
     </div>
+
+    <!-- Test Mode - Sync Specific Products -->
+    <div class="mcs-card" style="margin-top: 30px;">
+        <div class="mcs-card-header">
+            <h3 class="mcs-card-title">🧪 <?php esc_html_e('Modo de Prueba - Sincronizar productos específicos', 'mad-suite'); ?></h3>
+        </div>
+        <p><?php esc_html_e('Introduce los IDs de productos que deseas sincronizar (separados por comas). Útil para probar con 2-3 productos antes de sincronizar todo.', 'mad-suite'); ?></p>
+        <div style="margin: 15px 0;">
+            <input type="text" id="mcs-specific-product-ids" class="regular-text" placeholder="<?php esc_attr_e('Ejemplo: 8729, 8682, 23163', 'mad-suite'); ?>" />
+            <select id="mcs-specific-destination">
+                <option value="all"><?php esc_html_e('Todos los destinos', 'mad-suite'); ?></option>
+                <?php if ($settings['google_enabled']): ?>
+                <option value="google">Google Merchant Center</option>
+                <?php endif; ?>
+                <?php if ($settings['facebook_enabled']): ?>
+                <option value="facebook">Facebook Catalog</option>
+                <?php endif; ?>
+                <?php if ($settings['pinterest_enabled']): ?>
+                <option value="pinterest">Pinterest Catalog</option>
+                <?php endif; ?>
+            </select>
+            <button class="button button-primary" id="mcs-sync-specific-btn">
+                <?php esc_html_e('Sincronizar estos productos', 'mad-suite'); ?>
+            </button>
+        </div>
+        <p class="description">
+            <?php esc_html_e('💡 Consejo: Puedes encontrar los IDs de productos en la lista de productos de WooCommerce (columna ID) o en la URL al editar un producto.', 'mad-suite'); ?>
+        </p>
+    </div>
 </div>
 
 <script type="text/javascript">
@@ -277,6 +306,52 @@ jQuery(document).ready(function($) {
             $button.prop('disabled', false);
             $button.html('🔄 <?php esc_html_e('Sincronizar Todo Ahora', 'mad-suite'); ?>');
         }, 2000);
+    });
+
+    // Handle "Sync Specific Products" button
+    $('#mcs-sync-specific-btn').on('click', function(e) {
+        e.preventDefault();
+
+        const $button = $(this);
+        const product_ids = $('#mcs-specific-product-ids').val().trim();
+        const destination = $('#mcs-specific-destination').val();
+
+        if (!product_ids) {
+            alert('<?php esc_html_e('Por favor introduce los IDs de productos', 'mad-suite'); ?>');
+            return;
+        }
+
+        if ($button.prop('disabled')) return;
+
+        $button.prop('disabled', true);
+        $button.html('<span class="mcs-loading"></span> <?php esc_html_e('Sincronizando...', 'mad-suite'); ?>');
+
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'mcs_sync_specific_products',
+                nonce: mcsAdmin.nonce,
+                product_ids: product_ids,
+                destination: destination
+            },
+            success: function(response) {
+                if (response.success) {
+                    alert('✅ ' + response.data.message);
+                    // Reload page to refresh counters
+                    location.reload();
+                } else {
+                    alert('⚠️ ' + response.data.message);
+                }
+            },
+            error: function(xhr, status, error) {
+                alert('❌ Error: ' + error);
+            },
+            complete: function() {
+                $button.prop('disabled', false);
+                $button.html('<?php esc_html_e('Sincronizar estos productos', 'mad-suite'); ?>');
+            }
+        });
     });
 });
 </script>

@@ -72,6 +72,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_ajax_mcs_search_google_category', [$this, 'ajax_search_google_category']);
         add_action('wp_ajax_mcs_manual_sync', [$this, 'ajax_manual_sync']);
         add_action('wp_ajax_mcs_get_sync_status', [$this, 'ajax_get_sync_status']);
+        add_action('wp_ajax_mcs_sync_specific_products', [$this, 'ajax_sync_specific_products']);
     }
 
     /* ==== Registro de ajustes (Settings API) ==== */
@@ -934,6 +935,61 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             ]);
             return;
         }
+
+        // Sync products
+        if ($destination === 'all') {
+            $results = $sync_manager->sync_batch($product_ids);
+        } else {
+            $results = $sync_manager->sync_batch($product_ids, $destination);
+        }
+
+        // Calculate totals
+        $total_synced = 0;
+        $total_failed = 0;
+
+        foreach ($results as $dest_name => $result) {
+            $total_synced += isset($result['synced']) ? $result['synced'] : 0;
+            $total_failed += isset($result['failed']) ? $result['failed'] : 0;
+        }
+
+        if ($total_failed > 0) {
+            wp_send_json_error([
+                'message' => sprintf(
+                    __('%d productos sincronizados, %d fallaron', 'mad-suite'),
+                    $total_synced,
+                    $total_failed
+                ),
+                'results' => $results,
+            ]);
+        } else {
+            wp_send_json_success([
+                'message' => sprintf(__('%d productos sincronizados exitosamente', 'mad-suite'), $total_synced),
+                'results' => $results,
+            ]);
+        }
+    }
+
+    public function ajax_sync_specific_products(){
+        check_ajax_referer('mcs_ajax', 'nonce');
+
+        $product_ids_string = isset($_POST['product_ids']) ? sanitize_text_field($_POST['product_ids']) : '';
+        $destination = isset($_POST['destination']) ? sanitize_text_field($_POST['destination']) : 'all';
+
+        // Parse product IDs (comma-separated)
+        $product_ids = array_filter(array_map('intval', explode(',', $product_ids_string)));
+
+        if (empty($product_ids)) {
+            wp_send_json_error([
+                'message' => __('No se proporcionaron IDs de productos válidos', 'mad-suite'),
+            ]);
+            return;
+        }
+
+        // Load ProductSyncManager
+        require_once __DIR__ . '/includes/Core/ProductSyncManager.php';
+
+        $settings = $this->get_settings();
+        $sync_manager = new \MAD_Suite\MultiCatalogSync\Core\ProductSyncManager($settings);
 
         // Sync products
         if ($destination === 'all') {
