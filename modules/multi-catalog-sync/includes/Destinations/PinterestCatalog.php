@@ -278,15 +278,50 @@ class PinterestCatalog implements DestinationInterface {
      * Format product data for Pinterest API
      */
     private function format_product_for_api($product_data){
+        // Extract and format price correctly
+        // Input: "145.00 EUR" or "145,00 EUR"
+        $price_string = str_replace(' ', '', $product_data['price']);
+        $price_string = str_replace(',', '.', $price_string); // Normalize decimal separator
+
+        // Extract currency (last 3 characters) and value
+        $currency = substr($product_data['price'], -3);
+        $price_value = str_replace($currency, '', $price_string);
+        $price_value = trim($price_value);
+
+        // Format as "AMOUNT CURRENCY" (Pinterest expects space between)
+        $formatted_price = sprintf('%s %s', $price_value, $currency);
+
+        // Normalize availability to Pinterest format
+        // Pinterest expects: "in stock", "out of stock", "preorder", "discontinued"
+        $availability_map = [
+            'IN_STOCK' => 'in stock',
+            'IN STOCK' => 'in stock',
+            'in stock' => 'in stock',
+            'OUT_OF_STOCK' => 'out of stock',
+            'OUT OF STOCK' => 'out of stock',
+            'out of stock' => 'out of stock',
+            'PREORDER' => 'preorder',
+            'preorder' => 'preorder',
+            'BACKORDER' => 'preorder', // Pinterest doesn't have backorder, use preorder
+            'backorder' => 'preorder',
+        ];
+        $availability = isset($availability_map[$product_data['availability']])
+            ? $availability_map[$product_data['availability']]
+            : 'in stock';
+
+        // Normalize condition to Pinterest format (lowercase)
+        // Pinterest expects: "new", "refurbished", "used"
+        $condition = strtolower($product_data['condition']);
+
         // Pinterest uses similar format to Google
         $pinterest_product = [
             'title' => $product_data['title'],
             'description' => $product_data['description'],
             'link' => $product_data['link'],
             'image_link' => $product_data['image_link'],
-            'availability' => $product_data['availability'],
-            'condition' => $product_data['condition'],
-            'price' => str_replace(' ', '', $product_data['price']),
+            'availability' => $availability,
+            'condition' => $condition,
+            'price' => $formatted_price,
         ];
 
         // Optional fields
@@ -338,9 +373,16 @@ class PinterestCatalog implements DestinationInterface {
             $pinterest_product['additional_image_link'] = $additional_images;
         }
 
-        // Sale price
+        // Sale price (same format as regular price)
         if (!empty($product_data['sale_price'])) {
-            $pinterest_product['sale_price'] = str_replace(' ', '', $product_data['sale_price']);
+            $sale_price_string = str_replace(' ', '', $product_data['sale_price']);
+            $sale_price_string = str_replace(',', '.', $sale_price_string);
+
+            $sale_currency = substr($product_data['sale_price'], -3);
+            $sale_price_value = str_replace($sale_currency, '', $sale_price_string);
+            $sale_price_value = trim($sale_price_value);
+
+            $pinterest_product['sale_price'] = sprintf('%s %s', $sale_price_value, $sale_currency);
 
             if (!empty($product_data['sale_price_effective_date'])) {
                 $pinterest_product['sale_price_effective_date'] = $product_data['sale_price_effective_date'];
