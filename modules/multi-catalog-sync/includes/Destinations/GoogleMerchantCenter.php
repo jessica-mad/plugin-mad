@@ -87,7 +87,13 @@ class GoogleMerchantCenter implements DestinationInterface {
 
         // Make API request to Merchant API
         // Endpoint: POST /products/v1beta/accounts/{account}/productInputs:insert
-        $endpoint = sprintf('%s/accounts/%s/productInputs:insert', $this->api_base_url, $this->merchant_id);
+        // dataSource is passed as query parameter, not in body
+        $data_source_param = sprintf('accounts/%s/dataSources/%s', $this->merchant_id, $this->data_source_id);
+        $endpoint = sprintf('%s/accounts/%s/productInputs:insert?dataSource=%s',
+            $this->api_base_url,
+            $this->merchant_id,
+            urlencode($data_source_param)
+        );
 
         $response = $this->make_api_request('POST', $endpoint, $api_product, $token);
 
@@ -391,9 +397,9 @@ class GoogleMerchantCenter implements DestinationInterface {
             $attributes['color'] = $product_data['color'];
         }
 
-        // Size as array (required format for Merchant API)
+        // Size as string (singular, not array)
         if (!empty($product_data['size'])) {
-            $attributes['sizes'] = [$product_data['size']];
+            $attributes['size'] = $product_data['size'];
         }
 
         // Optional: Material
@@ -435,20 +441,14 @@ class GoogleMerchantCenter implements DestinationInterface {
             }
         }
 
-        // Build the ProductInput structure (direct fields, no wrapper)
-        // The API endpoint productInputs:insert expects fields directly in body
+        // Build the ProductInput structure per Merchant API v1beta spec
+        // dataSource is passed as query parameter, not in body
+        // See: https://developers.google.com/merchant/api/reference/rest/products_v1beta/accounts.productInputs/insert
         $product_input = [
-            // Data source reference
-            'dataSource' => sprintf('accounts/%s/dataSources/%s', $this->merchant_id, $this->data_source_id),
-
-            // Feed configuration
-            'feedLabel' => $this->feed_label,
-            'contentLanguage' => 'es',
             'offerId' => $product_data['id'],
-            'channel' => 'ONLINE',
-
-            // All product attributes
-            'attributes' => $attributes,
+            'contentLanguage' => 'es',
+            'feedLabel' => $this->feed_label,
+            'productAttributes' => $attributes, // Note: productAttributes, not attributes
         ];
 
         return $product_input;
