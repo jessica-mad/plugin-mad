@@ -15,7 +15,7 @@ class FacebookCatalog implements DestinationInterface {
     private $catalog_id;
     private $access_token;
     private $logger;
-    private $api_base_url = 'https://graph.facebook.com/v18.0';
+    private $api_base_url = 'https://graph.facebook.com/v21.0';
 
     public function __construct($settings = []){
         $this->catalog_id = isset($settings['facebook_catalog_id']) ? $settings['facebook_catalog_id'] : '';
@@ -310,15 +310,50 @@ class FacebookCatalog implements DestinationInterface {
      * Format product data for Facebook API
      */
     private function format_product_for_api($product_data){
+        // Extract and format price correctly
+        // Input: "145.00 EUR" or "145,00 EUR"
+        $price_string = str_replace(' ', '', $product_data['price']);
+        $price_string = str_replace(',', '.', $price_string); // Normalize decimal separator
+
+        // Extract currency (last 3 characters) and value
+        $currency = substr($product_data['price'], -3);
+        $price_value = str_replace($currency, '', $price_string);
+        $price_value = trim($price_value);
+
+        // Format as "AMOUNT CURRENCY" (Facebook expects space between)
+        $formatted_price = sprintf('%s %s', $price_value, $currency);
+
+        // Normalize availability to Facebook format
+        // Facebook expects: "in stock", "out of stock", "preorder", "available for order", "discontinued"
+        $availability_map = [
+            'IN_STOCK' => 'in stock',
+            'IN STOCK' => 'in stock',
+            'in stock' => 'in stock',
+            'OUT_OF_STOCK' => 'out of stock',
+            'OUT OF STOCK' => 'out of stock',
+            'out of stock' => 'out of stock',
+            'PREORDER' => 'preorder',
+            'preorder' => 'preorder',
+            'BACKORDER' => 'available for order',
+            'backorder' => 'available for order',
+        ];
+        $availability = isset($availability_map[$product_data['availability']])
+            ? $availability_map[$product_data['availability']]
+            : 'in stock';
+
+        // Normalize condition to Facebook format (lowercase)
+        // Facebook expects: "new", "refurbished", "used"
+        $condition = strtolower($product_data['condition']);
+
         $fb_product = [
             'retailer_id' => $product_data['id'],
             'title' => $product_data['title'],
             'description' => $product_data['description'],
             'url' => $product_data['link'],
             'image_url' => $product_data['image_link'],
-            'availability' => $product_data['availability'],
-            'condition' => $product_data['condition'],
-            'price' => str_replace(' ', '', $product_data['price']), // Format: "10.00 USD"
+            'availability' => $availability,
+            'condition' => $condition,
+            'price' => $formatted_price,
         ];
 
         // Optional fields
@@ -370,9 +405,16 @@ class FacebookCatalog implements DestinationInterface {
             $fb_product['additional_image_urls'] = $additional_images;
         }
 
-        // Sale price
+        // Sale price (same format as regular price)
         if (!empty($product_data['sale_price'])) {
-            $fb_product['sale_price'] = str_replace(' ', '', $product_data['sale_price']);
+            $sale_price_string = str_replace(' ', '', $product_data['sale_price']);
+            $sale_price_string = str_replace(',', '.', $sale_price_string);
+
+            $sale_currency = substr($product_data['sale_price'], -3);
+            $sale_price_value = str_replace($sale_currency, '', $sale_price_string);
+            $sale_price_value = trim($sale_price_value);
+
+            $fb_product['sale_price'] = sprintf('%s %s', $sale_price_value, $sale_currency);
 
             if (!empty($product_data['sale_price_effective_date'])) {
                 $fb_product['sale_price_effective_date'] = $product_data['sale_price_effective_date'];
