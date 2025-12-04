@@ -106,11 +106,13 @@ class FacebookCatalog implements DestinationInterface {
         $errors = [];
 
         // Prepare batch request
+        // Using CREATE method instead of UPDATE to avoid duplicate errors
+        // Facebook will either create new or update existing with this approach
         $batch_data = [];
         foreach ($products_data as $product_data) {
             $fb_product = $this->format_product_for_api($product_data);
             $batch_data[] = [
-                'method' => 'UPDATE',
+                'method' => 'CREATE',
                 'data' => $fb_product,
             ];
         }
@@ -126,23 +128,46 @@ class FacebookCatalog implements DestinationInterface {
         if ($response['success']) {
             // Parse batch response
             $handles = isset($response['data']['handles']) ? $response['data']['handles'] : [];
+            $validation_status = isset($response['data']['validation_status']) ? $response['data']['validation_status'] : [];
 
-            $this->logger->info(sprintf('Facebook batch response: %d handles received', count($handles)));
+            $this->logger->info(sprintf('Facebook batch response: %d handles received, %d validation errors', count($handles), count($validation_status)));
 
-            foreach ($handles as $index => $handle) {
-                if (isset($handle['id'])) {
-                    $synced++;
-                    $product_id = isset($products_data[$index]['id']) ? $products_data[$index]['id'] : 'unknown';
-                    $this->logger->info(sprintf('Product %s synced to Facebook (handle: %s)', $product_id, $handle['id']));
-                } else {
-                    $failed++;
-                    $product_id = isset($products_data[$index]['id']) ? $products_data[$index]['id'] : 'unknown';
-                    $error_msg = isset($handle['error']) ? json_encode($handle['error']) : __('Error desconocido', 'mad-suite');
-                    $this->logger->error(sprintf('Product %s failed on Facebook: %s', $product_id, $error_msg));
-                    $errors[] = [
-                        'product_id' => $product_id,
-                        'message' => isset($handle['error']['message']) ? $handle['error']['message'] : $error_msg,
-                    ];
+            // Check for validation errors first
+            if (!empty($validation_status)) {
+                foreach ($validation_status as $index => $status) {
+                    if (isset($status['errors']) && !empty($status['errors'])) {
+                        $failed++;
+                        $product_id = isset($products_data[$index]['id']) ? $products_data[$index]['id'] : 'unknown';
+                        $error_msg = isset($status['errors'][0]['message']) ? $status['errors'][0]['message'] : 'Validation error';
+                        $this->logger->error(sprintf('Product %s validation failed on Facebook: %s', $product_id, $error_msg));
+                        $errors[] = [
+                            'product_id' => $product_id,
+                            'message' => $error_msg,
+                        ];
+                    }
+                }
+
+                // If we have validation errors, consider all products as failed
+                if ($failed > 0 && empty($handles)) {
+                    $failed = count($products_data);
+                }
+            } else if (!empty($handles)) {
+                // Normal handles processing
+                foreach ($handles as $index => $handle) {
+                    if (isset($handle['id'])) {
+                        $synced++;
+                        $product_id = isset($products_data[$index]['id']) ? $products_data[$index]['id'] : 'unknown';
+                        $this->logger->info(sprintf('Product %s synced to Facebook (handle: %s)', $product_id, $handle['id']));
+                    } else {
+                        $failed++;
+                        $product_id = isset($products_data[$index]['id']) ? $products_data[$index]['id'] : 'unknown';
+                        $error_msg = isset($handle['error']) ? json_encode($handle['error']) : __('Error desconocido', 'mad-suite');
+                        $this->logger->error(sprintf('Product %s failed on Facebook: %s', $product_id, $error_msg));
+                        $errors[] = [
+                            'product_id' => $product_id,
+                            'message' => isset($handle['error']['message']) ? $handle['error']['message'] : $error_msg,
+                        ];
+                    }
                 }
             }
         } else {
