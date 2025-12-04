@@ -67,6 +67,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         // Cron for scheduled sync
         add_action('madsuite_catalog_sync_cron', [$this, 'run_scheduled_sync']);
+        add_action('mcs_process_queue_hook', [$this, 'process_sync_queue']);
 
         // AJAX handlers
         add_action('wp_ajax_mcs_search_google_category', [$this, 'ajax_search_google_category']);
@@ -229,6 +230,26 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             $this->menu_slug(),
             'mcs_pinterest'
         );
+
+        // Custom Labels Section
+        add_settings_section(
+            'mcs_custom_labels',
+            __('Custom Labels','mad-suite'),
+            [$this, 'render_custom_labels_section'],
+            $this->menu_slug()
+        );
+
+        // Add fields for each custom label (0-4)
+        for ($i = 0; $i <= 4; $i++) {
+            add_settings_field(
+                "custom_label_{$i}_name",
+                sprintf(__('Custom Label %d','mad-suite'), $i),
+                [$this, 'field_custom_label_name'],
+                $this->menu_slug(),
+                'mcs_custom_labels',
+                ['label_index' => $i]
+            );
+        }
     }
 
     /* ==== Admin Assets ==== */
@@ -453,6 +474,12 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         echo '<p><a href="https://www.pinterest.com/business/catalogs/" target="_blank">'.esc_html__('Ir a Pinterest Catalogs →','mad-suite').'</a></p>';
     }
 
+    public function render_custom_labels_section(){
+        echo '<p>'.esc_html__('Define los nombres de los Custom Labels que se usarán en Google Merchant Center, Facebook y Pinterest.','mad-suite').'</p>';
+        echo '<p>'.esc_html__('Después configura tus etiquetas de WooCommerce (Productos > Etiquetas) para asignarlas a estos Custom Labels.','mad-suite').'</p>';
+        echo '<p><strong>'.esc_html__('Nota:','mad-suite').'</strong> '.esc_html__('Múltiples etiquetas pueden usar el mismo Custom Label. Por ejemplo: "Verano", "Invierno", "Primavera" pueden asignarse a Custom Label 0 (Temporada).','mad-suite').'</p>';
+    }
+
     /* ==== Field Renderers ==== */
     public function field_default_brand(){
         $v = $this->get_settings()['default_brand'];
@@ -597,6 +624,31 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             esc_attr($v)
         );
         echo '<p class="description">'.esc_html__('Token de acceso de Pinterest para usar con la API.','mad-suite').'</p>';
+    }
+
+    public function field_custom_label_name($args){
+        $label_index = $args['label_index'];
+        $key = "custom_label_{$label_index}_name";
+        $v = $this->get_settings()[$key];
+
+        printf('<input type="text" class="regular-text" name="%s[%s]" value="%s" placeholder="%s" />',
+            esc_attr($this->option_key),
+            esc_attr($key),
+            esc_attr($v),
+            esc_attr__('Ejemplo: Temporada, Género, Descuento...','mad-suite')
+        );
+
+        $descriptions = [
+            0 => __('Ejemplo: "Temporada" - Luego asigna etiquetas como "Verano", "Invierno" a este Custom Label.','mad-suite'),
+            1 => __('Ejemplo: "Género" - Luego asigna etiquetas como "Hombre", "Mujer", "Unisex" a este Custom Label.','mad-suite'),
+            2 => __('Ejemplo: "Descuento" - Luego asigna etiquetas como "Rebajas", "Outlet" a este Custom Label.','mad-suite'),
+            3 => __('Ejemplo: "Colección" - Luego asigna etiquetas como "Primavera 2024", "Nueva Colección" a este Custom Label.','mad-suite'),
+            4 => __('Campo adicional opcional para cualquier otra categorización.','mad-suite'),
+        ];
+
+        if (isset($descriptions[$label_index])) {
+            echo '<p class="description">'.$descriptions[$label_index].'</p>';
+        }
     }
 
     /* ==== Product Meta Box ==== */
@@ -844,12 +896,82 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     public function save_tag_fields($term_id){
+        // Get previous values to detect changes
+        $old_sync_enabled = get_term_meta($term_id, '_mcs_sync_enabled', true);
+        $old_custom_label = get_term_meta($term_id, '_mcs_custom_label', true);
+
+        // Save new values
         $sync_enabled = isset($_POST['mcs_tag_sync_enabled']) ? '1' : '0';
         update_term_meta($term_id, '_mcs_sync_enabled', $sync_enabled);
 
+        $new_custom_label = '';
         if (isset($_POST['mcs_tag_custom_label'])) {
-            update_term_meta($term_id, '_mcs_custom_label', sanitize_text_field($_POST['mcs_tag_custom_label']));
+            $new_custom_label = sanitize_text_field($_POST['mcs_tag_custom_label']);
+            update_term_meta($term_id, '_mcs_custom_label', $new_custom_label);
         }
+
+        // Check if relevant changes were made (sync enabled or custom label changed)
+        $sync_changed = ($old_sync_enabled !== $sync_enabled);
+        $label_changed = ($old_custom_label !== $new_custom_label);
+
+        // If sync is enabled and something changed, trigger re-sync of all products with this tag
+        if ($sync_enabled === '1' && ($sync_changed || $label_changed)) {
+            $this->queue_products_with_tag($term_id);
+        }
+    }
+
+    /**
+     * Queue all products with a specific tag for sync
+     *
+     * @param int $term_id Tag term ID
+     */
+    private function queue_products_with_tag($term_id){
+        // Get all products with this tag
+        $products = wc_get_products([
+            'limit' => -1,
+            'return' => 'ids',
+            'tag' => [$term_id],
+            'status' => 'publish',
+        ]);
+
+        if (empty($products)) {
+            return;
+        }
+
+        // Queue each product for sync
+        foreach ($products as $product_id) {
+            $this->queue_product_sync($product_id);
+        }
+
+        // Log the action
+        $term = get_term($term_id, 'product_tag');
+        if ($term && !is_wp_error($term)) {
+            $logger = new \MAD_Suite\MultiCatalogSync\Core\Logger();
+            $logger->info(sprintf(
+                'Auto-sync triggered for tag "%s": %d products queued for sync',
+                $term->name,
+                count($products)
+            ));
+        }
+
+        // Schedule immediate background processing of the queue
+        if (!wp_next_scheduled('mcs_process_queue_hook')) {
+            wp_schedule_single_event(time(), 'mcs_process_queue_hook');
+        }
+
+        // Show admin notice
+        add_action('admin_notices', function() use ($term, $products) {
+            if ($term && !is_wp_error($term)) {
+                printf(
+                    '<div class="notice notice-success is-dismissible"><p>%s</p></div>',
+                    sprintf(
+                        esc_html__('Etiqueta "%s" actualizada. %d productos han sido encolados para sincronización automática.', 'mad-suite'),
+                        esc_html($term->name),
+                        count($products)
+                    )
+                );
+            }
+        });
     }
 
     /* ==== Sync Queue Management ==== */
@@ -891,6 +1013,29 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 $destination,
                 isset($result['synced']) ? $result['synced'] : 0,
                 isset($result['failed']) ? $result['failed'] : 0
+            ));
+        }
+    }
+
+    /**
+     * Process the sync queue (triggered by tag changes or product updates)
+     */
+    public function process_sync_queue(){
+        // Load ProductSyncManager
+        require_once __DIR__ . '/includes/Core/ProductSyncManager.php';
+
+        $settings = $this->get_settings();
+        $sync_manager = new \MAD_Suite\MultiCatalogSync\Core\ProductSyncManager($settings);
+
+        // Process queue
+        $result = $sync_manager->process_queue();
+
+        // Log results
+        $logger = new \MAD_Suite\MultiCatalogSync\Core\Logger();
+        if ($result['success'] && isset($result['processed']) && $result['processed'] > 0) {
+            $logger->info(sprintf(
+                'Queue processed: %d products synced',
+                $result['processed']
             ));
         }
     }
