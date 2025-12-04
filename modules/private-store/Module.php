@@ -81,7 +81,10 @@ class Module {
 
         // Validación de fecha/hora programada en cupones
         add_filter('woocommerce_coupon_is_valid', [$this, 'validate_coupon_schedule'], 5, 2);
-        
+
+        // IMPORTANTE: Calcular descuento de cupón sobre precio REGULAR, no sobre sale_price
+        add_filter('woocommerce_coupon_get_discount_amount', [$this, 'calculate_coupon_on_regular_price'], 10, 5);
+
         // Visualización de precio con descuento
         add_filter('woocommerce_get_price_html', [$this, 'show_discount_preview'], 99, 2);
 
@@ -383,11 +386,12 @@ class Module {
         }
         
         // Configuración del cupón desde la regla
-        $exclude_sale = isset($rule['coupon_config']['exclude_sale_items']) 
-            ? $rule['coupon_config']['exclude_sale_items'] 
-            : true;
-        $individual = isset($rule['coupon_config']['individual_use']) 
-            ? $rule['coupon_config']['individual_use'] 
+        // IMPORTANTE: Por defecto FALSE para permitir stack de sale_price + cupón
+        $exclude_sale = isset($rule['coupon_config']['exclude_sale_items'])
+            ? $rule['coupon_config']['exclude_sale_items']
+            : false;
+        $individual = isset($rule['coupon_config']['individual_use'])
+            ? $rule['coupon_config']['individual_use']
             : true;
             
         $coupon->set_exclude_sale_items($exclude_sale);
@@ -855,9 +859,79 @@ class Module {
     }
 
     /**
+     * Calcular descuento de cupón sobre precio REGULAR, no sobre sale_price
+     * IMPORTANTE: Clientes VIP obtienen descuentos sobre precio base, ignorando ofertas
+     *
+     * @param float $discount Descuento original calculado por WooCommerce
+     * @param float $discounting_amount Precio sobre el que se calcula (normalmente precio actual)
+     * @param array|null $cart_item Item del carrito
+     * @param bool $single Si es un item individual
+     * @param WC_Coupon $coupon Objeto del cupón
+     * @return float Descuento recalculado sobre precio regular
+     */
+    public function calculate_coupon_on_regular_price($discount, $discounting_amount, $cart_item, $single, $coupon) {
+        // Solo aplicar para cupones del sistema Private Shop
+        $rule_id = $coupon->get_meta('_mad_ps_rule_id', true);
+
+        if (empty($rule_id)) {
+            // No es un cupón de Private Shop, dejar cálculo por defecto
+            return $discount;
+        }
+
+        // Verificar que tengamos el cart_item
+        if (empty($cart_item) || !isset($cart_item['data'])) {
+            return $discount;
+        }
+
+        $product = $cart_item['data'];
+
+        // Obtener precio REGULAR del producto (ignorar sale_price)
+        $regular_price = floatval($product->get_regular_price());
+
+        if ($regular_price <= 0) {
+            return $discount;
+        }
+
+        // Obtener tipo y valor del descuento del cupón
+        $discount_type = $coupon->get_discount_type();
+        $coupon_amount = $coupon->get_amount();
+
+        $this->log(sprintf(
+            "calculate_coupon_on_regular_price - Producto: %s, Regular: %s, Cupón: %s, Tipo: %s, Monto: %s",
+            $product->get_name(),
+            $regular_price,
+            $coupon->get_code(),
+            $discount_type,
+            $coupon_amount
+        ));
+
+        // Calcular descuento sobre precio REGULAR
+        if ($discount_type === 'percent') {
+            // Descuento porcentual sobre precio regular
+            $new_discount = ($regular_price * $coupon_amount) / 100;
+        } else {
+            // Descuento fijo (mantener original)
+            $new_discount = $discount;
+        }
+
+        // Considerar cantidad si no es single
+        if (!$single && isset($cart_item['quantity'])) {
+            $new_discount = $new_discount * $cart_item['quantity'];
+        }
+
+        $this->log(sprintf(
+            "calculate_coupon_on_regular_price - Descuento original: %s, Nuevo descuento: %s",
+            $discount,
+            $new_discount
+        ));
+
+        return $new_discount;
+    }
+
+    /**
      * Muestra preview de descuento en producto
-     * IMPORTANTE: Esta función SOLO muestra el descuento visualmente.
-     * El descuento real se aplica mediante cupón automático en el carrito.
+     * IMPORTANTE: Descuento VIP se calcula sobre precio REGULAR, ignorando sale_price
+     * Los clientes VIP no interactúan con ofertas de WooCommerce (sale_price)
      */
     public function show_discount_preview($price_html, $product) {
         // Solo para usuarios logueados
@@ -923,29 +997,30 @@ class Module {
             return $price_html;
         }
 
-        // Obtener el precio actual del producto
-        $current_price = floatval($product->get_price());
+        // IMPORTANTE: Obtener precio REGULAR, no precio actual (ignorar sale_price)
+        // Clientes VIP ven descuento sobre precio base, no sobre ofertas
+        $regular_price = floatval($product->get_regular_price());
 
         // Si no hay precio, retornar HTML original
-        if ($current_price <= 0) {
+        if ($regular_price <= 0) {
             return $price_html;
         }
 
-        // Calcular precio con descuento (solo para visualización)
+        // Calcular precio con descuento VIP sobre precio REGULAR
         if ($rule['discount_type'] === 'percentage') {
-            $discounted_price = $current_price * (1 - ($rule['discount_value'] / 100));
+            $discounted_price = $regular_price * (1 - ($rule['discount_value'] / 100));
         } else {
-            $discounted_price = $current_price - $rule['discount_value'];
+            $discounted_price = $regular_price - $rule['discount_value'];
         }
 
         // Asegurar que el precio con descuento no sea negativo
         $discounted_price = max(0, $discounted_price);
 
-        // Usar formato nativo de WooCommerce (igual que productos en oferta)
+        // Mostrar: Precio Regular tachado → Precio VIP
         $price_html = sprintf(
             '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></del> ' .
             '<ins><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></ins>',
-            wc_price($current_price),
+            wc_price($regular_price),
             wc_price($discounted_price)
         );
 
@@ -954,8 +1029,7 @@ class Module {
 
     /**
      * Muestra preview de descuento en items del carrito
-     * IMPORTANTE: Esta función SOLO muestra el descuento visualmente en la columna de precio.
-     * El descuento real ya está aplicado mediante cupón automático.
+     * IMPORTANTE: Descuento VIP se calcula sobre precio REGULAR, ignorando sale_price
      */
     public function show_cart_item_discount_preview($price_html, $cart_item, $cart_item_key) {
         // Solo para usuarios logueados
@@ -1003,29 +1077,29 @@ class Module {
             return $price_html;
         }
 
-        // Obtener el precio actual del producto (precio unitario)
-        $current_price = floatval($product->get_price());
+        // IMPORTANTE: Obtener precio REGULAR, no precio actual (ignorar sale_price)
+        $regular_price = floatval($product->get_regular_price());
 
         // Si no hay precio, retornar HTML original
-        if ($current_price <= 0) {
+        if ($regular_price <= 0) {
             return $price_html;
         }
 
-        // Calcular precio con descuento (solo para visualización)
+        // Calcular precio con descuento VIP sobre precio REGULAR
         if ($rule['discount_type'] === 'percentage') {
-            $discounted_price = $current_price * (1 - ($rule['discount_value'] / 100));
+            $discounted_price = $regular_price * (1 - ($rule['discount_value'] / 100));
         } else {
-            $discounted_price = $current_price - $rule['discount_value'];
+            $discounted_price = $regular_price - $rule['discount_value'];
         }
 
         // Asegurar que el precio con descuento no sea negativo
         $discounted_price = max(0, $discounted_price);
 
-        // Usar formato nativo de WooCommerce (igual que productos en oferta)
+        // Mostrar: Precio Regular → Precio VIP
         $price_html = sprintf(
             '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></del> ' .
             '<ins><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></ins>',
-            wc_price($current_price),
+            wc_price($regular_price),
             wc_price($discounted_price)
         );
 
@@ -1034,8 +1108,7 @@ class Module {
 
     /**
      * Muestra preview de descuento en subtotal de items del carrito
-     * IMPORTANTE: Esta función SOLO muestra el descuento visualmente en la columna de subtotal.
-     * El descuento real ya está aplicado mediante cupón automático.
+     * IMPORTANTE: Descuento VIP se calcula sobre precio REGULAR, ignorando sale_price
      */
     public function show_cart_item_subtotal_discount_preview($subtotal_html, $cart_item, $cart_item_key) {
         // Solo para usuarios logueados
@@ -1086,22 +1159,22 @@ class Module {
         // Obtener cantidad del item
         $quantity = isset($cart_item['quantity']) ? intval($cart_item['quantity']) : 1;
 
-        // Obtener el precio actual del producto (precio unitario)
-        $current_price = floatval($product->get_price());
+        // IMPORTANTE: Obtener precio REGULAR, no precio actual (ignorar sale_price)
+        $regular_price = floatval($product->get_regular_price());
 
         // Si no hay precio, retornar HTML original
-        if ($current_price <= 0) {
+        if ($regular_price <= 0) {
             return $subtotal_html;
         }
 
-        // Calcular subtotal original (precio unitario * cantidad)
-        $original_subtotal = $current_price * $quantity;
+        // Calcular subtotal original sobre precio REGULAR (precio unitario * cantidad)
+        $original_subtotal = $regular_price * $quantity;
 
-        // Calcular precio unitario con descuento
+        // Calcular precio unitario con descuento VIP sobre precio REGULAR
         if ($rule['discount_type'] === 'percentage') {
-            $discounted_unit_price = $current_price * (1 - ($rule['discount_value'] / 100));
+            $discounted_unit_price = $regular_price * (1 - ($rule['discount_value'] / 100));
         } else {
-            $discounted_unit_price = $current_price - $rule['discount_value'];
+            $discounted_unit_price = $regular_price - $rule['discount_value'];
         }
 
         // Asegurar que el precio con descuento no sea negativo
@@ -1110,7 +1183,7 @@ class Module {
         // Calcular subtotal con descuento (precio unitario con descuento * cantidad)
         $discounted_subtotal = $discounted_unit_price * $quantity;
 
-        // Usar formato nativo de WooCommerce (igual que productos en oferta)
+        // Mostrar: Subtotal Regular → Subtotal VIP
         $subtotal_html = sprintf(
             '<del aria-hidden="true"><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></del> ' .
             '<ins><span class="woocommerce-Price-amount amount"><bdi>%s</bdi></span></ins>',
@@ -1200,8 +1273,9 @@ class Module {
             }
 
             // Actualizar config
+            // IMPORTANTE: Por defecto FALSE para permitir stack de sale_price + cupón
             if (isset($rule['coupon_config'])) {
-                $coupon->set_exclude_sale_items($rule['coupon_config']['exclude_sale_items'] ?? true);
+                $coupon->set_exclude_sale_items($rule['coupon_config']['exclude_sale_items'] ?? false);
                 $coupon->set_individual_use($rule['coupon_config']['individual_use'] ?? true);
             }
 
@@ -1320,6 +1394,7 @@ class Module {
             'coupon_config' => [
                 'prefix' => sanitize_text_field($_POST['coupon_prefix'] ?? 'ps'),
                 'name_length' => intval($_POST['coupon_name_length'] ?? 7),
+                // IMPORTANTE: Solo TRUE si está marcado, default FALSE para stack con sale_price
                 'exclude_sale_items' => isset($_POST['exclude_sale_items']),
                 'individual_use' => isset($_POST['individual_use']),
             ]

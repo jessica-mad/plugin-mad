@@ -44,10 +44,10 @@ class PricingEngine {
         $this->logger = new Logger('private-store-pricing');
         
         // Hooks de precios
+        // IMPORTANTE: Solo filtramos get_price, NO get_regular_price
+        // Esto permite calcular descuentos VIP sobre precio regular, ignorando sale_price
         add_filter('woocommerce_product_get_price', [$this, 'apply_vip_price'], 999, 2);
-        add_filter('woocommerce_product_get_regular_price', [$this, 'apply_vip_price'], 999, 2);
         add_filter('woocommerce_product_variation_get_price', [$this, 'apply_vip_price'], 999, 2);
-        add_filter('woocommerce_product_variation_get_regular_price', [$this, 'apply_vip_price'], 999, 2);
         
         // Mostrar precio original tachado
         add_filter('woocommerce_get_price_html', [$this, 'modify_price_html'], 999, 2);
@@ -103,6 +103,8 @@ class PricingEngine {
 
     /**
      * Aplicar precio VIP
+     * IMPORTANTE: Calcula descuento sobre precio REGULAR, ignorando sale_price
+     * Los clientes VIP no interactúan con las ofertas de WooCommerce (sale_price)
      */
     public function apply_vip_price($price, $product) {
         // Verificar si el usuario puede ver descuentos basándose en:
@@ -113,19 +115,23 @@ class PricingEngine {
             return $price;
         }
 
-        // Si no hay precio, retornar
-        if (empty($price) || $price <= 0) {
+        // IMPORTANTE: Calcular descuento sobre precio REGULAR, no sobre precio actual
+        // Esto ignora sale_price para clientes VIP
+        $regular_price = $product->get_regular_price();
+
+        if (empty($regular_price) || $regular_price <= 0) {
             return $price;
         }
 
         $product_id = $product->get_id();
-        $original_price = $price;
+        $original_price = $regular_price; // Base de cálculo es precio REGULAR
 
         // 1. Verificar descuento individual del producto (máxima prioridad)
         $individual_discount = $this->get_individual_discount($product_id);
 
         if ($individual_discount) {
-            $price = $this->calculate_discount($price, $individual_discount['amount'], $individual_discount['type']);
+            // Calcular sobre precio REGULAR, no sobre precio actual
+            $price = $this->calculate_discount($original_price, $individual_discount['amount'], $individual_discount['type']);
 
             $this->log_discount_applied($product_id, 'individual', $original_price, $price, $individual_discount);
 
@@ -140,7 +146,8 @@ class PricingEngine {
         $best_discount = $this->get_best_discount($category_discount, $tag_discount);
 
         if ($best_discount) {
-            $price = $this->calculate_discount($price, $best_discount['amount'], $best_discount['type']);
+            // Calcular sobre precio REGULAR, no sobre precio actual
+            $price = $this->calculate_discount($original_price, $best_discount['amount'], $best_discount['type']);
 
             $this->log_discount_applied($product_id, $best_discount['discount_type'], $original_price, $price, $best_discount);
         }
