@@ -435,21 +435,20 @@ class GoogleMerchantCenter implements DestinationInterface {
             }
         }
 
-        // Build the complete ProductInput structure
+        // Build the ProductInput structure (direct fields, no wrapper)
+        // The API endpoint productInputs:insert expects fields directly in body
         $product_input = [
-            'productInput' => [
-                // Data source reference
-                'dataSource' => sprintf('accounts/%s/dataSources/%s', $this->merchant_id, $this->data_source_id),
+            // Data source reference
+            'dataSource' => sprintf('accounts/%s/dataSources/%s', $this->merchant_id, $this->data_source_id),
 
-                // Feed configuration
-                'feedLabel' => $this->feed_label,
-                'contentLanguage' => 'es',
-                'offerId' => $product_data['id'],
-                'channel' => 'ONLINE',
+            // Feed configuration
+            'feedLabel' => $this->feed_label,
+            'contentLanguage' => 'es',
+            'offerId' => $product_data['id'],
+            'channel' => 'ONLINE',
 
-                // All product attributes
-                'attributes' => $attributes,
-            ],
+            // All product attributes
+            'attributes' => $attributes,
         ];
 
         return $product_input;
