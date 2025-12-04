@@ -443,13 +443,24 @@ class GoogleMerchantCenter implements DestinationInterface {
 
         // Build the ProductInput structure per Merchant API v1beta spec
         // dataSource is passed as query parameter, not in body
+        // IMPORTANT: In v1beta the field is called "attributes", not "productAttributes"
+        // The name changed to "productAttributes" in v1
         // See: https://developers.google.com/merchant/api/reference/rest/products_v1beta/accounts.productInputs/insert
         $product_input = [
             'offerId' => $product_data['id'],
             'contentLanguage' => 'es',
             'feedLabel' => $this->feed_label,
-            'productAttributes' => $attributes, // Note: productAttributes, not attributes
+            'channel' => 'ONLINE', // Required at top level
+            'attributes' => $attributes, // NOTE: "attributes" in v1beta, "productAttributes" in v1
         ];
+
+        $this->logger->debug('Formatted ProductInput for Google Merchant API v1beta', [
+            'offerId' => $product_data['id'],
+            'attributes_count' => count($attributes),
+            'has_title' => isset($attributes['title']),
+            'has_price' => isset($attributes['price']),
+            'has_imageLink' => isset($attributes['imageLink']),
+        ]);
 
         return $product_input;
     }
