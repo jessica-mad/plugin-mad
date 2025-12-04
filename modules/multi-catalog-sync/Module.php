@@ -406,6 +406,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $clean['google_enabled'] = !empty($input['google_enabled']) ? 1 : 0;
         $clean['google_merchant_id'] = isset($input['google_merchant_id']) ? sanitize_text_field($input['google_merchant_id']) : '';
         $clean['google_service_account_json'] = isset($input['google_service_account_json']) ? wp_kses_post($input['google_service_account_json']) : '';
+        $clean['google_data_source_id'] = isset($input['google_data_source_id']) ? sanitize_text_field($input['google_data_source_id']) : '';
+        $clean['google_feed_label'] = isset($input['google_feed_label']) ? sanitize_text_field($input['google_feed_label']) : 'ES';
 
         // Facebook
         $clean['facebook_enabled'] = !empty($input['facebook_enabled']) ? 1 : 0;
@@ -516,20 +518,20 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     public function field_google_data_source_id(){
         $v = $this->get_settings()['google_data_source_id'];
-        printf('<input type="text" class="regular-text" name="%s[google_data_source_id]" value="%s" placeholder="10588679125" />',
+        printf('<input type="text" class="regular-text" name="%s[google_data_source_id]" value="%s" />',
             esc_attr($this->option_key),
             esc_attr($v)
         );
-        echo '<p class="description">'.esc_html__('ID de la fuente de datos API de Merchant Center (se encuentra en Fuentes de datos > API merchant center).','mad-suite').'</p>';
+        echo '<p class="description">'.esc_html__('ID de la fuente de datos API de Merchant Center (se encuentra en Fuentes de datos > API merchant center). Ejemplo: 10588679125','mad-suite').'</p>';
     }
 
     public function field_google_feed_label(){
         $v = $this->get_settings()['google_feed_label'];
-        printf('<input type="text" class="regular-text" name="%s[google_feed_label]" value="%s" placeholder="ES" />',
+        printf('<input type="text" class="regular-text" name="%s[google_feed_label]" value="%s" />',
             esc_attr($this->option_key),
             esc_attr($v)
         );
-        echo '<p class="description">'.esc_html__('Etiqueta de feed configurada en Merchant Center (ES, EN, etc.).','mad-suite').'</p>';
+        echo '<p class="description">'.esc_html__('Etiqueta de feed configurada en Merchant Center. Ejemplo: ES, EN, FR','mad-suite').'</p>';
     }
 
     public function field_facebook_enabled(){
