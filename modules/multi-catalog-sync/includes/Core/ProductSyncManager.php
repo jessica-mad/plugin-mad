@@ -172,6 +172,24 @@ class ProductSyncManager {
             $duration = microtime(true) - $start_time;
             $this->logger->log_sync_complete($name, $result['synced'], $result['failed'], $duration);
 
+            // Log first 10 errors for debugging
+            if (!empty($result['errors']) && $result['failed'] > 0) {
+                $error_sample = array_slice($result['errors'], 0, 10);
+                foreach ($error_sample as $error) {
+                    $this->logger->error(sprintf(
+                        'Product %s failed: %s',
+                        $error['product_id'],
+                        $error['message']
+                    ));
+                }
+                if ($result['failed'] > 10) {
+                    $this->logger->warning(sprintf(
+                        'And %d more errors not shown...',
+                        $result['failed'] - 10
+                    ));
+                }
+            }
+
             $results[$name] = $result;
 
             // Update destination counts

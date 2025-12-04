@@ -525,19 +525,33 @@ class ProductFeedGenerator {
      */
     public function generate_bulk_feed($product_ids, $destination = 'all'){
         $feed_data = [];
+        $skipped_count = 0;
+        $variation_count = 0;
 
         foreach ($product_ids as $product_id) {
             $product_data = $this->generate_product_feed($product_id, $destination);
 
             // Handle variable products (returns array of variations)
             if (is_array($product_data) && isset($product_data[0]) && is_array($product_data[0])) {
+                $var_count = count($product_data);
+                $variation_count += $var_count;
                 foreach ($product_data as $variation_data) {
                     $feed_data[] = $variation_data;
                 }
             } elseif ($product_data) {
                 $feed_data[] = $product_data;
+            } else {
+                $skipped_count++;
             }
         }
+
+        $this->logger->debug(sprintf(
+            'Feed generation: %d products processed, %d feed items generated (%d variations), %d skipped',
+            count($product_ids),
+            count($feed_data),
+            $variation_count,
+            $skipped_count
+        ));
 
         return $feed_data;
     }

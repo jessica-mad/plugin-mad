@@ -216,13 +216,33 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     /* ==== Admin Assets ==== */
     public function enqueue_admin_assets($hook){
-        // Only on our settings page and product edit pages
-        if ( strpos($hook, $this->menu_slug()) === false && $hook !== 'post.php' && $hook !== 'post-new.php' ) {
+        // Only on our settings page, product edit pages, and taxonomy edit pages
+        $allowed_hooks = [
+            'post.php',
+            'post-new.php',
+            'edit-tags.php',  // Category/Tag edit pages
+            'term.php',       // Category/Tag edit pages (new UI)
+        ];
+
+        if ( strpos($hook, $this->menu_slug()) === false && !in_array($hook, $allowed_hooks) ) {
             return;
         }
 
         $screen = get_current_screen();
-        if ( $screen && $screen->post_type !== 'product' && strpos($hook, $this->menu_slug()) === false ) {
+
+        // Allow on our settings page
+        if ( strpos($hook, $this->menu_slug()) !== false ) {
+            // Settings page - allow
+        }
+        // Allow on product pages
+        elseif ( $screen && $screen->post_type === 'product' ) {
+            // Product edit page - allow
+        }
+        // Allow on product_cat and product_tag taxonomy pages
+        elseif ( $screen && in_array($screen->taxonomy, ['product_cat', 'product_tag']) ) {
+            // Taxonomy edit page - allow
+        }
+        else {
             return;
         }
 
