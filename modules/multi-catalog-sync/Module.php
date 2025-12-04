@@ -921,7 +921,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     /**
-     * Queue all products with a specific tag for sync
+     * Queue all products with a specific tag for sync and execute immediately
      *
      * @param int $term_id Tag term ID
      */
@@ -938,38 +938,72 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             return;
         }
 
-        // Queue each product for sync
-        foreach ($products as $product_id) {
-            $this->queue_product_sync($product_id);
-        }
+        $term = get_term($term_id, 'product_tag');
+
+        // Load ProductSyncManager and sync immediately
+        require_once __DIR__ . '/includes/Core/ProductSyncManager.php';
+
+        $settings = $this->get_settings();
+        $sync_manager = new \MAD_Suite\MultiCatalogSync\Core\ProductSyncManager($settings);
 
         // Log the action
-        $term = get_term($term_id, 'product_tag');
+        $logger = new \MAD_Suite\MultiCatalogSync\Core\Logger();
         if ($term && !is_wp_error($term)) {
-            $logger = new \MAD_Suite\MultiCatalogSync\Core\Logger();
             $logger->info(sprintf(
-                'Auto-sync triggered for tag "%s": %d products queued for sync',
+                'Auto-sync triggered for tag "%s": syncing %d products immediately',
                 $term->name,
                 count($products)
             ));
         }
 
-        // Schedule immediate background processing of the queue
-        if (!wp_next_scheduled('mcs_process_queue_hook')) {
-            wp_schedule_single_event(time(), 'mcs_process_queue_hook');
+        // Sync products immediately
+        $results = $sync_manager->sync_batch($products);
+
+        // Calculate totals
+        $total_synced = 0;
+        $total_failed = 0;
+
+        foreach ($results as $dest_name => $result) {
+            $synced = isset($result['synced']) ? $result['synced'] : 0;
+            $failed = isset($result['failed']) ? $result['failed'] : 0;
+
+            $total_synced += $synced;
+            $total_failed += $failed;
+
+            if ($synced > 0 || $failed > 0) {
+                $logger->info(sprintf(
+                    'Tag "%s" auto-sync to %s: %d synced, %d failed',
+                    $term ? $term->name : $term_id,
+                    $dest_name,
+                    $synced,
+                    $failed
+                ));
+            }
         }
 
-        // Show admin notice
-        add_action('admin_notices', function() use ($term, $products) {
+        // Show admin notice with results
+        add_action('admin_notices', function() use ($term, $total_synced, $total_failed) {
             if ($term && !is_wp_error($term)) {
-                printf(
-                    '<div class="notice notice-success is-dismissible"><p>%s</p></div>',
-                    sprintf(
-                        esc_html__('Etiqueta "%s" actualizada. %d productos han sido encolados para sincronización automática.', 'mad-suite'),
-                        esc_html($term->name),
-                        count($products)
-                    )
-                );
+                if ($total_failed > 0) {
+                    printf(
+                        '<div class="notice notice-warning is-dismissible"><p>%s</p></div>',
+                        sprintf(
+                            esc_html__('Etiqueta "%s" actualizada: %d productos sincronizados, %d fallaron. Revisa el log para más detalles.', 'mad-suite'),
+                            esc_html($term->name),
+                            $total_synced,
+                            $total_failed
+                        )
+                    );
+                } else {
+                    printf(
+                        '<div class="notice notice-success is-dismissible"><p>%s</p></div>',
+                        sprintf(
+                            esc_html__('✅ Etiqueta "%s" actualizada y %d productos sincronizados correctamente.', 'mad-suite'),
+                            esc_html($term->name),
+                            $total_synced
+                        )
+                    );
+                }
             }
         });
     }
