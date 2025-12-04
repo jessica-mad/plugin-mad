@@ -18,8 +18,8 @@ if ( ! defined('ABSPATH') ) exit;
 class GoogleMerchantCenter implements DestinationInterface {
 
     private $merchant_id;
-    private $data_source_id = '10588679125'; // API Merchant Center data source ID
-    private $feed_label = 'ES'; // Feed label from Merchant Center configuration
+    private $data_source_id;
+    private $feed_label;
     private $service_account_json;
     private $access_token;
     private $logger;
@@ -28,6 +28,8 @@ class GoogleMerchantCenter implements DestinationInterface {
     public function __construct($settings = []){
         $this->merchant_id = isset($settings['google_merchant_id']) ? $settings['google_merchant_id'] : '';
         $this->service_account_json = isset($settings['google_service_account_json']) ? $settings['google_service_account_json'] : '';
+        $this->data_source_id = isset($settings['google_data_source_id']) ? $settings['google_data_source_id'] : '';
+        $this->feed_label = isset($settings['google_feed_label']) ? $settings['google_feed_label'] : 'ES';
         $this->logger = new Logger();
     }
 

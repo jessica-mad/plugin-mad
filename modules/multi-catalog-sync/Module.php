@@ -149,6 +149,22 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'mcs_google'
         );
 
+        add_settings_field(
+            'google_data_source_id',
+            __('Data Source ID','mad-suite'),
+            [$this,'field_google_data_source_id'],
+            $this->menu_slug(),
+            'mcs_google'
+        );
+
+        add_settings_field(
+            'google_feed_label',
+            __('Feed Label','mad-suite'),
+            [$this,'field_google_feed_label'],
+            $this->menu_slug(),
+            'mcs_google'
+        );
+
         // Facebook Catalog Section
         add_settings_section(
             'mcs_facebook',
@@ -349,6 +365,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'google_enabled' => 0,
             'google_merchant_id' => '',
             'google_service_account_json' => '',
+            'google_data_source_id' => '', // API Merchant Center data source ID
+            'google_feed_label' => 'ES', // Feed label (EN, ES, etc.)
 
             // Facebook
             'facebook_enabled' => 0,
@@ -494,6 +512,24 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             esc_textarea($v)
         );
         echo '<p class="description">'.esc_html__('Contenido completo del archivo JSON de la cuenta de servicio de Google Cloud.','mad-suite').'</p>';
+    }
+
+    public function field_google_data_source_id(){
+        $v = $this->get_settings()['google_data_source_id'];
+        printf('<input type="text" class="regular-text" name="%s[google_data_source_id]" value="%s" placeholder="10588679125" />',
+            esc_attr($this->option_key),
+            esc_attr($v)
+        );
+        echo '<p class="description">'.esc_html__('ID de la fuente de datos API de Merchant Center (se encuentra en Fuentes de datos > API merchant center).','mad-suite').'</p>';
+    }
+
+    public function field_google_feed_label(){
+        $v = $this->get_settings()['google_feed_label'];
+        printf('<input type="text" class="regular-text" name="%s[google_feed_label]" value="%s" placeholder="ES" />',
+            esc_attr($this->option_key),
+            esc_attr($v)
+        );
+        echo '<p class="description">'.esc_html__('Etiqueta de feed configurada en Merchant Center (ES, EN, etc.).','mad-suite').'</p>';
     }
 
     public function field_facebook_enabled(){
