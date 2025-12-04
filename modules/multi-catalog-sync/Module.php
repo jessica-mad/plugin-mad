@@ -191,7 +191,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         add_settings_field(
             'facebook_access_token',
-            __('Access Token','mad-suite'),
+            __('System User Access Token','mad-suite'),
             [$this,'field_facebook_access_token'],
             $this->menu_slug(),
             'mcs_facebook'
@@ -440,7 +440,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     public function render_facebook_section(){
         echo '<p>'.esc_html__('Configuración de Facebook Catalog.','mad-suite').'</p>';
-        echo '<p><a href="https://business.facebook.com/commerce" target="_blank">'.esc_html__('Ir a Facebook Commerce Manager →','mad-suite').'</a></p>';
+        echo '<p><strong>'.esc_html__('Importante:','mad-suite').'</strong> '.esc_html__('Para uso en producción, debes usar un System User Access Token (no expira). Los tokens de usuario normales solo duran 60 días.','mad-suite').'</p>';
+        echo '<p>';
+        echo '<a href="https://business.facebook.com/commerce" target="_blank">'.esc_html__('→ Ir a Facebook Commerce Manager','mad-suite').'</a> | ';
+        echo '<a href="https://business.facebook.com/settings/system-users" target="_blank">'.esc_html__('→ Usuarios del Sistema','mad-suite').'</a>';
+        echo '</p>';
     }
 
     public function render_pinterest_section(){
@@ -557,7 +561,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             esc_attr($this->option_key),
             esc_attr($v)
         );
-        echo '<p class="description">'.esc_html__('Token de acceso de larga duración de Facebook Business.','mad-suite').'</p>';
+        echo '<p class="description">';
+        echo esc_html__('System User Access Token de Meta Business (no expira, recomendado para producción).','mad-suite').'<br>';
+        echo '<strong>'.esc_html__('Cómo obtenerlo:','mad-suite').'</strong><br>';
+        echo '1. '.esc_html__('Ve a Meta Business Suite → Configuración → Usuarios → Usuarios del sistema','mad-suite').'<br>';
+        echo '2. '.esc_html__('Crea un nuevo usuario del sistema con rol "Administrador"','mad-suite').'<br>';
+        echo '3. '.esc_html__('Asigna permisos al catálogo (catalog_management, business_management)','mad-suite').'<br>';
+        echo '4. '.esc_html__('Genera el token de acceso y cópialo aquí','mad-suite').'<br>';
+        echo '<a href="https://business.facebook.com/settings/system-users" target="_blank">'.esc_html__('→ Ir a Usuarios del Sistema','mad-suite').'</a>';
+        echo '</p>';
     }
 
     public function field_pinterest_enabled(){
