@@ -8,8 +8,11 @@ if ( ! defined('ABSPATH') ) exit;
 
 /**
  * GoogleMerchantCenter
- * Implementation for Google Merchant API (new API, replaces deprecated Content API)
- * Documentation: https://developers.google.com/merchant/api
+ * Implementation for Google Merchant Center Content API v2.1
+ *
+ * Note: Google recommends migrating to Merchant API, but it's not publicly available yet (returns 404).
+ * Content API v2.1 is marked as deprecated but will continue working for years.
+ * We'll migrate to Merchant API once it's publicly available and stable.
  */
 class GoogleMerchantCenter implements DestinationInterface {
 
@@ -17,7 +20,7 @@ class GoogleMerchantCenter implements DestinationInterface {
     private $service_account_json;
     private $access_token;
     private $logger;
-    private $api_base_url = 'https://merchantapi.googleapis.com/products/v1beta';
+    private $api_base_url = 'https://shoppingcontent.googleapis.com/content/v2.1';
 
     public function __construct($settings = []){
         $this->merchant_id = isset($settings['google_merchant_id']) ? $settings['google_merchant_id'] : '';
@@ -74,12 +77,11 @@ class GoogleMerchantCenter implements DestinationInterface {
             ];
         }
 
-        // Format product data for new Merchant API
+        // Format product data for Content API v2.1
         $api_product = $this->format_product_for_api($product_data);
 
-        // Make API request to new Merchant API
-        // New endpoint format: accounts/{merchantId}/products:insert
-        $endpoint = sprintf('%s/accounts/%s/products:insert', $this->api_base_url, $this->merchant_id);
+        // Make API request to Content API
+        $endpoint = sprintf('%s/%s/products', $this->api_base_url, $this->merchant_id);
 
         $response = $this->make_api_request('POST', $endpoint, $api_product, $token);
 
@@ -144,9 +146,8 @@ class GoogleMerchantCenter implements DestinationInterface {
         }
 
         // Use inventory API for faster stock updates
-        // Note: Inventory API endpoint structure may differ in new Merchant API
         $endpoint = sprintf(
-            '%s/accounts/%s/products/%s',
+            '%s/%s/inventory/%s/set',
             $this->api_base_url,
             $this->merchant_id,
             $product_id
@@ -176,9 +177,9 @@ class GoogleMerchantCenter implements DestinationInterface {
             ];
         }
 
-        // New Merchant API delete endpoint
+        // Content API delete endpoint
         $endpoint = sprintf(
-            '%s/accounts/%s/products/%s',
+            '%s/%s/products/%s',
             $this->api_base_url,
             $this->merchant_id,
             $product_id
@@ -337,73 +338,68 @@ class GoogleMerchantCenter implements DestinationInterface {
     }
 
     /**
-     * Format product data for new Merchant API
-     * New API uses a different structure with 'productId', 'dataSource', and 'attributes'
+     * Format product data for Content API v2.1
      */
     private function format_product_for_api($product_data){
         // Extract price and currency
         $price_value = str_replace(' ', '', $product_data['price']);
         $currency = substr($product_data['price'], -3);
 
-        // New Merchant API structure
+        // Content API v2.1 structure
         $api_product = [
-            'dataSource' => 'accounts/' . $this->merchant_id . '/dataSources/channel',
-            'productId' => 'online:es:ES:' . $product_data['id'], // channel:contentLanguage:targetCountry:offerId
-            'attributes' => [
-                'offerId' => $product_data['id'],
-                'title' => $product_data['title'],
-                'description' => $product_data['description'],
-                'link' => $product_data['link'],
-                'imageLink' => $product_data['image_link'],
-                'contentLanguage' => 'es', // TODO: Make configurable
-                'targetCountry' => 'ES', // TODO: Make configurable
-                'channel' => 'online',
-                'availability' => $product_data['availability'],
-                'condition' => $product_data['condition'],
-                'price' => [
-                    'amountMicros' => (int)(floatval($price_value) * 1000000), // New API uses micros
-                    'currencyCode' => $currency,
-                ],
+            'offerId' => $product_data['id'],
+            'title' => $product_data['title'],
+            'description' => $product_data['description'],
+            'link' => $product_data['link'],
+            'imageLink' => $product_data['image_link'],
+            'contentLanguage' => 'es', // TODO: Make configurable
+            'targetCountry' => 'ES', // TODO: Make configurable
+            'channel' => 'online',
+            'availability' => $product_data['availability'],
+            'condition' => $product_data['condition'],
+            'price' => [
+                'value' => $price_value,
+                'currency' => $currency,
             ],
         ];
 
-        // Optional fields (all go inside 'attributes')
+        // Optional fields
         if (!empty($product_data['brand'])) {
-            $api_product['attributes']['brand'] = $product_data['brand'];
+            $api_product['brand'] = $product_data['brand'];
         }
 
         if (!empty($product_data['gtin'])) {
-            $api_product['attributes']['gtin'] = $product_data['gtin'];
+            $api_product['gtin'] = $product_data['gtin'];
         }
 
         if (!empty($product_data['mpn'])) {
-            $api_product['attributes']['mpn'] = $product_data['mpn'];
+            $api_product['mpn'] = $product_data['mpn'];
         }
 
         if (!empty($product_data['google_product_category'])) {
-            $api_product['attributes']['googleProductCategory'] = $product_data['google_product_category'];
+            $api_product['googleProductCategory'] = $product_data['google_product_category'];
         }
 
         if (!empty($product_data['product_type'])) {
-            $api_product['attributes']['productTypes'] = [$product_data['product_type']]; // Note: now an array
+            $api_product['productType'] = $product_data['product_type'];
         }
 
         if (!empty($product_data['item_group_id'])) {
-            $api_product['attributes']['itemGroupId'] = $product_data['item_group_id'];
+            $api_product['itemGroupId'] = $product_data['item_group_id'];
         }
 
         // Variation attributes
         if (!empty($product_data['color'])) {
-            $api_product['attributes']['color'] = $product_data['color'];
+            $api_product['color'] = $product_data['color'];
         }
 
         if (!empty($product_data['size'])) {
-            $api_product['attributes']['sizes'] = [$product_data['size']]; // Note: now an array
+            $api_product['size'] = $product_data['size'];
         }
 
         // Additional images
         if (!empty($product_data['additional_image_link'])) {
-            $api_product['attributes']['additionalImageLinks'] = explode(',', $product_data['additional_image_link']);
+            $api_product['additionalImageLinks'] = explode(',', $product_data['additional_image_link']);
         }
 
         // Sale price
@@ -411,13 +407,13 @@ class GoogleMerchantCenter implements DestinationInterface {
             $sale_price_value = str_replace(' ', '', $product_data['sale_price']);
             $sale_currency = substr($product_data['sale_price'], -3);
 
-            $api_product['attributes']['salePrice'] = [
-                'amountMicros' => (int)(floatval($sale_price_value) * 1000000),
-                'currencyCode' => $sale_currency,
+            $api_product['salePrice'] = [
+                'value' => $sale_price_value,
+                'currency' => $sale_currency,
             ];
 
             if (!empty($product_data['sale_price_effective_date'])) {
-                $api_product['attributes']['salePriceEffectiveDate'] = $product_data['sale_price_effective_date'];
+                $api_product['salePriceEffectiveDate'] = $product_data['sale_price_effective_date'];
             }
         }
 
@@ -425,7 +421,7 @@ class GoogleMerchantCenter implements DestinationInterface {
         for ($i = 0; $i <= 4; $i++) {
             $key = 'custom_label_' . $i;
             if (!empty($product_data[$key])) {
-                $api_product['attributes']['customLabel' . $i] = $product_data[$key];
+                $api_product['customLabel' . $i] = $product_data[$key];
             }
         }
 
