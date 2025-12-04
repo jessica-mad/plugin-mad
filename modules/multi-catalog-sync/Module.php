@@ -803,29 +803,141 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     public function run_scheduled_sync(){
-        // TODO: Implement scheduled sync logic
+        // Load ProductSyncManager
+        require_once __DIR__ . '/includes/Core/ProductSyncManager.php';
+
+        $settings = $this->get_settings();
+        $sync_manager = new \MAD_Suite\MultiCatalogSync\Core\ProductSyncManager($settings);
+
+        // Sync all enabled products
+        $results = $sync_manager->sync_all();
+
+        // Log results
+        $logger = new \MAD_Suite\MultiCatalogSync\Core\Logger();
+        foreach ($results as $destination => $result) {
+            $logger->info(sprintf(
+                'Scheduled sync to %s: %d synced, %d failed',
+                $destination,
+                isset($result['synced']) ? $result['synced'] : 0,
+                isset($result['failed']) ? $result['failed'] : 0
+            ));
+        }
     }
 
     /* ==== AJAX Handlers ==== */
     public function ajax_search_google_category(){
         check_ajax_referer('mcs_ajax', 'nonce');
 
-        // TODO: Implement Google category search
-        wp_send_json_success([]);
+        $term = isset($_POST['term']) ? sanitize_text_field($_POST['term']) : '';
+
+        if (empty($term)) {
+            wp_send_json_success([]);
+            return;
+        }
+
+        // Load CategoryMapper
+        require_once __DIR__ . '/includes/Core/CategoryMapper.php';
+        $mapper = new \MAD_Suite\MultiCatalogSync\Core\CategoryMapper();
+
+        $results = $mapper->search_taxonomy($term, 20);
+
+        wp_send_json_success($results);
     }
 
     public function ajax_manual_sync(){
         check_ajax_referer('mcs_ajax', 'nonce');
 
-        // TODO: Implement manual sync trigger
-        wp_send_json_success([]);
+        $destination = isset($_POST['destination']) ? sanitize_text_field($_POST['destination']) : 'all';
+
+        // Load ProductSyncManager
+        require_once __DIR__ . '/includes/Core/ProductSyncManager.php';
+
+        $settings = $this->get_settings();
+        $sync_manager = new \MAD_Suite\MultiCatalogSync\Core\ProductSyncManager($settings);
+
+        // Get syncable products
+        $product_ids = $this->get_syncable_product_ids();
+
+        if (empty($product_ids)) {
+            wp_send_json_error([
+                'message' => __('No hay productos para sincronizar', 'mad-suite'),
+            ]);
+            return;
+        }
+
+        // Sync products
+        if ($destination === 'all') {
+            $results = $sync_manager->sync_batch($product_ids);
+        } else {
+            $results = $sync_manager->sync_batch($product_ids, $destination);
+        }
+
+        // Calculate totals
+        $total_synced = 0;
+        $total_failed = 0;
+
+        foreach ($results as $dest_name => $result) {
+            $total_synced += isset($result['synced']) ? $result['synced'] : 0;
+            $total_failed += isset($result['failed']) ? $result['failed'] : 0;
+        }
+
+        if ($total_failed > 0) {
+            wp_send_json_error([
+                'message' => sprintf(
+                    __('%d productos sincronizados, %d fallaron', 'mad-suite'),
+                    $total_synced,
+                    $total_failed
+                ),
+                'results' => $results,
+            ]);
+        } else {
+            wp_send_json_success([
+                'message' => sprintf(__('%d productos sincronizados exitosamente', 'mad-suite'), $total_synced),
+                'results' => $results,
+            ]);
+        }
     }
 
     public function ajax_get_sync_status(){
         check_ajax_referer('mcs_ajax', 'nonce');
 
-        // TODO: Implement sync status retrieval
-        wp_send_json_success([]);
+        // Load ProductSyncManager
+        require_once __DIR__ . '/includes/Core/ProductSyncManager.php';
+
+        $settings = $this->get_settings();
+        $sync_manager = new \MAD_Suite\MultiCatalogSync\Core\ProductSyncManager($settings);
+
+        $status = $sync_manager->get_sync_status();
+
+        wp_send_json_success($status);
+    }
+
+    /* ==== Helper Methods for AJAX ==== */
+
+    /**
+     * Get syncable product IDs
+     */
+    private function get_syncable_product_ids(){
+        $args = [
+            'post_type' => 'product',
+            'post_status' => 'publish',
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+            'meta_query' => [
+                'relation' => 'OR',
+                [
+                    'key' => '_mcs_sync_enabled',
+                    'value' => '1',
+                ],
+                [
+                    'key' => '_mcs_sync_enabled',
+                    'compare' => 'NOT EXISTS',
+                ],
+            ],
+        ];
+
+        $query = new \WP_Query($args);
+        return $query->posts;
     }
 
     /* ==== Dashboard Helper Methods ==== */
