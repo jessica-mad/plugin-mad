@@ -589,38 +589,90 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $settings = $this->get_settings();
         $v = $settings['google_auth_method'];
         ?>
+        <style>
+            .mcs-auth-method-option {
+                padding: 12px;
+                margin-bottom: 10px;
+                border: 2px solid #ddd;
+                border-radius: 4px;
+                background: #f9f9f9;
+                transition: all 0.2s ease;
+            }
+            .mcs-auth-method-option:hover {
+                border-color: #2271b1;
+                background: #f0f6fc;
+            }
+            .mcs-auth-method-option input[type="radio"]:checked + strong {
+                color: #2271b1;
+            }
+            .mcs-auth-method-option input[type="radio"]:checked ~ .description {
+                color: #1d2327;
+            }
+            .mcs-auth-info-box {
+                background: #d7f0ff;
+                border-left: 4px solid #2271b1;
+                padding: 12px;
+                margin-top: 10px;
+                display: none;
+            }
+            .mcs-auth-info-box.active {
+                display: block;
+            }
+        </style>
         <fieldset id="mcs_google_auth_method_field">
-            <label>
-                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_auth_method]" value="service_account" <?php checked($v, 'service_account'); ?> />
-                <strong><?php esc_html_e('Service Account (JSON)', 'mad-suite'); ?></strong>
-                <p class="description"><?php esc_html_e('Método tradicional usando archivo JSON de cuenta de servicio.', 'mad-suite'); ?></p>
-            </label>
-            <br><br>
-            <label>
-                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_auth_method]" value="oauth2" <?php checked($v, 'oauth2'); ?> />
-                <strong><?php esc_html_e('OAuth2 (Recomendado para organizaciones)', 'mad-suite'); ?></strong>
-                <p class="description"><?php esc_html_e('Más fácil y seguro. Ideal si tu cuenta tiene restricciones IAM. No requiere cuenta de servicio.', 'mad-suite'); ?></p>
-            </label>
+            <div class="mcs-auth-method-option">
+                <label>
+                    <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_auth_method]" value="service_account" <?php checked($v, 'service_account'); ?> />
+                    <strong><?php esc_html_e('Service Account (JSON)', 'mad-suite'); ?></strong>
+                    <p class="description"><?php esc_html_e('Método tradicional usando archivo JSON de cuenta de servicio. Ideal para usuarios de Gmail.', 'mad-suite'); ?></p>
+                </label>
+            </div>
+            <div class="mcs-auth-method-option">
+                <label>
+                    <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_auth_method]" value="oauth2" <?php checked($v, 'oauth2'); ?> />
+                    <strong><?php esc_html_e('OAuth2 (⭐ Recomendado para organizaciones)', 'mad-suite'); ?></strong>
+                    <p class="description"><?php esc_html_e('Más fácil y seguro. Ideal si tu cuenta tiene restricciones IAM. No requiere cuenta de servicio.', 'mad-suite'); ?></p>
+                </label>
+            </div>
+
+            <!-- Info boxes que aparecen según la selección -->
+            <div id="mcs-auth-info-sa" class="mcs-auth-info-box">
+                <strong>📝 <?php esc_html_e('Necesitarás:', 'mad-suite'); ?></strong>
+                <ul style="margin: 5px 0 0 20px;">
+                    <li><?php esc_html_e('Archivo JSON de Service Account de Google Cloud', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('Merchant ID de tu cuenta', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('Data Source ID y Feed Label', 'mad-suite'); ?></li>
+                </ul>
+            </div>
+
+            <div id="mcs-auth-info-oauth" class="mcs-auth-info-box">
+                <strong>✨ <?php esc_html_e('Más fácil:', 'mad-suite'); ?></strong>
+                <ul style="margin: 5px 0 0 20px;">
+                    <li><?php esc_html_e('Solo necesitas tu Merchant ID, Data Source ID y Feed Label', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('Después haz clic en "Conectar" y autoriza con tu cuenta de Google', 'mad-suite'); ?></li>
+                    <li><?php esc_html_e('No requiere Service Account ni permisos especiales', 'mad-suite'); ?></li>
+                </ul>
+            </div>
         </fieldset>
         <script type="text/javascript">
         jQuery(document).ready(function($) {
             function toggleGoogleAuthFields() {
                 var method = $('input[name="<?php echo esc_js($this->option_key); ?>[google_auth_method]"]:checked').val();
 
-                // Service Account fields
-                var $saField = $('input[name="<?php echo esc_js($this->option_key); ?>[google_service_account_json]"]').closest('tr');
-
-                // OAuth2 fields
+                // Get all field rows
+                var $saField = $('textarea[name="<?php echo esc_js($this->option_key); ?>[google_service_account_json]"]').closest('tr');
                 var $oauthTypeField = $('#mcs_google_oauth_type_field').closest('tr');
                 var $oauthCustomField = $('#mcs_google_oauth_custom_field').closest('tr');
                 var $oauthConnectionField = $('#mcs_google_oauth_connection_field').closest('tr');
 
                 if (method === 'service_account') {
+                    // SERVICE ACCOUNT: Solo mostrar JSON field
                     $saField.show();
                     $oauthTypeField.hide();
                     $oauthCustomField.hide();
                     $oauthConnectionField.hide();
                 } else if (method === 'oauth2') {
+                    // OAUTH2: Ocultar Service Account, mostrar OAuth fields
                     $saField.hide();
                     $oauthTypeField.show();
                     $oauthConnectionField.show();
@@ -633,16 +685,37 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 var $oauthCustomField = $('#mcs_google_oauth_custom_field').closest('tr');
 
                 if (useCustom) {
+                    // CUSTOM APP: Mostrar campos de Client ID/Secret
                     $oauthCustomField.show();
                 } else {
+                    // MAD SUITE APP: Ocultar campos de Client ID/Secret
                     $oauthCustomField.hide();
                 }
             }
 
-            $('input[name="<?php echo esc_js($this->option_key); ?>[google_auth_method]"]').on('change', toggleGoogleAuthFields);
+            function updateInfoBoxes() {
+                var method = $('input[name="<?php echo esc_js($this->option_key); ?>[google_auth_method]"]:checked').val();
+
+                $('#mcs-auth-info-sa').removeClass('active');
+                $('#mcs-auth-info-oauth').removeClass('active');
+
+                if (method === 'service_account') {
+                    $('#mcs-auth-info-sa').addClass('active');
+                } else if (method === 'oauth2') {
+                    $('#mcs-auth-info-oauth').addClass('active');
+                }
+            }
+
+            // Event listeners
+            $('input[name="<?php echo esc_js($this->option_key); ?>[google_auth_method]"]').on('change', function() {
+                toggleGoogleAuthFields();
+                updateInfoBoxes();
+            });
             $('input[name="<?php echo esc_js($this->option_key); ?>[google_oauth_use_custom]"]').on('change', toggleOAuthCustomFields);
 
+            // Initialize on page load
             toggleGoogleAuthFields();
+            updateInfoBoxes();
         });
         </script>
         <?php
@@ -689,17 +762,20 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $use_custom = $settings['google_oauth_use_custom'];
         ?>
         <fieldset id="mcs_google_oauth_type_field">
-            <label>
-                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_use_custom]" value="0" <?php checked($use_custom, '0'); ?> />
-                <strong><?php esc_html_e('Usar OAuth App de MAD Suite', 'mad-suite'); ?></strong> <?php esc_html_e('(Más fácil)', 'mad-suite'); ?>
-                <p class="description"><?php esc_html_e('Solo haz clic en "Conectar" más abajo. No requiere configuración técnica.', 'mad-suite'); ?></p>
-            </label>
-            <br><br>
-            <label>
-                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_use_custom]" value="1" <?php checked($use_custom, '1'); ?> />
-                <strong><?php esc_html_e('Usar mi propia OAuth App', 'mad-suite'); ?></strong> <?php esc_html_e('(Avanzado)', 'mad-suite'); ?>
-                <p class="description"><?php esc_html_e('Para usuarios técnicos que quieren usar su propia aplicación OAuth en Google Cloud.', 'mad-suite'); ?></p>
-            </label>
+            <div class="mcs-auth-method-option">
+                <label>
+                    <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_use_custom]" value="0" <?php checked($use_custom, '0'); ?> />
+                    <strong>✨ <?php esc_html_e('Usar OAuth App de MAD Suite', 'mad-suite'); ?></strong> <span style="color: #00a32a;"><?php esc_html_e('(⭐ Recomendado)', 'mad-suite'); ?></span>
+                    <p class="description"><?php esc_html_e('La forma más fácil. Solo haz clic en "Conectar" más abajo. No requiere configuración técnica.', 'mad-suite'); ?></p>
+                </label>
+            </div>
+            <div class="mcs-auth-method-option">
+                <label>
+                    <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_use_custom]" value="1" <?php checked($use_custom, '1'); ?> />
+                    <strong>🛠️ <?php esc_html_e('Usar mi propia OAuth App', 'mad-suite'); ?></strong> <span style="color: #dba617;"><?php esc_html_e('(Avanzado)', 'mad-suite'); ?></span>
+                    <p class="description"><?php esc_html_e('Para usuarios técnicos que quieren usar su propia aplicación OAuth en Google Cloud Console.', 'mad-suite'); ?></p>
+                </label>
+            </div>
         </fieldset>
         <?php
     }
@@ -714,38 +790,39 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $oauth_handler = new \MAD_Suite\MultiCatalogSync\Destinations\GoogleOAuthHandler($settings);
         $redirect_uri = $oauth_handler->get_redirect_uri();
         ?>
-        <div id="mcs_google_oauth_custom_field">
-            <p><strong><?php esc_html_e('Configuración de tu OAuth App:', 'mad-suite'); ?></strong></p>
-            <table class="form-table">
-                <tr>
-                    <th><?php esc_html_e('Client ID:', 'mad-suite'); ?></th>
-                    <td>
-                        <input type="text" class="large-text" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_client_id]" value="<?php echo esc_attr($client_id); ?>" placeholder="123456789-xxx.apps.googleusercontent.com" />
-                    </td>
-                </tr>
-                <tr>
-                    <th><?php esc_html_e('Client Secret:', 'mad-suite'); ?></th>
-                    <td>
-                        <input type="text" class="regular-text" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_client_secret]" value="<?php echo esc_attr($client_secret); ?>" placeholder="GOCSPX-xxx" />
-                    </td>
-                </tr>
-                <tr>
-                    <th><?php esc_html_e('Redirect URI:', 'mad-suite'); ?></th>
-                    <td>
-                        <code><?php echo esc_html($redirect_uri); ?></code>
-                        <p class="description"><?php esc_html_e('Copia esta URL y añádela a las "Authorized redirect URIs" en tu Google Cloud Console OAuth App.', 'mad-suite'); ?></p>
-                    </td>
-                </tr>
-            </table>
-            <p class="description">
+        <div id="mcs_google_oauth_custom_field" style="background: #fff3cd; border: 1px solid #dba617; border-radius: 4px; padding: 15px; margin: 10px 0;">
+            <p style="margin-top: 0;"><strong>🛠️ <?php esc_html_e('Configuración de OAuth App Personalizada', 'mad-suite'); ?></strong></p>
+            <p class="description" style="margin-bottom: 15px;">
                 <?php
                 printf(
-                    esc_html__('Necesitas crear una OAuth App en %sGoogle Cloud Console%s, habilitar la Merchant API, y copiar tus credenciales aquí.', 'mad-suite'),
+                    esc_html__('Primero crea una OAuth App en %sGoogle Cloud Console%s, habilita la Merchant API, y copia tus credenciales aquí.', 'mad-suite'),
                     '<a href="https://console.cloud.google.com/apis/credentials" target="_blank">',
                     '</a>'
                 );
                 ?>
             </p>
+
+            <table class="form-table" style="margin: 0;">
+                <tr>
+                    <th style="padding-left: 0;"><?php esc_html_e('Client ID:', 'mad-suite'); ?></th>
+                    <td>
+                        <input type="text" class="large-text" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_client_id]" value="<?php echo esc_attr($client_id); ?>" placeholder="123456789-xxx.apps.googleusercontent.com" />
+                    </td>
+                </tr>
+                <tr>
+                    <th style="padding-left: 0;"><?php esc_html_e('Client Secret:', 'mad-suite'); ?></th>
+                    <td>
+                        <input type="text" class="regular-text" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_client_secret]" value="<?php echo esc_attr($client_secret); ?>" placeholder="GOCSPX-xxx" />
+                    </td>
+                </tr>
+                <tr>
+                    <th style="padding-left: 0;"><?php esc_html_e('Redirect URI:', 'mad-suite'); ?></th>
+                    <td>
+                        <input type="text" class="large-text" readonly value="<?php echo esc_attr($redirect_uri); ?>" onclick="this.select();" style="background: #f0f0f1;" />
+                        <p class="description"><?php esc_html_e('Copia esta URL y añádela a "Authorized redirect URIs" en Google Cloud Console.', 'mad-suite'); ?></p>
+                    </td>
+                </tr>
+            </table>
         </div>
         <?php
     }
