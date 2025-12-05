@@ -23,9 +23,11 @@ class GoogleMerchantCenter implements DestinationInterface {
     private $service_account_json;
     private $access_token;
     private $logger;
+    private $settings;
     private $api_base_url = 'https://merchantapi.googleapis.com/products/v1beta';
 
     public function __construct($settings = []){
+        $this->settings = $settings; // Store full settings for OAuth
         $this->merchant_id = isset($settings['google_merchant_id']) ? $settings['google_merchant_id'] : '';
         $this->service_account_json = isset($settings['google_service_account_json']) ? $settings['google_service_account_json'] : '';
         $this->data_source_id = isset($settings['google_data_source_id']) ? $settings['google_data_source_id'] : '';
@@ -208,9 +210,22 @@ class GoogleMerchantCenter implements DestinationInterface {
     }
 
     /**
-     * Get OAuth2 access token from service account
+     * Get access token (detects which auth method to use)
      */
     private function get_access_token(){
+        $auth_method = isset($this->settings['google_auth_method']) ? $this->settings['google_auth_method'] : 'service_account';
+
+        if ($auth_method === 'oauth2') {
+            return $this->get_access_token_oauth2();
+        } else {
+            return $this->get_access_token_service_account();
+        }
+    }
+
+    /**
+     * Get OAuth2 access token from service account (traditional method)
+     */
+    private function get_access_token_service_account(){
         // Check cache first
         $cached_token = get_transient('mcs_google_access_token');
         if ($cached_token) {
@@ -270,6 +285,32 @@ class GoogleMerchantCenter implements DestinationInterface {
         set_transient('mcs_google_access_token', $body['access_token'], 50 * MINUTE_IN_SECONDS);
 
         return $body['access_token'];
+    }
+
+    /**
+     * Get OAuth2 access token (user-authorized method)
+     */
+    private function get_access_token_oauth2(){
+        require_once dirname(__DIR__) . '/Core/EncryptionHelper.php';
+        require_once __DIR__ . '/GoogleOAuthHandler.php';
+
+        $oauth_handler = new GoogleOAuthHandler($this->settings);
+
+        // Check if connected
+        if (!$oauth_handler->is_connected()) {
+            $this->logger->error('OAuth2: Not connected. User must authorize first.');
+            return false;
+        }
+
+        // Get valid access token (will refresh if needed)
+        $token = $oauth_handler->get_valid_access_token();
+
+        if (!$token) {
+            $this->logger->error('OAuth2: Failed to get valid access token');
+            return false;
+        }
+
+        return $token;
     }
 
     /**

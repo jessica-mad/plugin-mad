@@ -74,6 +74,13 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_ajax_mcs_manual_sync', [$this, 'ajax_manual_sync']);
         add_action('wp_ajax_mcs_get_sync_status', [$this, 'ajax_get_sync_status']);
         add_action('wp_ajax_mcs_sync_specific_products', [$this, 'ajax_sync_specific_products']);
+
+        // Google OAuth2 AJAX handlers
+        add_action('wp_ajax_mcs_google_oauth_get_auth_url', [$this, 'ajax_google_oauth_get_auth_url']);
+        add_action('wp_ajax_mcs_google_oauth_disconnect', [$this, 'ajax_google_oauth_disconnect']);
+
+        // Handle OAuth callback
+        add_action('admin_init', [$this, 'handle_google_oauth_callback']);
     }
 
     /* ==== Registro de ajustes (Settings API) ==== */
@@ -136,6 +143,14 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         );
 
         add_settings_field(
+            'google_auth_method',
+            __('Método de Autenticación','mad-suite'),
+            [$this,'field_google_auth_method'],
+            $this->menu_slug(),
+            'mcs_google'
+        );
+
+        add_settings_field(
             'google_merchant_id',
             __('Merchant ID','mad-suite'),
             [$this,'field_google_merchant_id'],
@@ -143,10 +158,36 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'mcs_google'
         );
 
+        // Service Account fields (conditional)
         add_settings_field(
             'google_service_account_json',
             __('Service Account JSON','mad-suite'),
             [$this,'field_google_service_account_json'],
+            $this->menu_slug(),
+            'mcs_google'
+        );
+
+        // OAuth2 fields (conditional)
+        add_settings_field(
+            'google_oauth_type',
+            __('OAuth2 Configuration','mad-suite'),
+            [$this,'field_google_oauth_type'],
+            $this->menu_slug(),
+            'mcs_google'
+        );
+
+        add_settings_field(
+            'google_oauth_custom_credentials',
+            __('Custom OAuth Credentials','mad-suite'),
+            [$this,'field_google_oauth_custom_credentials'],
+            $this->menu_slug(),
+            'mcs_google'
+        );
+
+        add_settings_field(
+            'google_oauth_connection',
+            __('OAuth2 Connection','mad-suite'),
+            [$this,'field_google_oauth_connection'],
             $this->menu_slug(),
             'mcs_google'
         );
@@ -385,10 +426,16 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
             // Google
             'google_enabled' => 0,
+            'google_auth_method' => 'service_account', // service_account or oauth2
             'google_merchant_id' => '',
             'google_service_account_json' => '',
             'google_data_source_id' => '', // API Merchant Center data source ID
             'google_feed_label' => 'ES', // Feed label (EN, ES, etc.)
+
+            // Google OAuth2
+            'google_oauth_use_custom' => '0', // 0 = MAD Suite App, 1 = Custom App
+            'google_oauth_client_id' => '',
+            'google_oauth_client_secret' => '',
 
             // Facebook
             'facebook_enabled' => 0,
@@ -426,10 +473,18 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         // Google
         $clean['google_enabled'] = !empty($input['google_enabled']) ? 1 : 0;
+        $clean['google_auth_method'] = isset($input['google_auth_method']) && in_array($input['google_auth_method'], ['service_account', 'oauth2'])
+            ? $input['google_auth_method']
+            : 'service_account';
         $clean['google_merchant_id'] = isset($input['google_merchant_id']) ? sanitize_text_field($input['google_merchant_id']) : '';
         $clean['google_service_account_json'] = isset($input['google_service_account_json']) ? wp_kses_post($input['google_service_account_json']) : '';
         $clean['google_data_source_id'] = isset($input['google_data_source_id']) ? sanitize_text_field($input['google_data_source_id']) : '';
         $clean['google_feed_label'] = isset($input['google_feed_label']) ? sanitize_text_field($input['google_feed_label']) : 'ES';
+
+        // Google OAuth2
+        $clean['google_oauth_use_custom'] = !empty($input['google_oauth_use_custom']) ? '1' : '0';
+        $clean['google_oauth_client_id'] = isset($input['google_oauth_client_id']) ? sanitize_text_field($input['google_oauth_client_id']) : '';
+        $clean['google_oauth_client_secret'] = isset($input['google_oauth_client_secret']) ? sanitize_text_field($input['google_oauth_client_secret']) : '';
 
         // Facebook
         $clean['facebook_enabled'] = !empty($input['facebook_enabled']) ? 1 : 0;
@@ -530,6 +585,69 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         );
     }
 
+    public function field_google_auth_method(){
+        $settings = $this->get_settings();
+        $v = $settings['google_auth_method'];
+        ?>
+        <fieldset id="mcs_google_auth_method_field">
+            <label>
+                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_auth_method]" value="service_account" <?php checked($v, 'service_account'); ?> />
+                <strong><?php esc_html_e('Service Account (JSON)', 'mad-suite'); ?></strong>
+                <p class="description"><?php esc_html_e('Método tradicional usando archivo JSON de cuenta de servicio.', 'mad-suite'); ?></p>
+            </label>
+            <br><br>
+            <label>
+                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_auth_method]" value="oauth2" <?php checked($v, 'oauth2'); ?> />
+                <strong><?php esc_html_e('OAuth2 (Recomendado para organizaciones)', 'mad-suite'); ?></strong>
+                <p class="description"><?php esc_html_e('Más fácil y seguro. Ideal si tu cuenta tiene restricciones IAM. No requiere cuenta de servicio.', 'mad-suite'); ?></p>
+            </label>
+        </fieldset>
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            function toggleGoogleAuthFields() {
+                var method = $('input[name="<?php echo esc_js($this->option_key); ?>[google_auth_method]"]:checked').val();
+
+                // Service Account fields
+                var $saField = $('input[name="<?php echo esc_js($this->option_key); ?>[google_service_account_json]"]').closest('tr');
+
+                // OAuth2 fields
+                var $oauthTypeField = $('#mcs_google_oauth_type_field').closest('tr');
+                var $oauthCustomField = $('#mcs_google_oauth_custom_field').closest('tr');
+                var $oauthConnectionField = $('#mcs_google_oauth_connection_field').closest('tr');
+
+                if (method === 'service_account') {
+                    $saField.show();
+                    $oauthTypeField.hide();
+                    $oauthCustomField.hide();
+                    $oauthConnectionField.hide();
+                } else if (method === 'oauth2') {
+                    $saField.hide();
+                    $oauthTypeField.show();
+                    $oauthConnectionField.show();
+                    toggleOAuthCustomFields();
+                }
+            }
+
+            function toggleOAuthCustomFields() {
+                var useCustom = $('input[name="<?php echo esc_js($this->option_key); ?>[google_oauth_use_custom]"]').is(':checked');
+                var $oauthCustomField = $('#mcs_google_oauth_custom_field').closest('tr');
+
+                if (useCustom) {
+                    $oauthCustomField.show();
+                } else {
+                    $oauthCustomField.hide();
+                }
+            }
+
+            $('input[name="<?php echo esc_js($this->option_key); ?>[google_auth_method]"]').on('change', toggleGoogleAuthFields);
+            $('input[name="<?php echo esc_js($this->option_key); ?>[google_oauth_use_custom]"]').on('change', toggleOAuthCustomFields);
+
+            toggleGoogleAuthFields();
+        });
+        </script>
+        <?php
+    }
+
     public function field_google_merchant_id(){
         $v = $this->get_settings()['google_merchant_id'];
         printf('<input type="text" class="regular-text" name="%s[google_merchant_id]" value="%s" placeholder="123456789" />',
@@ -564,6 +682,175 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             esc_attr($v)
         );
         echo '<p class="description">'.esc_html__('Etiqueta de feed configurada en Merchant Center. Ejemplo: ES, EN, FR','mad-suite').'</p>';
+    }
+
+    public function field_google_oauth_type(){
+        $settings = $this->get_settings();
+        $use_custom = $settings['google_oauth_use_custom'];
+        ?>
+        <fieldset id="mcs_google_oauth_type_field">
+            <label>
+                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_use_custom]" value="0" <?php checked($use_custom, '0'); ?> />
+                <strong><?php esc_html_e('Usar OAuth App de MAD Suite', 'mad-suite'); ?></strong> <?php esc_html_e('(Más fácil)', 'mad-suite'); ?>
+                <p class="description"><?php esc_html_e('Solo haz clic en "Conectar" más abajo. No requiere configuración técnica.', 'mad-suite'); ?></p>
+            </label>
+            <br><br>
+            <label>
+                <input type="radio" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_use_custom]" value="1" <?php checked($use_custom, '1'); ?> />
+                <strong><?php esc_html_e('Usar mi propia OAuth App', 'mad-suite'); ?></strong> <?php esc_html_e('(Avanzado)', 'mad-suite'); ?>
+                <p class="description"><?php esc_html_e('Para usuarios técnicos que quieren usar su propia aplicación OAuth en Google Cloud.', 'mad-suite'); ?></p>
+            </label>
+        </fieldset>
+        <?php
+    }
+
+    public function field_google_oauth_custom_credentials(){
+        $settings = $this->get_settings();
+        $client_id = $settings['google_oauth_client_id'];
+        $client_secret = $settings['google_oauth_client_secret'];
+
+        // Get redirect URI
+        require_once __DIR__ . '/includes/Destinations/GoogleOAuthHandler.php';
+        $oauth_handler = new \MAD_Suite\MultiCatalogSync\Destinations\GoogleOAuthHandler($settings);
+        $redirect_uri = $oauth_handler->get_redirect_uri();
+        ?>
+        <div id="mcs_google_oauth_custom_field">
+            <p><strong><?php esc_html_e('Configuración de tu OAuth App:', 'mad-suite'); ?></strong></p>
+            <table class="form-table">
+                <tr>
+                    <th><?php esc_html_e('Client ID:', 'mad-suite'); ?></th>
+                    <td>
+                        <input type="text" class="large-text" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_client_id]" value="<?php echo esc_attr($client_id); ?>" placeholder="123456789-xxx.apps.googleusercontent.com" />
+                    </td>
+                </tr>
+                <tr>
+                    <th><?php esc_html_e('Client Secret:', 'mad-suite'); ?></th>
+                    <td>
+                        <input type="text" class="regular-text" name="<?php echo esc_attr($this->option_key); ?>[google_oauth_client_secret]" value="<?php echo esc_attr($client_secret); ?>" placeholder="GOCSPX-xxx" />
+                    </td>
+                </tr>
+                <tr>
+                    <th><?php esc_html_e('Redirect URI:', 'mad-suite'); ?></th>
+                    <td>
+                        <code><?php echo esc_html($redirect_uri); ?></code>
+                        <p class="description"><?php esc_html_e('Copia esta URL y añádela a las "Authorized redirect URIs" en tu Google Cloud Console OAuth App.', 'mad-suite'); ?></p>
+                    </td>
+                </tr>
+            </table>
+            <p class="description">
+                <?php
+                printf(
+                    esc_html__('Necesitas crear una OAuth App en %sGoogle Cloud Console%s, habilitar la Merchant API, y copiar tus credenciales aquí.', 'mad-suite'),
+                    '<a href="https://console.cloud.google.com/apis/credentials" target="_blank">',
+                    '</a>'
+                );
+                ?>
+            </p>
+        </div>
+        <?php
+    }
+
+    public function field_google_oauth_connection(){
+        $settings = $this->get_settings();
+        require_once __DIR__ . '/includes/Destinations/GoogleOAuthHandler.php';
+
+        $oauth_handler = new \MAD_Suite\MultiCatalogSync\Destinations\GoogleOAuthHandler($settings);
+        $connection_info = $oauth_handler->get_connection_info();
+        $is_connected = $connection_info['connected'];
+        $app_type = $connection_info['app_type'];
+        ?>
+        <div id="mcs_google_oauth_connection_field">
+            <?php if ($is_connected): ?>
+                <div class="notice notice-success inline" style="margin: 0; padding: 10px;">
+                    <p>
+                        <strong>✅ <?php esc_html_e('Conectado', 'mad-suite'); ?></strong>
+                        <?php if ($app_type === 'madsuite'): ?>
+                            <br><?php esc_html_e('Usando OAuth App de MAD Suite', 'mad-suite'); ?>
+                        <?php else: ?>
+                            <br><?php esc_html_e('Usando tu OAuth App personalizada', 'mad-suite'); ?>
+                        <?php endif; ?>
+                        <?php if ($connection_info['connected_at']): ?>
+                            <br><small><?php echo sprintf(esc_html__('Conectado desde: %s', 'mad-suite'), date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $connection_info['connected_at'])); ?></small>
+                        <?php endif; ?>
+                    </p>
+                </div>
+                <p>
+                    <button type="button" class="button" id="mcs_google_oauth_disconnect">
+                        <?php esc_html_e('🔌 Desconectar', 'mad-suite'); ?>
+                    </button>
+                    <button type="button" class="button" id="mcs_google_oauth_reconnect">
+                        <?php esc_html_e('🔄 Reconectar', 'mad-suite'); ?>
+                    </button>
+                </p>
+            <?php else: ?>
+                <div class="notice notice-warning inline" style="margin: 0; padding: 10px;">
+                    <p><strong>❌ <?php esc_html_e('No conectado', 'mad-suite'); ?></strong></p>
+                </div>
+                <p>
+                    <button type="button" class="button button-primary" id="mcs_google_oauth_connect">
+                        <?php esc_html_e('🔗 Conectar con Google Merchant Center', 'mad-suite'); ?>
+                    </button>
+                </p>
+            <?php endif; ?>
+            <p class="description">
+                <?php esc_html_e('IMPORTANTE: Guarda los cambios antes de conectar para asegurar que la configuración esté actualizada.', 'mad-suite'); ?>
+            </p>
+        </div>
+
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            $('#mcs_google_oauth_connect, #mcs_google_oauth_reconnect').on('click', function(e) {
+                e.preventDefault();
+
+                // Open OAuth popup
+                var width = 600;
+                var height = 700;
+                var left = (screen.width / 2) - (width / 2);
+                var top = (screen.height / 2) - (height / 2);
+
+                // Get auth URL via AJAX
+                $.post(ajaxurl, {
+                    action: 'mcs_google_oauth_get_auth_url',
+                    nonce: mcsAdmin.nonce
+                }, function(response) {
+                    if (response.success && response.data.auth_url) {
+                        var authWindow = window.open(
+                            response.data.auth_url,
+                            'Google OAuth',
+                            'width=' + width + ',height=' + height + ',top=' + top + ',left=' + left
+                        );
+
+                        // Check if popup was blocked
+                        if (!authWindow || authWindow.closed || typeof authWindow.closed == 'undefined') {
+                            alert('<?php esc_html_e('El popup fue bloqueado. Por favor permite popups para este sitio.', 'mad-suite'); ?>');
+                        }
+                    } else {
+                        alert('Error: ' + (response.data.message || 'Unknown error'));
+                    }
+                });
+            });
+
+            $('#mcs_google_oauth_disconnect').on('click', function(e) {
+                e.preventDefault();
+
+                if (!confirm('<?php esc_html_e('¿Estás seguro que deseas desconectar Google OAuth? Tendrás que volver a autorizar.', 'mad-suite'); ?>')) {
+                    return;
+                }
+
+                $.post(ajaxurl, {
+                    action: 'mcs_google_oauth_disconnect',
+                    nonce: mcsAdmin.nonce
+                }, function(response) {
+                    if (response.success) {
+                        location.reload();
+                    } else {
+                        alert('Error: ' + (response.data.message || 'Unknown error'));
+                    }
+                });
+            });
+        });
+        </script>
+        <?php
     }
 
     public function field_facebook_enabled(){
@@ -1215,6 +1502,204 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $status = $sync_manager->get_sync_status();
 
         wp_send_json_success($status);
+    }
+
+    /* ==== Google OAuth2 AJAX Handlers ==== */
+
+    public function ajax_google_oauth_get_auth_url(){
+        check_ajax_referer('mcs_ajax', 'nonce');
+
+        $settings = $this->get_settings();
+        require_once __DIR__ . '/includes/Destinations/GoogleOAuthHandler.php';
+
+        $oauth_handler = new \MAD_Suite\MultiCatalogSync\Destinations\GoogleOAuthHandler($settings);
+        $auth_url = $oauth_handler->get_authorization_url();
+
+        if ($auth_url) {
+            wp_send_json_success([
+                'auth_url' => $auth_url,
+            ]);
+        } else {
+            wp_send_json_error([
+                'message' => __('No se pudo generar la URL de autorización. Verifica la configuración OAuth.', 'mad-suite'),
+            ]);
+        }
+    }
+
+    public function ajax_google_oauth_disconnect(){
+        check_ajax_referer('mcs_ajax', 'nonce');
+
+        $settings = $this->get_settings();
+        require_once __DIR__ . '/includes/Destinations/GoogleOAuthHandler.php';
+
+        $oauth_handler = new \MAD_Suite\MultiCatalogSync\Destinations\GoogleOAuthHandler($settings);
+        $oauth_handler->disconnect();
+
+        wp_send_json_success([
+            'message' => __('Desconectado exitosamente de Google OAuth', 'mad-suite'),
+        ]);
+    }
+
+    /**
+     * Handle Google OAuth callback
+     * Called when Google redirects back after authorization
+     */
+    public function handle_google_oauth_callback(){
+        // Check if this is an OAuth callback
+        if (!isset($_GET['page']) || $_GET['page'] !== 'madsuite-multi-catalog-sync') {
+            return;
+        }
+
+        if (!isset($_GET['action']) || $_GET['action'] !== 'google_oauth_callback') {
+            return;
+        }
+
+        // Check for errors from Google
+        if (isset($_GET['error'])) {
+            $error = sanitize_text_field($_GET['error']);
+            $error_description = isset($_GET['error_description']) ? sanitize_text_field($_GET['error_description']) : '';
+
+            wp_die(
+                sprintf(
+                    '<h1>%s</h1><p>%s</p><p>%s</p><p><a href="%s">%s</a></p>',
+                    esc_html__('Error de autorización', 'mad-suite'),
+                    esc_html($error),
+                    esc_html($error_description),
+                    admin_url('admin.php?page=madsuite-multi-catalog-sync'),
+                    esc_html__('Volver a configuración', 'mad-suite')
+                )
+            );
+        }
+
+        // Verify state (CSRF protection)
+        if (!isset($_GET['state']) || !wp_verify_nonce($_GET['state'], 'google_oauth_state')) {
+            wp_die(
+                sprintf(
+                    '<h1>%s</h1><p>%s</p><p><a href="%s">%s</a></p>',
+                    esc_html__('Error de seguridad', 'mad-suite'),
+                    esc_html__('El estado de autorización no es válido. Por favor intenta de nuevo.', 'mad-suite'),
+                    admin_url('admin.php?page=madsuite-multi-catalog-sync'),
+                    esc_html__('Volver a configuración', 'mad-suite')
+                )
+            );
+        }
+
+        // Get authorization code
+        if (!isset($_GET['code'])) {
+            wp_die(
+                sprintf(
+                    '<h1>%s</h1><p>%s</p><p><a href="%s">%s</a></p>',
+                    esc_html__('Error', 'mad-suite'),
+                    esc_html__('No se recibió el código de autorización.', 'mad-suite'),
+                    admin_url('admin.php?page=madsuite-multi-catalog-sync'),
+                    esc_html__('Volver a configuración', 'mad-suite')
+                )
+            );
+        }
+
+        $code = sanitize_text_field($_GET['code']);
+
+        // Exchange code for tokens
+        $settings = $this->get_settings();
+        require_once __DIR__ . '/includes/Destinations/GoogleOAuthHandler.php';
+        require_once __DIR__ . '/includes/Core/Logger.php';
+
+        $oauth_handler = new \MAD_Suite\MultiCatalogSync\Destinations\GoogleOAuthHandler($settings);
+        $logger = new \MAD_Suite\MultiCatalogSync\Core\Logger();
+
+        $tokens = $oauth_handler->exchange_code_for_tokens($code);
+
+        if (!$tokens) {
+            $logger->error('OAuth: Failed to exchange code for tokens');
+
+            wp_die(
+                sprintf(
+                    '<h1>%s</h1><p>%s</p><p><a href="%s">%s</a></p>',
+                    esc_html__('Error', 'mad-suite'),
+                    esc_html__('No se pudieron obtener los tokens de acceso. Revisa el log para más detalles.', 'mad-suite'),
+                    admin_url('admin.php?page=madsuite-multi-catalog-sync'),
+                    esc_html__('Volver a configuración', 'mad-suite')
+                )
+            );
+        }
+
+        // Save tokens
+        $saved = $oauth_handler->save_tokens($tokens);
+
+        if (!$saved) {
+            $logger->error('OAuth: Failed to save tokens');
+
+            wp_die(
+                sprintf(
+                    '<h1>%s</h1><p>%s</p><p><a href="%s">%s</a></p>',
+                    esc_html__('Error', 'mad-suite'),
+                    esc_html__('No se pudieron guardar los tokens. Revisa el log.', 'mad-suite'),
+                    admin_url('admin.php?page=madsuite-multi-catalog-sync'),
+                    esc_html__('Volver a configuración', 'mad-suite')
+                )
+            );
+        }
+
+        $logger->info('OAuth: Successfully connected to Google Merchant Center');
+
+        // Success! Close popup and reload parent
+        ?>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title><?php esc_html_e('Conectado exitosamente', 'mad-suite'); ?></title>
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                    background: #f0f0f1;
+                }
+                .success-message {
+                    text-align: center;
+                    background: white;
+                    padding: 40px;
+                    border-radius: 8px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.13);
+                }
+                .success-icon {
+                    font-size: 64px;
+                    color: #00a32a;
+                    margin-bottom: 20px;
+                }
+                h1 {
+                    color: #1d2327;
+                    font-size: 24px;
+                    margin: 0 0 10px 0;
+                }
+                p {
+                    color: #50575e;
+                    margin: 0;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="success-message">
+                <div class="success-icon">✅</div>
+                <h1><?php esc_html_e('¡Conectado exitosamente!', 'mad-suite'); ?></h1>
+                <p><?php esc_html_e('Esta ventana se cerrará automáticamente...', 'mad-suite'); ?></p>
+            </div>
+            <script>
+                // Close popup and reload parent window
+                setTimeout(function() {
+                    if (window.opener) {
+                        window.opener.location.reload();
+                    }
+                    window.close();
+                }, 2000);
+            </script>
+        </body>
+        </html>
+        <?php
+        exit;
     }
 
     /* ==== Helper Methods for AJAX ==== */
