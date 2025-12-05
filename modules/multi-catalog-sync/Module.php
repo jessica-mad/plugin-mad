@@ -482,7 +482,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $clean['google_feed_label'] = isset($input['google_feed_label']) ? sanitize_text_field($input['google_feed_label']) : 'ES';
 
         // Google OAuth2
-        $clean['google_oauth_use_custom'] = !empty($input['google_oauth_use_custom']) ? '1' : '0';
+        // Fix: Radio buttons send string values "0" or "1", so we need to check the actual value, not use !empty()
+        // because !empty("0") returns false in PHP
+        $clean['google_oauth_use_custom'] = isset($input['google_oauth_use_custom']) && $input['google_oauth_use_custom'] === '1' ? '1' : '0';
         $clean['google_oauth_client_id'] = isset($input['google_oauth_client_id']) ? sanitize_text_field($input['google_oauth_client_id']) : '';
         $clean['google_oauth_client_secret'] = isset($input['google_oauth_client_secret']) ? sanitize_text_field($input['google_oauth_client_secret']) : '';
 
