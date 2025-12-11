@@ -1,0 +1,406 @@
+(function($) {
+    'use strict';
+
+    var CheckoutMonitorAdmin = {
+        currentPage: 1,
+        perPage: 20,
+        filters: {},
+
+        init: function() {
+            this.setupTabs();
+            this.setupFilters();
+            this.loadSessions();
+            this.setupModal();
+            this.setupCleanup();
+        },
+
+        setupTabs: function() {
+            $('.nav-tab').on('click', function(e) {
+                e.preventDefault();
+
+                var target = $(this).attr('href');
+
+                $('.nav-tab').removeClass('nav-tab-active');
+                $(this).addClass('nav-tab-active');
+
+                $('.tab-panel').removeClass('active');
+                $(target).addClass('active');
+            });
+        },
+
+        setupFilters: function() {
+            var self = this;
+
+            $('#session-apply-filters').on('click', function() {
+                self.filters = {
+                    search: $('#session-search').val(),
+                    status: $('#session-status-filter').val(),
+                    has_errors: $('#session-errors-filter').val(),
+                    date_from: $('#session-date-from').val(),
+                    date_to: $('#session-date-to').val()
+                };
+
+                self.currentPage = 1;
+                self.loadSessions();
+            });
+
+            // Enter key on search
+            $('#session-search').on('keypress', function(e) {
+                if (e.which === 13) {
+                    $('#session-apply-filters').click();
+                }
+            });
+        },
+
+        loadSessions: function() {
+            var self = this;
+
+            $('#sessions-tbody').html('<tr><td colspan="11" style="text-align: center;"><span class="spinner is-active" style="float: none;"></span> Cargando sesiones...</td></tr>');
+
+            $.ajax({
+                url: checkoutMonitorAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'checkout_monitor_get_sessions',
+                    nonce: checkoutMonitorAdmin.nonce,
+                    page: self.currentPage,
+                    per_page: self.perPage,
+                    filters: self.filters
+                },
+                success: function(response) {
+                    if (response.success) {
+                        self.renderSessions(response.data);
+                    } else {
+                        self.showError('Error al cargar sesiones: ' + response.data.message);
+                    }
+                },
+                error: function() {
+                    self.showError('Error de conexión al cargar sesiones');
+                }
+            });
+        },
+
+        renderSessions: function(data) {
+            var self = this;
+            var $tbody = $('#sessions-tbody');
+
+            $tbody.empty();
+
+            if (data.sessions.length === 0) {
+                $tbody.html('<tr><td colspan="11" style="text-align: center;">No se encontraron sesiones</td></tr>');
+                return;
+            }
+
+            $.each(data.sessions, function(index, session) {
+                var statusClass = self.getStatusClass(session.status);
+                var errorBadge = session.has_errors == 1 ? '<span class="error-badge">⚠️ ' + session.error_count + '</span>' : '-';
+                var deviceInfo = self.getDeviceInfo(session.browser_data);
+
+                var row = '<tr>' +
+                    '<td><code>' + self.escapeHtml(session.session_id.substring(0, 16)) + '...</code></td>' +
+                    '<td>' + (session.order_id ? '<a href="post.php?post=' + session.order_id + '&action=edit">#' + session.order_id + '</a>' : '-') + '</td>' +
+                    '<td><span class="status-badge ' + statusClass + '">' + session.status + '</span></td>' +
+                    '<td>' + self.formatDate(session.started_at) + '</td>' +
+                    '<td>' + (session.duration_ms ? session.duration_ms + 'ms' : '-') + '</td>' +
+                    '<td>' + (session.payment_method || '-') + '</td>' +
+                    '<td>' + (session.total_amount ? '€' + parseFloat(session.total_amount).toFixed(2) : '-') + '</td>' +
+                    '<td>' + session.hook_count + '</td>' +
+                    '<td>' + errorBadge + '</td>' +
+                    '<td>' + deviceInfo + '</td>' +
+                    '<td><button class="button button-small view-session" data-session-id="' + session.session_id + '">Ver Detalle</button></td>' +
+                    '</tr>';
+
+                $tbody.append(row);
+            });
+
+            // Setup view buttons
+            $('.view-session').on('click', function() {
+                var sessionId = $(this).data('session-id');
+                self.loadSessionDetail(sessionId);
+            });
+
+            // Update pagination
+            this.renderPagination(data);
+        },
+
+        renderPagination: function(data) {
+            var self = this;
+
+            $('#sessions-count').text('Mostrando ' + data.sessions.length + ' de ' + data.total + ' sesiones');
+
+            var $pagination = $('#sessions-pagination');
+            $pagination.empty();
+
+            if (data.total_pages <= 1) return;
+
+            // Previous
+            if (data.page > 1) {
+                $pagination.append('<a class="button page-btn" data-page="' + (data.page - 1) + '">‹</a> ');
+            }
+
+            // Page numbers
+            for (var i = 1; i <= data.total_pages; i++) {
+                if (i === data.page) {
+                    $pagination.append('<span class="current-page">' + i + '</span> ');
+                } else if (Math.abs(i - data.page) <= 2 || i === 1 || i === data.total_pages) {
+                    $pagination.append('<a class="button page-btn" data-page="' + i + '">' + i + '</a> ');
+                } else if (Math.abs(i - data.page) === 3) {
+                    $pagination.append('<span>...</span> ');
+                }
+            }
+
+            // Next
+            if (data.page < data.total_pages) {
+                $pagination.append('<a class="button page-btn" data-page="' + (data.page + 1) + '">›</a>');
+            }
+
+            // Click handlers
+            $('.page-btn').on('click', function() {
+                self.currentPage = parseInt($(this).data('page'));
+                self.loadSessions();
+            });
+        },
+
+        loadSessionDetail: function(sessionId) {
+            var self = this;
+
+            $('#session-detail-content').html('<div style="text-align: center; padding: 50px;"><span class="spinner is-active" style="float: none;"></span> Cargando detalles...</div>');
+            $('#session-detail-modal').fadeIn();
+
+            $.ajax({
+                url: checkoutMonitorAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'checkout_monitor_get_session_detail',
+                    nonce: checkoutMonitorAdmin.nonce,
+                    session_id: sessionId
+                },
+                success: function(response) {
+                    if (response.success) {
+                        self.renderSessionDetail(response.data);
+                    } else {
+                        self.showError('Error al cargar detalles: ' + response.data.message);
+                    }
+                },
+                error: function() {
+                    self.showError('Error de conexión al cargar detalles');
+                }
+            });
+        },
+
+        renderSessionDetail: function(data) {
+            var self = this;
+            var session = data.session;
+            var events = data.events;
+            var serverLogs = data.server_logs;
+            var browserData = data.browser_data;
+
+            var html = '<h2>Detalle de Sesión: ' + session.session_id + '</h2>';
+
+            // Session Info
+            html += '<div class="session-detail-section">';
+            html += '<h3>Información General</h3>';
+            html += '<table class="detail-table">';
+            html += '<tr><th>Session ID:</th><td><code>' + session.session_id + '</code></td></tr>';
+            html += '<tr><th>Order ID:</th><td>' + (session.order_id ? '#' + session.order_id : '-') + '</td></tr>';
+            html += '<tr><th>Estado:</th><td><span class="status-badge ' + self.getStatusClass(session.status) + '">' + session.status + '</span></td></tr>';
+            html += '<tr><th>Inicio:</th><td>' + session.started_at + '</td></tr>';
+            html += '<tr><th>Finalización:</th><td>' + (session.completed_at || '-') + '</td></tr>';
+            html += '<tr><th>Duración:</th><td>' + (session.duration_ms ? session.duration_ms + 'ms' : '-') + '</td></tr>';
+            html += '<tr><th>Método de Pago:</th><td>' + (session.payment_method || '-') + '</td></tr>';
+            html += '<tr><th>Total:</th><td>' + (session.total_amount ? '€' + parseFloat(session.total_amount).toFixed(2) : '-') + '</td></tr>';
+            html += '<tr><th>Hooks Ejecutados:</th><td>' + session.hook_count + '</td></tr>';
+            html += '<tr><th>Errores:</th><td>' + session.error_count + '</td></tr>';
+            html += '<tr><th>IP:</th><td>' + (session.ip_address || '-') + '</td></tr>';
+            html += '</table>';
+            html += '</div>';
+
+            // Browser Data
+            if (browserData) {
+                html += '<div class="session-detail-section">';
+                html += '<h3>Datos del Navegador</h3>';
+                html += '<table class="detail-table">';
+                html += '<tr><th>User Agent:</th><td><code>' + (browserData.user_agent || '-') + '</code></td></tr>';
+                html += '<tr><th>Plataforma:</th><td>' + (browserData.platform || '-') + '</td></tr>';
+                html += '<tr><th>Idioma:</th><td>' + (browserData.language || '-') + '</td></tr>';
+                html += '<tr><th>Tipo de Dispositivo:</th><td>' + (browserData.device_type || '-') + '</td></tr>';
+                html += '<tr><th>Pantalla:</th><td>' + (browserData.screen_width || '-') + ' x ' + (browserData.screen_height || '-') + '</td></tr>';
+                html += '<tr><th>Viewport:</th><td>' + (browserData.viewport_width || '-') + ' x ' + (browserData.viewport_height || '-') + '</td></tr>';
+                html += '<tr><th>Pixel Ratio:</th><td>' + (browserData.device_pixel_ratio || '-') + '</td></tr>';
+
+                if (browserData.connection) {
+                    html += '<tr><th>Conexión:</th><td>' + (browserData.connection.effective_type || '-') + ' (' + (browserData.connection.downlink || '-') + ' Mbps)</td></tr>';
+                }
+
+                html += '</table>';
+                html += '</div>';
+            }
+
+            // Events Timeline
+            html += '<div class="session-detail-section">';
+            html += '<h3>Timeline de Eventos (' + events.length + ')</h3>';
+            html += '<div class="timeline">';
+
+            $.each(events, function(index, event) {
+                var errorClass = event.has_error == 1 ? 'timeline-item-error' : '';
+                var iconClass = event.has_error == 1 ? '❌' : '✓';
+
+                html += '<div class="timeline-item ' + errorClass + '">';
+                html += '<div class="timeline-icon">' + iconClass + '</div>';
+                html += '<div class="timeline-content">';
+                html += '<div class="timeline-header">';
+                html += '<strong>' + (event.hook_name || event.event_type) + '</strong>';
+                html += '<span class="timeline-time">' + event.started_at + '</span>';
+                html += '</div>';
+                html += '<div class="timeline-body">';
+
+                if (event.callback_name) {
+                    html += '<div><strong>Callback:</strong> <code>' + event.callback_name + '</code></div>';
+                }
+
+                if (event.plugin_name) {
+                    html += '<div><strong>Plugin:</strong> ' + event.plugin_name + '</div>';
+                }
+
+                if (event.file_path) {
+                    html += '<div><strong>Archivo:</strong> <code>' + event.file_path + (event.line_number ? ':' + event.line_number : '') + '</code></div>';
+                }
+
+                if (event.execution_time_ms) {
+                    html += '<div><strong>Tiempo de ejecución:</strong> ' + parseFloat(event.execution_time_ms).toFixed(2) + 'ms</div>';
+                }
+
+                if (event.has_error == 1 && event.error_message) {
+                    html += '<div class="error-message"><strong>Error:</strong> ' + event.error_message + '</div>';
+                }
+
+                html += '</div>';
+                html += '</div>';
+                html += '</div>';
+            });
+
+            html += '</div>';
+            html += '</div>';
+
+            // Server Logs
+            if (serverLogs && serverLogs.length > 0) {
+                html += '<div class="session-detail-section">';
+                html += '<h3>Logs del Servidor (' + serverLogs.length + ')</h3>';
+                html += '<div class="server-logs">';
+
+                $.each(serverLogs, function(index, log) {
+                    var levelClass = 'log-level-' + (log.log_level || 'unknown').toLowerCase();
+
+                    html += '<div class="log-entry ' + levelClass + '">';
+                    html += '<div class="log-header">';
+                    html += '<strong>' + log.log_source + '</strong>';
+                    html += '<span class="log-level">' + log.log_level + '</span>';
+                    html += '<span class="log-time">' + log.timestamp + '</span>';
+                    html += '</div>';
+                    html += '<pre class="log-content">' + self.escapeHtml(log.log_content) + '</pre>';
+                    html += '</div>';
+                });
+
+                html += '</div>';
+                html += '</div>';
+            }
+
+            $('#session-detail-content').html(html);
+        },
+
+        setupModal: function() {
+            var $modal = $('#session-detail-modal');
+
+            $('.close', $modal).on('click', function() {
+                $modal.fadeOut();
+            });
+
+            $(window).on('click', function(e) {
+                if ($(e.target).is($modal)) {
+                    $modal.fadeOut();
+                }
+            });
+        },
+
+        setupCleanup: function() {
+            $('#cleanup-old-logs').on('click', function() {
+                if (!confirm('¿Estás seguro de que quieres eliminar los logs antiguos?')) {
+                    return;
+                }
+
+                var days = parseInt($('#cleanup_days').val()) || 30;
+
+                $.ajax({
+                    url: checkoutMonitorAdmin.ajaxUrl,
+                    type: 'POST',
+                    data: {
+                        action: 'checkout_monitor_delete_old_logs',
+                        nonce: checkoutMonitorAdmin.nonce,
+                        days: days
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            alert('Se eliminaron ' + response.data.deleted + ' sesiones antiguas.');
+                            CheckoutMonitorAdmin.loadSessions();
+                        } else {
+                            alert('Error: ' + response.data.message);
+                        }
+                    }
+                });
+            });
+        },
+
+        getStatusClass: function(status) {
+            var classes = {
+                'initiated': 'status-initiated',
+                'processing': 'status-processing',
+                'completed': 'status-completed',
+                'failed': 'status-failed'
+            };
+            return classes[status] || '';
+        },
+
+        getDeviceInfo: function(browserDataJson) {
+            if (!browserDataJson) return '-';
+
+            try {
+                var data = JSON.parse(browserDataJson);
+                var icon = '💻';
+
+                if (data.device_type === 'mobile') icon = '📱';
+                else if (data.device_type === 'tablet') icon = '📱';
+
+                return icon + ' ' + (data.device_type || 'unknown');
+            } catch(e) {
+                return '-';
+            }
+        },
+
+        formatDate: function(dateString) {
+            var date = new Date(dateString);
+            return date.toLocaleString('es-ES');
+        },
+
+        escapeHtml: function(text) {
+            var map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+        },
+
+        showError: function(message) {
+            $('#sessions-tbody').html('<tr><td colspan="11" style="text-align: center; color: red;">' + message + '</td></tr>');
+        }
+    };
+
+    $(document).ready(function() {
+        if (typeof checkoutMonitorAdmin !== 'undefined') {
+            CheckoutMonitorAdmin.init();
+        }
+    });
+
+})(jQuery);

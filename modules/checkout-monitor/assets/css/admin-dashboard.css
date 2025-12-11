@@ -1,0 +1,514 @@
+/* Checkout Monitor Dashboard Styles */
+
+.checkout-monitor-dashboard {
+    margin: 20px 20px 20px 0;
+}
+
+.checkout-monitor-dashboard h1 {
+    display: flex;
+    align-items: baseline;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.checkout-monitor-subtitle {
+    font-size: 14px;
+    font-weight: normal;
+    color: #666;
+}
+
+/* Statistics Grid */
+.checkout-monitor-stats {
+    margin: 20px 0;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 30px;
+}
+
+.stat-card {
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    transform: translateY(-2px);
+}
+
+.stat-card.stat-success {
+    border-left: 4px solid #46b450;
+}
+
+.stat-card.stat-error {
+    border-left: 4px solid #dc3232;
+}
+
+.stat-card.stat-warning {
+    border-left: 4px solid #ffb900;
+}
+
+.stat-icon {
+    font-size: 32px;
+    line-height: 1;
+}
+
+.stat-content {
+    flex: 1;
+}
+
+.stat-value {
+    font-size: 28px;
+    font-weight: bold;
+    line-height: 1.2;
+    color: #2271b1;
+}
+
+.stat-label {
+    font-size: 13px;
+    color: #666;
+    margin-top: 5px;
+}
+
+/* Tabs */
+.checkout-monitor-tabs {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+}
+
+.tab-panel {
+    display: none;
+    padding: 20px;
+}
+
+.tab-panel.active {
+    display: block;
+}
+
+/* Filters */
+.sessions-filters {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.sessions-filters input[type="text"],
+.sessions-filters input[type="date"],
+.sessions-filters select {
+    padding: 6px 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.sessions-filters input[type="text"] {
+    min-width: 250px;
+    flex: 1;
+}
+
+/* Status Badges */
+.status-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.status-badge.status-initiated {
+    background: #e8f4f8;
+    color: #0073aa;
+}
+
+.status-badge.status-processing {
+    background: #fff8e5;
+    color: #f56e28;
+}
+
+.status-badge.status-completed {
+    background: #ecf7ed;
+    color: #46b450;
+}
+
+.status-badge.status-failed {
+    background: #ffeaea;
+    color: #dc3232;
+}
+
+.error-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background: #ffeaea;
+    color: #dc3232;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Table */
+#sessions-table-container {
+    margin-top: 20px;
+}
+
+#sessions-table-container table {
+    margin-top: 0;
+}
+
+#sessions-table-container th,
+#sessions-table-container td {
+    vertical-align: middle;
+}
+
+#sessions-table-container code {
+    font-size: 11px;
+    background: #f0f0f1;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+/* Pagination */
+.tablenav-pages {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: flex-end;
+    padding: 10px 0;
+}
+
+.pagination-links {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.pagination-links .current-page {
+    padding: 4px 10px;
+    background: #2271b1;
+    color: #fff;
+    border-radius: 3px;
+    font-weight: 600;
+}
+
+.pagination-links .page-btn {
+    padding: 4px 10px;
+}
+
+/* Modal */
+.checkout-monitor-modal {
+    display: none;
+    position: fixed;
+    z-index: 100000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.6);
+}
+
+.modal-content {
+    background-color: #fff;
+    margin: 2% auto;
+    padding: 0;
+    border: 1px solid #888;
+    width: 90%;
+    max-width: 1200px;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-content h2 {
+    margin: 0;
+    padding: 20px;
+    background: #f0f0f1;
+    border-bottom: 1px solid #ddd;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.close {
+    color: #aaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    line-height: 20px;
+    cursor: pointer;
+}
+
+.close:hover,
+.close:focus {
+    color: #000;
+}
+
+/* Session Detail */
+.session-detail-section {
+    padding: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.session-detail-section:last-child {
+    border-bottom: none;
+}
+
+.session-detail-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 18px;
+    color: #2271b1;
+}
+
+.detail-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.detail-table th {
+    text-align: left;
+    padding: 10px;
+    width: 200px;
+    background: #f9f9f9;
+    border-bottom: 1px solid #eee;
+    font-weight: 600;
+}
+
+.detail-table td {
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.detail-table tr:last-child th,
+.detail-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* Timeline */
+.timeline {
+    position: relative;
+    padding-left: 40px;
+}
+
+.timeline::before {
+    content: '';
+    position: absolute;
+    left: 15px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ddd;
+}
+
+.timeline-item {
+    position: relative;
+    margin-bottom: 20px;
+    padding: 15px;
+    background: #f9f9f9;
+    border-radius: 6px;
+    border-left: 3px solid #2271b1;
+}
+
+.timeline-item-error {
+    border-left-color: #dc3232;
+    background: #fff5f5;
+}
+
+.timeline-icon {
+    position: absolute;
+    left: -32px;
+    top: 15px;
+    width: 24px;
+    height: 24px;
+    background: #fff;
+    border: 2px solid #2271b1;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+}
+
+.timeline-item-error .timeline-icon {
+    border-color: #dc3232;
+}
+
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.timeline-header strong {
+    color: #2271b1;
+    font-size: 14px;
+}
+
+.timeline-time {
+    font-size: 12px;
+    color: #666;
+}
+
+.timeline-body {
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.timeline-body > div {
+    margin-bottom: 5px;
+}
+
+.timeline-body code {
+    background: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.error-message {
+    margin-top: 10px;
+    padding: 10px;
+    background: #ffeaea;
+    border-left: 3px solid #dc3232;
+    border-radius: 3px;
+    color: #dc3232;
+}
+
+/* Server Logs */
+.server-logs {
+    font-family: monospace;
+}
+
+.log-entry {
+    margin-bottom: 15px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.log-header {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    padding: 10px 15px;
+    background: #f9f9f9;
+    border-bottom: 1px solid #ddd;
+}
+
+.log-header strong {
+    flex: 1;
+}
+
+.log-level {
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.log-level-error .log-level {
+    background: #dc3232;
+    color: #fff;
+}
+
+.log-level-warning .log-level {
+    background: #ffb900;
+    color: #000;
+}
+
+.log-level-notice .log-level {
+    background: #72aee6;
+    color: #fff;
+}
+
+.log-level-debug .log-level {
+    background: #666;
+    color: #fff;
+}
+
+.log-time {
+    font-size: 12px;
+    color: #666;
+}
+
+.log-content {
+    margin: 0;
+    padding: 15px;
+    background: #282c34;
+    color: #abb2bf;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* Logs Table */
+.logs-table-container {
+    margin-top: 20px;
+}
+
+.logs-table-container h2 {
+    margin-bottom: 10px;
+}
+
+.logs-table-container .description {
+    margin-bottom: 20px;
+}
+
+/* Settings */
+.settings-container {
+    max-width: 800px;
+}
+
+.form-table th {
+    width: 250px;
+}
+
+/* Responsive */
+@media screen and (max-width: 782px) {
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .sessions-filters {
+        flex-direction: column;
+    }
+
+    .sessions-filters input[type="text"] {
+        min-width: 100%;
+    }
+
+    .modal-content {
+        width: 95%;
+        margin: 5% auto;
+    }
+
+    .timeline {
+        padding-left: 30px;
+    }
+
+    .timeline::before {
+        left: 10px;
+    }
+
+    .timeline-icon {
+        left: -27px;
+        width: 20px;
+        height: 20px;
+        font-size: 10px;
+    }
+}
