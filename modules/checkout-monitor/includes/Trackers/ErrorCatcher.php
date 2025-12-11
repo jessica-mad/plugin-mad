@@ -19,12 +19,11 @@ class ErrorCatcher {
     public function activate(){
         if ( $this->is_active ) return;
 
-        // Guardar handlers anteriores
-        $this->previous_error_handler = set_error_handler([$this, 'handle_error']);
-        $this->previous_exception_handler = set_exception_handler([$this, 'handle_exception']);
+        // VERSIÓN SIMPLIFICADA: Solo hooks de WooCommerce, no interceptar PHP errors
+        // Los error handlers globales son demasiado invasivos y pueden romper el checkout
 
-        // Register shutdown function para capturar fatal errors
-        register_shutdown_function([$this, 'handle_shutdown']);
+        // Solo capturar errores de WooCommerce
+        $this->hook_woocommerce_errors();
 
         $this->is_active = true;
     }

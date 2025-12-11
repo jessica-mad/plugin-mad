@@ -84,13 +84,18 @@ class HookInterceptor {
     }
 
     public function activate(){
-        // Interceptar todos los critical hooks
-        foreach ( $this->critical_hooks as $hook ) {
-            $this->monitor_hook($hook);
-        }
+        // SOLO monitorear hooks críticos específicos (sin interceptar todos)
+        // Versión pasiva que no interfiere con la ejecución
 
-        // Interceptar hooks dinámicos de order creation
-        add_action('all', [$this, 'intercept_all_hooks'], -9999);
+        // Hook principal de creación de order
+        add_action('woocommerce_checkout_order_created', [$this, 'log_order_created'], 10, 2);
+        add_action('woocommerce_new_order', [$this, 'log_new_order'], 10, 1);
+
+        // Hooks de errores
+        add_action('woocommerce_add_error', [$this, 'log_checkout_error'], 10, 1);
+
+        // Hook de proceso completado
+        add_action('woocommerce_checkout_order_processed', [$this, 'log_order_processed'], 10, 3);
     }
 
     private function monitor_hook($hook_name, $priority = -9999){
@@ -195,6 +200,39 @@ class HookInterceptor {
         }
 
         return $hook_name . '_unknown_' . $priority;
+    }
+
+    /* ==== Métodos pasivos de logging (NO interfieren) ==== */
+
+    public function log_order_created($order, $data){
+        $order_id = is_object($order) ? $order->get_id() : $order;
+
+        $event_id = $this->logger->log_hook_start('woocommerce_checkout_order_created', 'WC_Checkout::create_order', 10);
+
+        $this->logger->update_order_info($order_id);
+
+        $this->logger->log_hook_end($event_id);
+    }
+
+    public function log_new_order($order_id){
+        $event_id = $this->logger->log_hook_start('woocommerce_new_order', 'WooCommerce', 10);
+        $this->logger->log_hook_end($event_id);
+    }
+
+    public function log_checkout_error($error_message){
+        $this->logger->log_error([
+            'message' => $error_message,
+            'type' => 'checkout_error',
+            'source' => 'woocommerce_add_error',
+        ]);
+    }
+
+    public function log_order_processed($order_id, $posted_data, $order){
+        $event_id = $this->logger->log_hook_start('woocommerce_checkout_order_processed', 'WC_Checkout::process_checkout', 10);
+
+        $this->logger->complete_session('completed');
+
+        $this->logger->log_hook_end($event_id);
     }
 
     /* ==== Track specific checkout steps ==== */
