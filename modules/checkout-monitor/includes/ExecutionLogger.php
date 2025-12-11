@@ -191,9 +191,13 @@ class ExecutionLogger {
         } elseif ( is_object($callback) ) {
             if ( $callback instanceof \Closure ) {
                 $info['name'] = 'Closure';
-                $reflection = new \ReflectionFunction($callback);
-                $info['file'] = $reflection->getFileName();
-                $info['line'] = $reflection->getStartLine();
+                try {
+                    $reflection = new \ReflectionFunction($callback);
+                    $info['file'] = $reflection->getFileName();
+                    $info['line'] = $reflection->getStartLine();
+                } catch ( \Exception $e ) {
+                    // Ignore reflection errors
+                }
             } else {
                 $info['name'] = get_class($callback);
             }
@@ -203,15 +207,23 @@ class ExecutionLogger {
         if ( $info['file'] ) {
             $info['plugin'] = $this->detect_plugin_from_file($info['file']);
         } elseif ( is_array($callback) && is_object($callback[0]) ) {
-            $reflection = new \ReflectionClass($callback[0]);
-            $info['file'] = $reflection->getFileName();
-            $info['line'] = $reflection->getMethod($callback[1])->getStartLine();
-            $info['plugin'] = $this->detect_plugin_from_file($info['file']);
+            try {
+                $reflection = new \ReflectionClass($callback[0]);
+                $info['file'] = $reflection->getFileName();
+                $info['line'] = $reflection->getMethod($callback[1])->getStartLine();
+                $info['plugin'] = $this->detect_plugin_from_file($info['file']);
+            } catch ( \Exception $e ) {
+                // Ignore reflection errors
+            }
         } elseif ( is_string($callback) && function_exists($callback) ) {
-            $reflection = new \ReflectionFunction($callback);
-            $info['file'] = $reflection->getFileName();
-            $info['line'] = $reflection->getStartLine();
-            $info['plugin'] = $this->detect_plugin_from_file($info['file']);
+            try {
+                $reflection = new \ReflectionFunction($callback);
+                $info['file'] = $reflection->getFileName();
+                $info['line'] = $reflection->getStartLine();
+                $info['plugin'] = $this->detect_plugin_from_file($info['file']);
+            } catch ( \Exception $e ) {
+                // Ignore reflection errors
+            }
         }
 
         return $info;
@@ -243,6 +255,10 @@ class ExecutionLogger {
     private function get_microtime_mysql(){
         $microtime = microtime(true);
         $datetime = \DateTime::createFromFormat('U.u', sprintf('%.6F', $microtime));
+        if ( $datetime === false ) {
+            // Fallback si falla la creación con microsegundos
+            return current_time('mysql', true);
+        }
         return $datetime->format('Y-m-d H:i:s.u');
     }
 
@@ -267,6 +283,8 @@ class ExecutionLogger {
 
     /* ==== Session Management ==== */
     public function update_order_info($order_id, $order_uid = null){
+        if ( !function_exists('wc_get_order') ) return;
+
         $order = wc_get_order($order_id);
 
         if ( !$order ) return;

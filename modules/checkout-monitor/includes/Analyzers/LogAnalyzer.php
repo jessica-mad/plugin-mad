@@ -17,9 +17,11 @@ class LogAnalyzer {
 
     private function discover_log_paths(){
         // WooCommerce logs
-        $wc_log_dir = WC_LOG_DIR;
-        if ( is_dir($wc_log_dir) ) {
-            $this->log_paths['woocommerce'] = $wc_log_dir;
+        if ( defined('WC_LOG_DIR') ) {
+            $wc_log_dir = WC_LOG_DIR;
+            if ( is_dir($wc_log_dir) ) {
+                $this->log_paths['woocommerce'] = $wc_log_dir;
+            }
         }
 
         // WordPress debug log

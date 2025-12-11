@@ -200,7 +200,7 @@ class HookInterceptor {
     /* ==== Track specific checkout steps ==== */
     public function track_checkout_initiated(){
         // Este método se puede llamar desde el frontend JS
-        $this->logger->update_session_status('processing');
+        // La sesión ya está siendo trackeada por el logger
     }
 
     public function track_checkout_completed($order_id){
