@@ -51,18 +51,24 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     /* ==== Activación ==== */
-    private function ensure_database_tables(){
-        // Verificar si las tablas ya existen
+    public function ensure_database_tables(){
+        // Verificar si las tablas ya existen (cache en transient para no verificar cada vez)
+        $tables_checked = get_transient('checkout_monitor_tables_checked');
+        if ( $tables_checked ) {
+            return; // Ya verificamos recientemente
+        }
+
         $version_option = 'checkout_monitor_db_version';
         $current_version = get_option($version_option, '0');
         $required_version = '1.0';
 
-        if ( version_compare($current_version, $required_version, '>=') ) {
-            return; // Las tablas ya existen
+        if ( version_compare($current_version, $required_version, '<') ) {
+            $this->create_database_tables();
+            update_option($version_option, $required_version);
         }
 
-        $this->create_database_tables();
-        update_option($version_option, $required_version);
+        // Cache por 1 hora para no verificar cada request
+        set_transient('checkout_monitor_tables_checked', true, HOUR_IN_SECONDS);
     }
 
     private function create_database_tables(){
@@ -154,48 +160,61 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     /* ==== Hooks públicos ==== */
     public function init(){
-        // Asegurar que las tablas existen
-        $this->ensure_database_tables();
+        // Verificar WooCommerce
+        if ( ! class_exists('WooCommerce') ) return;
 
-        // Solo activar en páginas de checkout
-        if ( $this->is_checkout_context() ) {
-            $this->init_trackers();
+        // Asegurar tablas en admin (solo una vez)
+        if ( is_admin() ) {
+            add_action('admin_init', [$this, 'ensure_database_tables'], 5);
         }
+
+        // Inicializar Database y BrowserTracker siempre (para AJAX)
+        $this->database = new \MAD_Suite\CheckoutMonitor\Database();
+        $this->browser_tracker = new \MAD_Suite\CheckoutMonitor\Trackers\BrowserTracker($this->database);
 
         // AJAX para el dashboard
         add_action('wp_ajax_checkout_monitor_get_sessions', [$this, 'ajax_get_sessions']);
         add_action('wp_ajax_checkout_monitor_get_session_detail', [$this, 'ajax_get_session_detail']);
         add_action('wp_ajax_checkout_monitor_delete_old_logs', [$this, 'ajax_delete_old_logs']);
 
-        // Enqueue scripts en frontend (checkout)
+        // Enqueue scripts
         add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_scripts']);
-
-        // Enqueue scripts en admin
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_scripts']);
 
-        // Cron para limpieza de logs antiguos
+        // Inicializar tracking en checkout (tarde, cuando todo esté listo)
+        add_action('template_redirect', [$this, 'maybe_init_trackers'], 20);
+
+        // Cron para limpieza
+        add_action('checkout_monitor_cleanup', [$this, 'cleanup_old_logs']);
         if (!wp_next_scheduled('checkout_monitor_cleanup')) {
             wp_schedule_event(time(), 'daily', 'checkout_monitor_cleanup');
         }
-        add_action('checkout_monitor_cleanup', [$this, 'cleanup_old_logs']);
     }
 
-    private function is_checkout_context(){
-        // Detectar si estamos en contexto de checkout
+    public function maybe_init_trackers(){
+        // Solo en checkout o AJAX de checkout
+        if ( ! is_checkout() && ! $this->is_ajax_checkout() ) {
+            return;
+        }
+
+        $this->init_trackers();
+    }
+
+    private function is_ajax_checkout(){
         return (
-            is_checkout() ||
             (defined('DOING_AJAX') && DOING_AJAX && isset($_REQUEST['action']) && $_REQUEST['action'] === 'woocommerce_checkout') ||
             (isset($_REQUEST['wc-ajax']) && $_REQUEST['wc-ajax'] === 'checkout')
         );
     }
 
     private function init_trackers(){
-        // Inicializar componentes de tracking
-        $this->database = new \MAD_Suite\CheckoutMonitor\Database();
+        // Evitar inicializar dos veces
+        if ( $this->execution_logger ) return;
+
+        // Inicializar componentes de tracking (Database ya está inicializado)
         $this->execution_logger = new \MAD_Suite\CheckoutMonitor\ExecutionLogger($this->database);
         $this->hook_interceptor = new \MAD_Suite\CheckoutMonitor\Trackers\HookInterceptor($this->execution_logger);
         $this->error_catcher = new \MAD_Suite\CheckoutMonitor\Trackers\ErrorCatcher($this->execution_logger);
-        $this->browser_tracker = new \MAD_Suite\CheckoutMonitor\Trackers\BrowserTracker($this->database);
         $this->log_analyzer = new \MAD_Suite\CheckoutMonitor\Analyzers\LogAnalyzer($this->database);
 
         // Activar tracking
