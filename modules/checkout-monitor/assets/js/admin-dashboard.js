@@ -5,10 +5,14 @@
         currentPage: 1,
         perPage: 20,
         filters: {},
+        autoRefreshInterval: null,
+        autoRefreshEnabled: true,
+        lastUpdateTime: null,
 
         init: function() {
             this.setupTabs();
             this.setupFilters();
+            this.setupAutoRefresh();
             this.loadSessions();
             this.setupModal();
             this.setupCleanup();
@@ -61,10 +65,69 @@
             });
         },
 
-        loadSessions: function() {
+        setupAutoRefresh: function() {
             var self = this;
 
-            $('#sessions-tbody').html('<tr><td colspan="11" style="text-align: center;"><span class="spinner is-active" style="float: none;"></span> Cargando sesiones...</td></tr>');
+            // Botón de refresh manual
+            $('#session-refresh-btn').on('click', function() {
+                $(this).addClass('spinning');
+                self.loadSessions();
+                setTimeout(function() {
+                    $('#session-refresh-btn').removeClass('spinning');
+                }, 1000);
+            });
+
+            // Toggle auto-refresh
+            $('#session-auto-refresh-toggle').on('change', function() {
+                self.autoRefreshEnabled = $(this).is(':checked');
+                if (self.autoRefreshEnabled) {
+                    self.startAutoRefresh();
+                } else {
+                    self.stopAutoRefresh();
+                }
+            });
+
+            // Iniciar auto-refresh si está habilitado
+            if (self.autoRefreshEnabled) {
+                self.startAutoRefresh();
+            }
+        },
+
+        startAutoRefresh: function() {
+            var self = this;
+
+            // Limpiar intervalo existente
+            if (self.autoRefreshInterval) {
+                clearInterval(self.autoRefreshInterval);
+            }
+
+            // Actualizar cada 10 segundos
+            self.autoRefreshInterval = setInterval(function() {
+                self.loadSessions(true); // true = silent refresh
+            }, 10000);
+        },
+
+        stopAutoRefresh: function() {
+            if (this.autoRefreshInterval) {
+                clearInterval(this.autoRefreshInterval);
+                this.autoRefreshInterval = null;
+            }
+        },
+
+        updateLastRefreshTime: function() {
+            var now = new Date();
+            var timeString = now.toLocaleTimeString('es-ES');
+            $('#last-update-time').text(timeString);
+            this.lastUpdateTime = now;
+        },
+
+        loadSessions: function(silent) {
+            var self = this;
+
+            // Solo mostrar spinner si no es silent refresh
+            if (!silent) {
+                $('#sessions-tbody').html('<tr><td colspan="11" style="text-align: center;"><span class="spinner is-active" style="float: none;"></span> Cargando sesiones...</td></tr>');
+            }
 
             $.ajax({
                 url: checkoutMonitorAdmin.ajaxUrl,
@@ -79,12 +142,17 @@
                 success: function(response) {
                     if (response.success) {
                         self.renderSessions(response.data);
+                        self.updateLastRefreshTime();
                     } else {
-                        self.showError('Error al cargar sesiones: ' + response.data.message);
+                        if (!silent) {
+                            self.showError('Error al cargar sesiones: ' + response.data.message);
+                        }
                     }
                 },
                 error: function() {
-                    self.showError('Error de conexión al cargar sesiones');
+                    if (!silent) {
+                        self.showError('Error de conexión al cargar sesiones');
+                    }
                 }
             });
         },

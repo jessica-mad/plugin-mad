@@ -157,6 +157,21 @@ class Dashboard {
             <button id="session-apply-filters" class="button"><?php _e('Aplicar Filtros', 'mad-suite'); ?></button>
         </div>
 
+        <div class="sessions-refresh-controls">
+            <button id="session-refresh-btn" class="button button-primary" title="<?php _e('Refrescar ahora', 'mad-suite'); ?>">
+                <span class="dashicons dashicons-update"></span> <?php _e('Refrescar', 'mad-suite'); ?>
+            </button>
+            <label class="auto-refresh-label">
+                <input type="checkbox" id="session-auto-refresh-toggle" checked>
+                <span><?php _e('Auto-actualizar (cada 10s)', 'mad-suite'); ?></span>
+            </label>
+            <span class="last-update-info">
+                <span class="dashicons dashicons-clock"></span>
+                <?php _e('Última actualización:', 'mad-suite'); ?>
+                <strong id="last-update-time">-</strong>
+            </span>
+        </div>
+
         <div id="sessions-table-container">
             <table class="wp-list-table widefat fixed striped">
                 <thead>
