@@ -398,8 +398,11 @@ class HookInterceptor {
     }
 
     public function log_validation_errors($data, $errors){
-        // $errors es un WP_Error object con todos los errores de validación
+        $caller = $this->detect_caller_from_backtrace();
+
+        // SIEMPRE registrar que la validación se ejecutó (tenga o no errores)
         if ( is_wp_error($errors) && $errors->has_errors() ) {
+            // HAY ERRORES - registrar detalladamente
             $error_codes = $errors->get_error_codes();
             $all_errors = [];
 
@@ -419,8 +422,6 @@ class HookInterceptor {
             }
 
             // También crear un evento específico con TODOS los errores de validación
-            $caller = $this->detect_caller_from_backtrace();
-
             $validation_summary = [
                 'message' => 'Errores de validación del checkout (' . count($all_errors) . ' errores)',
                 'type' => 'validation_errors',
@@ -443,6 +444,29 @@ class HookInterceptor {
             }
 
             $this->logger->log_error($validation_summary);
+        } else {
+            // NO HAY ERRORES - la validación pasó exitosamente
+            // Registrar de todas formas para saber que se validó
+            $event_id = $this->logger->log_hook_start('woocommerce_after_checkout_validation', $caller, 10);
+
+            // Registrar información sobre la validación exitosa
+            $success_data = [
+                'validation_passed' => true,
+                'error_count' => 0,
+            ];
+
+            // Agregar información de campos validados
+            if ( isset($_POST) && !empty($_POST) ) {
+                $success_data['posted_data_summary'] = [
+                    'payment_method' => isset($_POST['payment_method']) ? $_POST['payment_method'] : 'unknown',
+                    'total_fields' => count($_POST),
+                    'has_billing_email' => isset($_POST['billing_email']) && !empty($_POST['billing_email']),
+                    'has_billing_phone' => isset($_POST['billing_phone']) && !empty($_POST['billing_phone']),
+                    'billing_email_value' => isset($_POST['billing_email']) ? $_POST['billing_email'] : '',
+                ];
+            }
+
+            $this->logger->log_hook_end($event_id, $success_data);
         }
     }
 

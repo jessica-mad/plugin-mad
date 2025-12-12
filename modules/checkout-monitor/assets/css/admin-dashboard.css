@@ -459,6 +459,29 @@
     color: #dc3232;
 }
 
+.validation-success-info {
+    margin-top: 10px;
+    padding: 12px;
+    background: #ecf7ed;
+    border-left: 4px solid #46b450;
+    border-radius: 3px;
+    font-size: 13px;
+    line-height: 1.8;
+}
+
+.validation-success-info strong {
+    color: #46b450;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.validation-success-info code {
+    background: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
 .validation-errors-info {
     margin-top: 10px;
     padding: 12px;

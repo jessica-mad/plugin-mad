@@ -347,6 +347,27 @@
                     html += '<div><strong>Tiempo de ejecución:</strong> ' + parseFloat(event.execution_time_ms).toFixed(2) + 'ms</div>';
                 }
 
+                // Mostrar datos del evento (si hay)
+                if (event.event_data && event.hook_name === 'woocommerce_after_checkout_validation') {
+                    try {
+                        var eventData = typeof event.event_data === 'string' ? JSON.parse(event.event_data) : event.event_data;
+
+                        // Si es validación exitosa
+                        if (eventData.result && eventData.result.validation_passed === true) {
+                            html += '<div class="validation-success-info">';
+                            html += '<strong>✅ Validación PASÓ correctamente</strong><br>';
+                            if (eventData.result.posted_data_summary) {
+                                html += '💳 Método de pago: <code>' + eventData.result.posted_data_summary.payment_method + '</code><br>';
+                                html += '📊 Total campos: ' + eventData.result.posted_data_summary.total_fields + '<br>';
+                                html += '✉️ Email: ' + (eventData.result.posted_data_summary.billing_email_value || 'No proporcionado');
+                            }
+                            html += '</div>';
+                        }
+                    } catch (e) {
+                        // Ignore
+                    }
+                }
+
                 if (event.has_error == 1 && event.error_message) {
                     html += '<div class="error-message"><strong>Error:</strong> ' + event.error_message + '</div>';
 
