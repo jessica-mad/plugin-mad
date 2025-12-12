@@ -129,6 +129,10 @@ class Dashboard {
                 <option value="1"><?php _e('Solo con errores', 'mad-suite'); ?></option>
                 <option value="0"><?php _e('Sin errores', 'mad-suite'); ?></option>
             </select>
+            <select id="session-order-by">
+                <option value="started_at"><?php _e('Ordenar: Fecha creación', 'mad-suite'); ?></option>
+                <option value="updated_at"><?php _e('Ordenar: Última modificación', 'mad-suite'); ?></option>
+            </select>
             <input type="date" id="session-date-from" placeholder="<?php _e('Desde', 'mad-suite'); ?>">
             <input type="date" id="session-date-to" placeholder="<?php _e('Hasta', 'mad-suite'); ?>">
             <button id="session-apply-filters" class="button"><?php _e('Aplicar Filtros', 'mad-suite'); ?></button>
@@ -173,36 +177,51 @@ class Dashboard {
 
     private function render_logs_table(){
         $log_files = $this->log_analyzer->get_all_log_files();
+
+        // Ordenar por fecha de modificación (más reciente primero) por defecto
+        usort($log_files, function($a, $b) {
+            return $b['modified'] - $a['modified'];
+        });
         ?>
         <div class="logs-table-container">
             <h2><?php _e('Archivos de Log del Servidor', 'mad-suite'); ?></h2>
-            <p class="description"><?php _e('Estos son todos los archivos de log detectados en el servidor que se analizan durante el checkout.', 'mad-suite'); ?></p>
+            <p class="description"><?php _e('Estos son todos los archivos de log detectados en el servidor. Click en el nombre para ver/descargar.', 'mad-suite'); ?></p>
 
-            <table class="wp-list-table widefat fixed striped">
+            <table class="wp-list-table widefat fixed striped sortable-table" id="logs-table">
                 <thead>
                     <tr>
                         <th><?php _e('Fuente', 'mad-suite'); ?></th>
                         <th><?php _e('Archivo', 'mad-suite'); ?></th>
                         <th><?php _e('Ubicación', 'mad-suite'); ?></th>
-                        <th><?php _e('Tamaño', 'mad-suite'); ?></th>
-                        <th><?php _e('Última Modificación', 'mad-suite'); ?></th>
+                        <th class="sortable-column" data-sort="size"><?php _e('Tamaño', 'mad-suite'); ?> <span class="sort-arrow"></span></th>
+                        <th class="sortable-column sorted-desc" data-sort="modified"><?php _e('Última Modificación', 'mad-suite'); ?> <span class="sort-arrow">▼</span></th>
+                        <th><?php _e('Acciones', 'mad-suite'); ?></th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if ( empty($log_files) ): ?>
                         <tr>
-                            <td colspan="5" style="text-align: center;">
+                            <td colspan="6" style="text-align: center;">
                                 <?php _e('No se encontraron archivos de log.', 'mad-suite'); ?>
                             </td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ( $log_files as $log ): ?>
-                            <tr>
+                            <tr data-size="<?php echo $log['size']; ?>" data-modified="<?php echo $log['modified']; ?>">
                                 <td><strong><?php echo esc_html($log['source']); ?></strong></td>
-                                <td><code><?php echo esc_html($log['file']); ?></code></td>
-                                <td><code><?php echo esc_html($log['path']); ?></code></td>
+                                <td>
+                                    <a href="<?php echo $this->get_log_url($log); ?>" class="log-file-link" target="_blank" title="<?php _e('Abrir en nueva pestaña', 'mad-suite'); ?>">
+                                        <code><?php echo esc_html($log['file']); ?></code>
+                                    </a>
+                                </td>
+                                <td><code class="log-path" title="<?php echo esc_attr($log['path']); ?>"><?php echo esc_html($this->truncate_path($log['path'])); ?></code></td>
                                 <td><?php echo size_format($log['size']); ?></td>
                                 <td><?php echo date('Y-m-d H:i:s', $log['modified']); ?></td>
+                                <td>
+                                    <a href="<?php echo $this->get_log_url($log); ?>" class="button button-small" target="_blank">
+                                        <?php _e('Ver', 'mad-suite'); ?>
+                                    </a>
+                                </td>
                             </tr>
                         <?php endforeach; ?>
                     <?php endif; ?>
@@ -212,21 +231,61 @@ class Dashboard {
         <?php
     }
 
+    private function get_log_url($log){
+        // Para logs de WooCommerce, usar la URL directa
+        if ( $log['source'] === 'WooCommerce' && defined('WC_LOG_DIR') ) {
+            $upload_dir = wp_upload_dir();
+            $log_url = str_replace(WC_LOG_DIR, $upload_dir['baseurl'] . '/wc-logs', $log['path']);
+            return $log_url;
+        }
+
+        // Para otros logs, intentar crear URL si está en wp-content
+        if ( strpos($log['path'], WP_CONTENT_DIR) === 0 ) {
+            return str_replace(WP_CONTENT_DIR, content_url(), $log['path']);
+        }
+
+        // Si no es accesible públicamente, devolver # (no se puede acceder)
+        return '#';
+    }
+
+    private function truncate_path($path, $max_length = 60){
+        if ( strlen($path) <= $max_length ) {
+            return $path;
+        }
+
+        $start = substr($path, 0, 30);
+        $end = substr($path, -27);
+        return $start . '...' . $end;
+    }
+
     private function render_settings(){
+        $cleanup_days = get_option('checkout_monitor_cleanup_days', 30);
         ?>
         <div class="settings-container">
             <h2><?php _e('Configuración del Monitor', 'mad-suite'); ?></h2>
 
-            <table class="form-table">
-                <tr>
-                    <th scope="row">
-                        <label for="cleanup_days"><?php _e('Retención de Datos', 'mad-suite'); ?></label>
-                    </th>
-                    <td>
-                        <input type="number" id="cleanup_days" name="cleanup_days" value="30" min="1" max="365">
-                        <p class="description"><?php _e('Días que se mantendrán los logs antes de ser eliminados automáticamente.', 'mad-suite'); ?></p>
-                    </td>
-                </tr>
+            <form id="checkout-monitor-settings-form">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row">
+                            <label for="cleanup_days"><?php _e('Retención de Datos', 'mad-suite'); ?></label>
+                        </th>
+                        <td>
+                            <input type="number" id="cleanup_days" name="cleanup_days" value="<?php echo esc_attr($cleanup_days); ?>" min="1" max="365">
+                            <p class="description"><?php _e('Días que se mantendrán los logs antes de ser eliminados automáticamente.', 'mad-suite'); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"></th>
+                        <td>
+                            <button type="submit" id="save-settings" class="button button-primary">
+                                <?php _e('Guardar Configuración', 'mad-suite'); ?>
+                            </button>
+                            <span class="settings-saved-message" style="display: none; margin-left: 10px; color: green;">
+                                ✓ <?php _e('Configuración guardada', 'mad-suite'); ?>
+                            </span>
+                        </td>
+                    </tr>
                 <tr>
                     <th scope="row">
                         <?php _e('Limpieza Manual', 'mad-suite'); ?>
@@ -261,6 +320,7 @@ class Dashboard {
                     </td>
                 </tr>
             </table>
+            </form>
         </div>
         <?php
     }

@@ -177,9 +177,19 @@ class Database {
             'date_from' => null,
             'date_to' => null,
             'search' => null,
+            'order_by' => 'started_at', // started_at o updated_at
+            'order' => 'DESC',
         ];
 
         $args = wp_parse_args($args, $defaults);
+
+        // Sanitizar order_by para prevenir SQL injection
+        $allowed_order_by = ['started_at', 'updated_at', 'created_at'];
+        if ( !in_array($args['order_by'], $allowed_order_by) ) {
+            $args['order_by'] = 'started_at';
+        }
+
+        $args['order'] = strtoupper($args['order']) === 'ASC' ? 'ASC' : 'DESC';
 
         $where = ['1=1'];
         $prepare_args = [];
@@ -228,15 +238,17 @@ class Database {
         $offset = ($args['page'] - 1) * $args['per_page'];
         $limit = $args['per_page'];
 
-        // Query con paginación
+        // Query con paginación y ordenación dinámica
+        $order_by_sql = "{$args['order_by']} {$args['order']}";
+
         if ( !empty($prepare_args) ) {
             $sessions = $wpdb->get_results($wpdb->prepare(
-                "SELECT * FROM {$this->sessions_table} WHERE $where_sql ORDER BY started_at DESC LIMIT %d OFFSET %d",
+                "SELECT * FROM {$this->sessions_table} WHERE $where_sql ORDER BY $order_by_sql LIMIT %d OFFSET %d",
                 array_merge($prepare_args, [$limit, $offset])
             ));
         } else {
             $sessions = $wpdb->get_results($wpdb->prepare(
-                "SELECT * FROM {$this->sessions_table} WHERE $where_sql ORDER BY started_at DESC LIMIT %d OFFSET %d",
+                "SELECT * FROM {$this->sessions_table} WHERE $where_sql ORDER BY $order_by_sql LIMIT %d OFFSET %d",
                 $limit,
                 $offset
             ));
