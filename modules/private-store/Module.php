@@ -650,12 +650,17 @@ class Module {
      * Asegura que el usuario tenga cupones antes del checkout
      */
     public function on_before_checkout() {
-        if (!is_user_logged_in()) {
-            return;
-        }
+        try {
+            if (!is_user_logged_in()) {
+                return;
+            }
 
-        $user_id = get_current_user_id();
-        $this->ensure_user_has_coupons($user_id);
+            $user_id = get_current_user_id();
+            $this->ensure_user_has_coupons($user_id);
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Private Store - Error on_before_checkout: ' . $e->getMessage());
+        }
     }
     
     /**
@@ -663,31 +668,36 @@ class Module {
      * Asegura que el usuario tenga cupones antes de aplicar
      */
     public function auto_apply_user_coupon() {
-        if (!is_user_logged_in() || !WC()->cart) {
-            return;
+        try {
+            if (!is_user_logged_in() || !WC()->cart) {
+                return;
+            }
+
+            $user_id = get_current_user_id();
+
+            // Asegurar que el usuario tenga cupones (con cache)
+            $this->ensure_user_has_coupons($user_id);
+
+            $coupon_code = $this->get_user_active_coupon($user_id);
+
+            if (!$coupon_code) {
+                return;
+            }
+
+            // Verificar si ya está aplicado
+            $applied_coupons = WC()->cart->get_applied_coupons();
+
+            if (in_array($coupon_code, $applied_coupons)) {
+                return;
+            }
+
+            // Aplicar cupón
+            WC()->cart->apply_coupon($coupon_code);
+            $this->log("Cupón {$coupon_code} aplicado automáticamente");
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el carrito/checkout
+            error_log('Private Store - Error auto_apply_user_coupon: ' . $e->getMessage());
         }
-
-        $user_id = get_current_user_id();
-
-        // Asegurar que el usuario tenga cupones (con cache)
-        $this->ensure_user_has_coupons($user_id);
-
-        $coupon_code = $this->get_user_active_coupon($user_id);
-
-        if (!$coupon_code) {
-            return;
-        }
-        
-        // Verificar si ya está aplicado
-        $applied_coupons = WC()->cart->get_applied_coupons();
-        
-        if (in_array($coupon_code, $applied_coupons)) {
-            return;
-        }
-        
-        // Aplicar cupón
-        WC()->cart->apply_coupon($coupon_code);
-        $this->log("Cupón {$coupon_code} aplicado automáticamente");
     }
     
     /**
@@ -701,53 +711,59 @@ class Module {
      * Maneja cupón manual vs automático
      */
     public function handle_manual_coupon($valid, $coupon) {
-        // Permitir que administradores en backend usen cupones sin restricciones
-        if (is_admin() && current_user_can('manage_woocommerce')) {
-            return $valid;
-        }
+        try {
+            // Permitir que administradores en backend usen cupones sin restricciones
+            if (is_admin() && current_user_can('manage_woocommerce')) {
+                return $valid;
+            }
 
-        if (!is_user_logged_in() || !WC()->cart) {
-            return $valid;
-        }
-        
-        $manual_code = $coupon->get_code();
-        $user_id = get_current_user_id();
-        $auto_code = $this->get_user_active_coupon($user_id);
-        
-        // Si no hay cupón automático, permitir cualquier cupón manual
-        if (!$auto_code) {
-            return $valid;
-        }
-        
-        // Si el cupón manual ES el automático, permitir
-        if ($manual_code === $auto_code) {
-            return $valid;
-        }
-        
-        // Comparar descuentos
-        $manual_coupon = new \WC_Coupon($manual_code);
-        $auto_coupon = new \WC_Coupon($auto_code);
-        
-        $manual_amount = floatval($manual_coupon->get_amount());
-        $auto_amount = floatval($auto_coupon->get_amount());
-        
-        // Si manual es mejor, remover automático y permitir manual
-        if ($manual_amount > $auto_amount) {
-            WC()->cart->remove_coupon($auto_code);
+            if (!is_user_logged_in() || !WC()->cart) {
+                return $valid;
+            }
+
+            $manual_code = $coupon->get_code();
+            $user_id = get_current_user_id();
+            $auto_code = $this->get_user_active_coupon($user_id);
+
+            // Si no hay cupón automático, permitir cualquier cupón manual
+            if (!$auto_code) {
+                return $valid;
+            }
+
+            // Si el cupón manual ES el automático, permitir
+            if ($manual_code === $auto_code) {
+                return $valid;
+            }
+
+            // Comparar descuentos
+            $manual_coupon = new \WC_Coupon($manual_code);
+            $auto_coupon = new \WC_Coupon($auto_code);
+
+            $manual_amount = floatval($manual_coupon->get_amount());
+            $auto_amount = floatval($auto_coupon->get_amount());
+
+            // Si manual es mejor, remover automático y permitir manual
+            if ($manual_amount > $auto_amount) {
+                WC()->cart->remove_coupon($auto_code);
+                wc_add_notice(
+                    sprintf('Cupón %s aplicado (%s%% de descuento)', $manual_code, $manual_amount),
+                    'success'
+                );
+                return $valid;
+            }
+
+            // Si automático es mejor o igual, no permitir manual
             wc_add_notice(
-                sprintf('Cupón %s aplicado (%s%% de descuento)', $manual_code, $manual_amount),
-                'success'
+                sprintf('Tu cupón actual (%s) ofrece un mejor descuento (%s%%)', $auto_code, $auto_amount),
+                'notice'
             );
+
+            return false;
+        } catch ( \Exception $e ) {
+            // Silenciar errores y permitir el cupón por defecto
+            error_log('Private Store - Error handle_manual_coupon: ' . $e->getMessage());
             return $valid;
         }
-        
-        // Si automático es mejor o igual, no permitir manual
-        wc_add_notice(
-            sprintf('Tu cupón actual (%s) ofrece un mejor descuento (%s%%)', $auto_code, $auto_amount),
-            'notice'
-        );
-        
-        return false;
     }
 
     /**

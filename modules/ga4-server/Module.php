@@ -30,29 +30,34 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     public function save_gclid_to_order($order_id){
-        $gclid = '';
-        
-        // Intentar desde parámetro GET (cuando el usuario llega con ?gclid=xxx)
-        if (isset($_GET['gclid'])) {
-            $gclid = sanitize_text_field($_GET['gclid']);
-        }
-        // Intentar desde cookie _gcl_aw (Google Ads la crea automáticamente)
-        elseif (isset($_COOKIE['_gcl_aw'])) {
-            $cookie_value = sanitize_text_field($_COOKIE['_gcl_aw']);
-            // Formato: GCL.1234567890.gclid_aqui
-            if (preg_match('/GCL\.\d+\.(.+)/', $cookie_value, $matches)) {
-                $gclid = $matches[1];
+        try {
+            $gclid = '';
+
+            // Intentar desde parámetro GET (cuando el usuario llega con ?gclid=xxx)
+            if (isset($_GET['gclid'])) {
+                $gclid = sanitize_text_field($_GET['gclid']);
             }
-        }
-        
-        if ($gclid) {
-            $order = wc_get_order($order_id);
-            if ($order) {
-                $order->update_meta_data('_gclid', $gclid);
-                $order->save();
-                
-                $this->logger->info(sprintf('GCLID guardado en pedido #%s: %s', $order_id, $gclid), ['source' => 'ga4-mad-suite']);
+            // Intentar desde cookie _gcl_aw (Google Ads la crea automáticamente)
+            elseif (isset($_COOKIE['_gcl_aw'])) {
+                $cookie_value = sanitize_text_field($_COOKIE['_gcl_aw']);
+                // Formato: GCL.1234567890.gclid_aqui
+                if (preg_match('/GCL\.\d+\.(.+)/', $cookie_value, $matches)) {
+                    $gclid = $matches[1];
+                }
             }
+
+            if ($gclid) {
+                $order = wc_get_order($order_id);
+                if ($order) {
+                    $order->update_meta_data('_gclid', $gclid);
+                    $order->save();
+
+                    $this->logger->info(sprintf('GCLID guardado en pedido #%s: %s', $order_id, $gclid), ['source' => 'ga4-mad-suite']);
+                }
+            }
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('GA4 Server - Error save_gclid_to_order: ' . $e->getMessage());
         }
     }
 
