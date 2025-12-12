@@ -347,13 +347,45 @@
                     html += '<div><strong>Tiempo de ejecución:</strong> ' + parseFloat(event.execution_time_ms).toFixed(2) + 'ms</div>';
                 }
 
-                // Mostrar datos del evento (si hay)
-                if (event.event_data && event.hook_name === 'woocommerce_after_checkout_validation') {
+                // Mostrar datos del evento (event_data) para TODOS los hooks
+                if (event.event_data) {
                     try {
                         var eventData = typeof event.event_data === 'string' ? JSON.parse(event.event_data) : event.event_data;
 
-                        // Si es validación exitosa
-                        if (eventData.result && eventData.result.validation_passed === true) {
+                        // Para woocommerce_add_notice - Mostrar el mensaje del notice
+                        if (event.hook_name === 'woocommerce_add_notice' && eventData.result) {
+                            var noticeType = eventData.result.notice_type || 'notice';
+                            var noticeClass = noticeType === 'error' ? 'error-message' : 'validation-success-info';
+                            var icon = noticeType === 'error' ? '❌' : 'ℹ️';
+
+                            html += '<div class="' + noticeClass + '">';
+                            html += '<strong>' + icon + ' Notice (' + noticeType + '):</strong> ' + eventData.result.message;
+                            html += '</div>';
+                        }
+
+                        // Para woocommerce_checkout_posted_data - Mostrar datos enviados
+                        if (event.hook_name === 'woocommerce_checkout_posted_data' && eventData.result) {
+                            html += '<div class="posted-data-summary">';
+                            html += '<strong>📋 Datos del Checkout:</strong><br>';
+                            html += '💳 Método de pago: <code>' + eventData.result.payment_method + '</code><br>';
+                            html += '📜 Términos aceptados: <strong>' + eventData.result.terms_accepted + '</strong><br>';
+                            html += '✉️ Email: ' + eventData.result.billing_email + '<br>';
+                            html += '📊 Total campos: ' + eventData.result.total_fields;
+                            html += '</div>';
+                        }
+
+                        // Para woocommerce_before_checkout_process - Mostrar inicio de proceso
+                        if (event.hook_name === 'woocommerce_before_checkout_process' && eventData.result) {
+                            html += '<div class="checkout-context-info">';
+                            html += '<strong>🚀 Inicio del Proceso:</strong><br>';
+                            html += '💳 Método de pago: <code>' + eventData.result.payment_method + '</code><br>';
+                            html += '📜 Términos: <strong>' + eventData.result.terms + '</strong><br>';
+                            html += '📊 Total campos: ' + eventData.result.total_fields;
+                            html += '</div>';
+                        }
+
+                        // Para woocommerce_after_checkout_validation - Validación exitosa
+                        if (event.hook_name === 'woocommerce_after_checkout_validation' && eventData.result && eventData.result.validation_passed === true) {
                             html += '<div class="validation-success-info">';
                             html += '<strong>✅ Validación PASÓ correctamente</strong><br>';
                             if (eventData.result.posted_data_summary) {
@@ -365,6 +397,7 @@
                         }
                     } catch (e) {
                         // Ignore
+                        console.error('Error parsing event_data:', e);
                     }
                 }
 
