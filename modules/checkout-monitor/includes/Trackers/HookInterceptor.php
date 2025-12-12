@@ -91,15 +91,25 @@ class HookInterceptor {
         add_action('woocommerce_checkout_order_created', [$this, 'log_order_created'], 10, 2);
         add_action('woocommerce_new_order', [$this, 'log_new_order'], 10, 1);
 
-        // Hooks de errores y notices
+        // Hooks de errores y notices - CAPTURAR TODO
         add_action('woocommerce_add_error', [$this, 'log_checkout_error'], 10, 1);
         add_filter('woocommerce_add_notice', [$this, 'log_checkout_notice'], 10, 2);
+
+        // NUEVO: Capturar cuando se agregan notices de forma directa
+        add_action('woocommerce_before_checkout_process', [$this, 'log_checkout_start'], 10, 0);
 
         // Hook de validación (aquí es donde se agregan errores de campos)
         add_action('woocommerce_after_checkout_validation', [$this, 'log_validation_errors'], 10, 2);
 
         // Hook de proceso completado
         add_action('woocommerce_checkout_order_processed', [$this, 'log_order_processed'], 10, 3);
+
+        // NUEVO: Hooks de pago y errores de pago
+        add_action('woocommerce_payment_complete', [$this, 'log_payment_complete'], 10, 1);
+        add_action('woocommerce_payment_complete_order_status', [$this, 'log_payment_status'], 10, 3);
+
+        // NUEVO: Capturar errores que se envían al cliente
+        add_filter('woocommerce_checkout_posted_data', [$this, 'log_posted_data'], 10, 1);
     }
 
     private function monitor_hook($hook_name, $priority = -9999){
@@ -388,13 +398,75 @@ class HookInterceptor {
     }
 
     public function log_checkout_notice($message, $notice_type = 'notice'){
-        // Solo registrar notices de tipo error
+        // Registrar TODOS los notices (error, notice, success)
+        // Esto nos ayuda a capturar errores que se escapan
+        $caller = $this->detect_caller_from_backtrace();
+
+        $notice_data = [
+            'message' => $message,
+            'type' => 'wc_notice_' . $notice_type,
+            'notice_type' => $notice_type,
+            'source' => 'woocommerce_add_notice',
+            'caller_plugin' => $caller['plugin'],
+            'caller_file' => $caller['file'],
+            'caller_line' => $caller['line'],
+        ];
+
+        // Si es error, registrar como error
         if ( $notice_type === 'error' ) {
-            $this->log_checkout_error($message);
+            $this->logger->log_error($notice_data);
+        } else {
+            // Si es notice o success, registrar como evento normal
+            $event_id = $this->logger->log_hook_start('woocommerce_add_notice', $caller, 10);
+            $this->logger->log_hook_end($event_id, $notice_data);
         }
 
         // Retornar el mensaje sin modificar (es un filter)
         return $message;
+    }
+
+    public function log_checkout_start(){
+        $caller = $this->detect_caller_from_backtrace();
+
+        $checkout_data = [
+            'payment_method' => isset($_POST['payment_method']) ? $_POST['payment_method'] : 'unknown',
+            'terms' => isset($_POST['terms']) ? 'accepted' : 'NOT_ACCEPTED',
+            'total_fields' => isset($_POST) ? count($_POST) : 0,
+        ];
+
+        $event_id = $this->logger->log_hook_start('woocommerce_before_checkout_process', $caller, 10);
+        $this->logger->log_hook_end($event_id, $checkout_data);
+    }
+
+    public function log_payment_complete($order_id){
+        $caller = $this->detect_caller_from_backtrace();
+        $event_id = $this->logger->log_hook_start('woocommerce_payment_complete', $caller, 10);
+        $this->logger->update_order_info($order_id);
+        $this->logger->log_hook_end($event_id);
+    }
+
+    public function log_payment_status($status, $order_id, $order){
+        $caller = $this->detect_caller_from_backtrace();
+        $event_id = $this->logger->log_hook_start('woocommerce_payment_complete_order_status', $caller, 10);
+        $this->logger->log_hook_end($event_id, ['status' => $status, 'order_id' => $order_id]);
+    }
+
+    public function log_posted_data($data){
+        // Solo logging, no modificar datos
+        $caller = $this->detect_caller_from_backtrace();
+
+        $summary = [
+            'payment_method' => isset($data['payment_method']) ? $data['payment_method'] : 'unknown',
+            'terms_accepted' => isset($data['terms']) && $data['terms'] == '1' ? 'YES' : 'NO',
+            'billing_email' => isset($data['billing_email']) ? $data['billing_email'] : 'not provided',
+            'total_fields' => count($data),
+        ];
+
+        $event_id = $this->logger->log_hook_start('woocommerce_checkout_posted_data', $caller, 10);
+        $this->logger->log_hook_end($event_id, $summary);
+
+        // Retornar data sin modificar
+        return $data;
     }
 
     public function log_validation_errors($data, $errors){
