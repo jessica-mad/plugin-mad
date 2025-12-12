@@ -15,23 +15,28 @@ class ExecutionLogger {
     }
 
     private function init_session(){
-        // Obtener o crear session_id
-        $this->current_session_id = $this->get_or_create_session_id();
+        try {
+            // Obtener o crear session_id
+            $this->current_session_id = $this->get_or_create_session_id();
 
-        // Verificar si ya existe la sesión
-        $existing_session = $this->database->get_session_by_id($this->current_session_id);
+            // Verificar si ya existe la sesión
+            $existing_session = $this->database->get_session_by_id($this->current_session_id);
 
-        if ( !$existing_session ) {
-            // Crear nueva sesión
-            $browser_data = $this->get_browser_data();
+            if ( !$existing_session ) {
+                // Crear nueva sesión
+                $browser_data = $this->get_browser_data();
 
-            $this->database->create_session([
-                'session_id' => $this->current_session_id,
-                'status' => 'initiated',
-                'browser_data' => json_encode($browser_data),
-                'ip_address' => $this->get_client_ip(),
-                'user_id' => get_current_user_id(),
-            ]);
+                $this->database->create_session([
+                    'session_id' => $this->current_session_id,
+                    'status' => 'initiated',
+                    'browser_data' => json_encode($browser_data),
+                    'ip_address' => $this->get_client_ip(),
+                    'user_id' => get_current_user_id(),
+                ]);
+            }
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Checkout Monitor - Error init_session: ' . $e->getMessage());
         }
     }
 
@@ -39,27 +44,37 @@ class ExecutionLogger {
         // 1. Intentar obtener desde REQUEST (enviado por JavaScript)
         if ( isset($_REQUEST['session_id']) && !empty($_REQUEST['session_id']) ) {
             $session_id = sanitize_text_field($_REQUEST['session_id']);
-            // Guardar en WooCommerce session para persistencia
-            if ( function_exists('WC') && WC()->session ) {
-                WC()->session->set('checkout_monitor_session_id', $session_id);
+            // Guardar en WooCommerce session para persistencia (con protección)
+            try {
+                if ( function_exists('WC') && WC()->session ) {
+                    WC()->session->set('checkout_monitor_session_id', $session_id);
+                }
+            } catch ( \Exception $e ) {
+                // Silenciar errores de sesión
+                error_log('Checkout Monitor - Error setting WC session: ' . $e->getMessage());
             }
             return $session_id;
         }
 
         // 2. Intentar obtener de WooCommerce session (persistente entre requests)
-        if ( function_exists('WC') && WC()->session ) {
-            $stored_session = WC()->session->get('checkout_monitor_session_id');
-            if ( $stored_session ) {
-                return $stored_session;
-            }
+        try {
+            if ( function_exists('WC') && WC()->session ) {
+                $stored_session = WC()->session->get('checkout_monitor_session_id');
+                if ( $stored_session ) {
+                    return $stored_session;
+                }
 
-            // Si no hay stored, usar el customer_id de WC
-            $wc_session = WC()->session->get_customer_id();
-            if ( $wc_session ) {
-                $session_id = 'wc_' . $wc_session;
-                WC()->session->set('checkout_monitor_session_id', $session_id);
-                return $session_id;
+                // Si no hay stored, usar el customer_id de WC
+                $wc_session = WC()->session->get_customer_id();
+                if ( $wc_session ) {
+                    $session_id = 'wc_' . $wc_session;
+                    WC()->session->set('checkout_monitor_session_id', $session_id);
+                    return $session_id;
+                }
             }
+        } catch ( \Exception $e ) {
+            // Silenciar errores de sesión
+            error_log('Checkout Monitor - Error reading WC session: ' . $e->getMessage());
         }
 
         // 3. Si no hay sesión de WC, usar cookie
@@ -69,11 +84,20 @@ class ExecutionLogger {
 
         // 4. Crear nuevo ID
         $session_id = uniqid('cm_', true);
-        setcookie('checkout_monitor_session', $session_id, time() + 3600, '/', '', false, true);
 
-        // Guardar en WooCommerce session si está disponible
-        if ( function_exists('WC') && WC()->session ) {
-            WC()->session->set('checkout_monitor_session_id', $session_id);
+        // Solo setear cookie si los headers NO han sido enviados
+        if ( !headers_sent() ) {
+            @setcookie('checkout_monitor_session', $session_id, time() + 3600, '/', '', false, true);
+        }
+
+        // Guardar en WooCommerce session si está disponible (con protección)
+        try {
+            if ( function_exists('WC') && WC()->session ) {
+                WC()->session->set('checkout_monitor_session_id', $session_id);
+            }
+        } catch ( \Exception $e ) {
+            // Silenciar errores de sesión
+            error_log('Checkout Monitor - Error setting new WC session: ' . $e->getMessage());
         }
 
         return $session_id;
@@ -106,55 +130,69 @@ class ExecutionLogger {
 
     /* ==== Logging de Eventos ==== */
     public function log_hook_start($hook_name, $callback, $priority = 10){
-        $callback_info = $this->parse_callback($callback);
+        try {
+            $callback_info = $this->parse_callback($callback);
 
-        $event_data = [
-            'session_id' => $this->current_session_id,
-            'event_type' => 'hook',
-            'hook_name' => $hook_name,
-            'priority' => $priority,
-            'callback_name' => $callback_info['name'],
-            'plugin_name' => $callback_info['plugin'],
-            'file_path' => $callback_info['file'],
-            'line_number' => $callback_info['line'],
-            'started_at' => $this->get_microtime_mysql(),
-            'memory_usage' => memory_get_usage(true),
-        ];
+            $event_data = [
+                'session_id' => $this->current_session_id,
+                'event_type' => 'hook',
+                'hook_name' => $hook_name,
+                'priority' => $priority,
+                'callback_name' => $callback_info['name'],
+                'plugin_name' => $callback_info['plugin'],
+                'file_path' => $callback_info['file'],
+                'line_number' => $callback_info['line'],
+                'started_at' => $this->get_microtime_mysql(),
+                'memory_usage' => memory_get_usage(true),
+            ];
 
-        $event_id = $this->database->create_event($event_data);
+            $event_id = $this->database->create_event($event_data);
 
-        // Incrementar contador de hooks
-        $this->database->increment_hook_count($this->current_session_id);
+            // Incrementar contador de hooks
+            $this->database->increment_hook_count($this->current_session_id);
 
-        return $event_id;
+            return $event_id;
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Checkout Monitor - Error log_hook_start: ' . $e->getMessage());
+            return null;
+        }
     }
 
     public function log_hook_end($event_id, $result = null, $error = null){
-        $started = microtime(true);
-        $memory = memory_get_usage(true);
+        try {
+            // Si event_id es null (error en log_hook_start), no hacer nada
+            if ( !$event_id ) return;
 
-        $update_data = [
-            'completed_at' => $this->get_microtime_mysql(),
-            'memory_usage' => $memory,
-        ];
+            $started = microtime(true);
+            $memory = memory_get_usage(true);
 
-        if ( $error ) {
-            $update_data['has_error'] = 1;
-            $update_data['error_message'] = $error['message'];
-            $update_data['error_trace'] = json_encode($error['trace']);
+            $update_data = [
+                'completed_at' => $this->get_microtime_mysql(),
+                'memory_usage' => $memory,
+            ];
 
-            // Incrementar contador de errores
-            $this->database->increment_error_count($this->current_session_id);
+            if ( $error ) {
+                $update_data['has_error'] = 1;
+                $update_data['error_message'] = $error['message'];
+                $update_data['error_trace'] = json_encode($error['trace']);
+
+                // Incrementar contador de errores
+                $this->database->increment_error_count($this->current_session_id);
+            }
+
+            if ( $result !== null ) {
+                $update_data['event_data'] = json_encode(['result' => $this->sanitize_result($result)]);
+            }
+
+            $this->database->update_event($event_id, $update_data);
+
+            // Calcular execution time
+            $this->calculate_execution_time($event_id);
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Checkout Monitor - Error log_hook_end: ' . $e->getMessage());
         }
-
-        if ( $result !== null ) {
-            $update_data['event_data'] = json_encode(['result' => $this->sanitize_result($result)]);
-        }
-
-        $this->database->update_event($event_id, $update_data);
-
-        // Calcular execution time
-        $this->calculate_execution_time($event_id);
     }
 
     private function calculate_execution_time($event_id){
@@ -170,29 +208,34 @@ class ExecutionLogger {
     }
 
     public function log_error($error_data){
-        $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10);
+        try {
+            $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 10);
 
-        $event_data = [
-            'session_id' => $this->current_session_id,
-            'event_type' => 'error',
-            'has_error' => 1,
-            'error_message' => isset($error_data['message']) ? $error_data['message'] : 'Unknown error',
-            'error_trace' => json_encode($backtrace),
-            'started_at' => $this->get_microtime_mysql(),
-            'completed_at' => $this->get_microtime_mysql(),
-            'event_data' => json_encode($error_data),
-        ];
+            $event_data = [
+                'session_id' => $this->current_session_id,
+                'event_type' => 'error',
+                'has_error' => 1,
+                'error_message' => isset($error_data['message']) ? $error_data['message'] : 'Unknown error',
+                'error_trace' => json_encode($backtrace),
+                'started_at' => $this->get_microtime_mysql(),
+                'completed_at' => $this->get_microtime_mysql(),
+                'event_data' => json_encode($error_data),
+            ];
 
-        if ( isset($error_data['file']) ) {
-            $event_data['file_path'] = $error_data['file'];
+            if ( isset($error_data['file']) ) {
+                $event_data['file_path'] = $error_data['file'];
+            }
+
+            if ( isset($error_data['line']) ) {
+                $event_data['line_number'] = $error_data['line'];
+            }
+
+            $this->database->create_event($event_data);
+            $this->database->increment_error_count($this->current_session_id);
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Checkout Monitor - Error log_error: ' . $e->getMessage());
         }
-
-        if ( isset($error_data['line']) ) {
-            $event_data['line_number'] = $error_data['line'];
-        }
-
-        $this->database->create_event($event_data);
-        $this->database->increment_error_count($this->current_session_id);
     }
 
     /* ==== Helpers ==== */
@@ -312,28 +355,43 @@ class ExecutionLogger {
 
     /* ==== Session Management ==== */
     public function update_order_info($order_id, $order_uid = null){
-        if ( !function_exists('wc_get_order') ) return;
+        try {
+            if ( !function_exists('wc_get_order') ) return;
 
-        $order = wc_get_order($order_id);
+            $order = wc_get_order($order_id);
 
-        if ( !$order ) return;
+            if ( !$order ) return;
 
-        $this->database->update_session($this->current_session_id, [
-            'order_id' => $order_id,
-            'order_uid' => $order_uid ?: $order->get_order_key(),
-            'payment_method' => $order->get_payment_method(),
-            'total_amount' => $order->get_total(),
-        ]);
+            $this->database->update_session($this->current_session_id, [
+                'order_id' => $order_id,
+                'order_uid' => $order_uid ?: $order->get_order_key(),
+                'payment_method' => $order->get_payment_method(),
+                'total_amount' => $order->get_total(),
+            ]);
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Checkout Monitor - Error update_order_info: ' . $e->getMessage());
+        }
     }
 
     public function complete_session($status = 'completed'){
-        $this->database->complete_session($this->current_session_id, $status);
+        try {
+            $this->database->complete_session($this->current_session_id, $status);
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Checkout Monitor - Error complete_session: ' . $e->getMessage());
+        }
     }
 
     public function fail_session(){
-        $this->database->update_session($this->current_session_id, [
-            'status' => 'failed',
-            'completed_at' => current_time('mysql', true),
-        ]);
+        try {
+            $this->database->update_session($this->current_session_id, [
+                'status' => 'failed',
+                'completed_at' => current_time('mysql', true),
+            ]);
+        } catch ( \Exception $e ) {
+            // Silenciar errores para no romper el checkout
+            error_log('Checkout Monitor - Error fail_session: ' . $e->getMessage());
+        }
     }
 }

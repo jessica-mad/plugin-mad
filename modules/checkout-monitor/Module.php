@@ -275,7 +275,12 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         }
 
         $session_id = uniqid('cm_', true);
-        setcookie('checkout_monitor_session', $session_id, time() + 3600, '/');
+
+        // Solo setear cookie si los headers NO han sido enviados
+        if ( !headers_sent() ) {
+            @setcookie('checkout_monitor_session', $session_id, time() + 3600, '/', '', false, true);
+        }
+
         return $session_id;
     }
 
