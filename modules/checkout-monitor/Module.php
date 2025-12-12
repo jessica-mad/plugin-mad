@@ -184,6 +184,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         // Inicializar tracking en checkout (tarde, cuando todo esté listo)
         add_action('template_redirect', [$this, 'maybe_init_trackers'], 20);
 
+        // CRÍTICO: También en AJAX (el checkout se procesa vía AJAX)
+        add_action('woocommerce_before_checkout_process', [$this, 'init_trackers'], 1);
+
         // Cron para limpieza
         add_action('checkout_monitor_cleanup', [$this, 'cleanup_old_logs']);
         if (!wp_next_scheduled('checkout_monitor_cleanup')) {
@@ -207,7 +210,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         );
     }
 
-    private function init_trackers(){
+    public function init_trackers(){
         // Evitar inicializar dos veces
         if ( $this->execution_logger ) return;
 
