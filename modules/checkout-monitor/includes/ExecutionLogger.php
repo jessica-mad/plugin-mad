@@ -36,22 +36,46 @@ class ExecutionLogger {
     }
 
     private function get_or_create_session_id(){
-        // Primero intentar obtener de WooCommerce
+        // 1. Intentar obtener desde REQUEST (enviado por JavaScript)
+        if ( isset($_REQUEST['session_id']) && !empty($_REQUEST['session_id']) ) {
+            $session_id = sanitize_text_field($_REQUEST['session_id']);
+            // Guardar en WooCommerce session para persistencia
+            if ( function_exists('WC') && WC()->session ) {
+                WC()->session->set('checkout_monitor_session_id', $session_id);
+            }
+            return $session_id;
+        }
+
+        // 2. Intentar obtener de WooCommerce session (persistente entre requests)
         if ( function_exists('WC') && WC()->session ) {
+            $stored_session = WC()->session->get('checkout_monitor_session_id');
+            if ( $stored_session ) {
+                return $stored_session;
+            }
+
+            // Si no hay stored, usar el customer_id de WC
             $wc_session = WC()->session->get_customer_id();
             if ( $wc_session ) {
-                return 'wc_' . $wc_session;
+                $session_id = 'wc_' . $wc_session;
+                WC()->session->set('checkout_monitor_session_id', $session_id);
+                return $session_id;
             }
         }
 
-        // Si no hay sesión de WC, usar cookie
+        // 3. Si no hay sesión de WC, usar cookie
         if ( isset($_COOKIE['checkout_monitor_session']) ) {
             return sanitize_text_field($_COOKIE['checkout_monitor_session']);
         }
 
-        // Crear nuevo ID
+        // 4. Crear nuevo ID
         $session_id = uniqid('cm_', true);
-        setcookie('checkout_monitor_session', $session_id, time() + 3600, '/');
+        setcookie('checkout_monitor_session', $session_id, time() + 3600, '/', '', false, true);
+
+        // Guardar en WooCommerce session si está disponible
+        if ( function_exists('WC') && WC()->session ) {
+            WC()->session->set('checkout_monitor_session_id', $session_id);
+        }
+
         return $session_id;
     }
 

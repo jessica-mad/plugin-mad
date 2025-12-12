@@ -177,6 +177,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_ajax_checkout_monitor_get_session_detail', [$this, 'ajax_get_session_detail']);
         add_action('wp_ajax_checkout_monitor_delete_old_logs', [$this, 'ajax_delete_old_logs']);
         add_action('wp_ajax_checkout_monitor_save_settings', [$this, 'ajax_save_settings']);
+        add_action('wp_ajax_checkout_monitor_view_log', [$this, 'ajax_view_log']);
 
         // Enqueue scripts
         add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_scripts']);
@@ -363,6 +364,73 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         wp_send_json_success([
             'message' => __('Configuración guardada correctamente', 'mad-suite'),
             'cleanup_days' => $cleanup_days
+        ]);
+    }
+
+    public function ajax_view_log(){
+        check_ajax_referer('checkout_monitor_admin', 'nonce');
+
+        if ( !current_user_can(MAD_Suite_Core::CAPABILITY) ) {
+            wp_send_json_error(['message' => 'Permisos insuficientes']);
+        }
+
+        $log_path = isset($_POST['log_path']) ? sanitize_text_field($_POST['log_path']) : '';
+
+        if ( empty($log_path) ) {
+            wp_send_json_error(['message' => 'Ruta de log no especificada']);
+        }
+
+        // Verificar que el archivo existe y es legible
+        if ( !file_exists($log_path) || !is_readable($log_path) ) {
+            wp_send_json_error(['message' => 'No se puede leer el archivo de log']);
+        }
+
+        // Verificar que el archivo está en una ubicación permitida
+        $allowed_paths = [
+            WP_CONTENT_DIR,
+            ABSPATH . 'wp-admin',
+        ];
+
+        if ( defined('WC_LOG_DIR') ) {
+            $allowed_paths[] = WC_LOG_DIR;
+        }
+
+        $is_allowed = false;
+        foreach ( $allowed_paths as $allowed_path ) {
+            if ( strpos(realpath($log_path), realpath($allowed_path)) === 0 ) {
+                $is_allowed = true;
+                break;
+            }
+        }
+
+        if ( !$is_allowed ) {
+            wp_send_json_error(['message' => 'Acceso denegado a este archivo']);
+        }
+
+        // Leer el archivo (últimas 1000 líneas para evitar sobrecarga)
+        $lines = [];
+        $file = new \SplFileObject($log_path);
+        $file->seek(PHP_INT_MAX);
+        $total_lines = $file->key() + 1;
+
+        // Leer últimas 1000 líneas
+        $start_line = max(0, $total_lines - 1000);
+        $file->seek($start_line);
+
+        while ( !$file->eof() ) {
+            $line = $file->fgets();
+            if ( $line !== false ) {
+                $lines[] = $line;
+            }
+        }
+
+        wp_send_json_success([
+            'file_path' => $log_path,
+            'file_name' => basename($log_path),
+            'file_size' => filesize($log_path),
+            'total_lines' => $total_lines,
+            'showing_lines' => count($lines),
+            'content' => implode('', $lines),
         ]);
     }
 

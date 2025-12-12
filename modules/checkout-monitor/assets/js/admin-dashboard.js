@@ -14,6 +14,7 @@
             this.setupCleanup();
             this.setupSettings();
             this.setupLogsSorting();
+            this.setupLogViewer();
         },
 
         setupTabs: function() {
@@ -403,6 +404,7 @@
         setupSettings: function() {
             $('#checkout-monitor-settings-form').on('submit', function(e) {
                 e.preventDefault();
+                e.stopPropagation();
 
                 var cleanup_days = parseInt($('#cleanup_days').val()) || 30;
 
@@ -420,8 +422,13 @@
                         } else {
                             alert('Error: ' + response.data.message);
                         }
+                    },
+                    error: function(xhr, status, error) {
+                        alert('Error al guardar: ' + error);
                     }
                 });
+
+                return false;
             });
         },
 
@@ -464,6 +471,74 @@
 
                 $tbody.append($rows);
             });
+        },
+
+        setupLogViewer: function() {
+            var self = this;
+            var $modal = $('#log-viewer-modal');
+
+            // Click handler for view log buttons
+            $(document).on('click', '.view-log-btn', function(e) {
+                e.preventDefault();
+                var logPath = $(this).data('log-path');
+                self.loadLogFile(logPath);
+            });
+
+            // Close modal handlers
+            $('.close', $modal).on('click', function() {
+                $modal.fadeOut();
+            });
+
+            $(window).on('click', function(e) {
+                if ($(e.target).is($modal)) {
+                    $modal.fadeOut();
+                }
+            });
+        },
+
+        loadLogFile: function(logPath) {
+            var self = this;
+
+            // Show modal with loading state
+            $('#log-viewer-title').text('Cargando log...');
+            $('#log-viewer-size').text('');
+            $('#log-viewer-lines').text('');
+            $('#log-viewer-text').html('<div style="text-align: center; padding: 50px;"><span class="spinner is-active" style="float: none;"></span> Cargando archivo de log...</div>');
+            $('#log-viewer-modal').fadeIn();
+
+            $.ajax({
+                url: checkoutMonitorAdmin.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'checkout_monitor_view_log',
+                    nonce: checkoutMonitorAdmin.nonce,
+                    log_path: logPath
+                },
+                success: function(response) {
+                    if (response.success) {
+                        var data = response.data;
+                        $('#log-viewer-title').text(data.file_name);
+                        $('#log-viewer-size').text('Tamaño: ' + self.formatFileSize(data.file_size));
+                        $('#log-viewer-lines').text('Mostrando últimas ' + data.showing_lines + ' de ' + data.total_lines + ' líneas');
+                        $('#log-viewer-text').text(data.content);
+                    } else {
+                        $('#log-viewer-title').text('Error');
+                        $('#log-viewer-text').html('<div style="color: red; padding: 20px;">Error: ' + response.data.message + '</div>');
+                    }
+                },
+                error: function() {
+                    $('#log-viewer-title').text('Error');
+                    $('#log-viewer-text').html('<div style="color: red; padding: 20px;">Error al cargar el archivo de log</div>');
+                }
+            });
+        },
+
+        formatFileSize: function(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            var k = 1024;
+            var sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            var i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
         },
 
         showError: function(message) {

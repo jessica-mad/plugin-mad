@@ -62,6 +62,25 @@ class Dashboard {
                     <div id="session-detail-content"></div>
                 </div>
             </div>
+
+            <!-- Modal para visualizar logs -->
+            <div id="log-viewer-modal" class="checkout-monitor-modal" style="display: none;">
+                <div class="modal-content modal-large">
+                    <span class="close">&times;</span>
+                    <div id="log-viewer-content">
+                        <div class="log-viewer-header">
+                            <h2 id="log-viewer-title">Visualizador de Logs</h2>
+                            <div class="log-viewer-info">
+                                <span id="log-viewer-size"></span>
+                                <span id="log-viewer-lines"></span>
+                            </div>
+                        </div>
+                        <div class="log-viewer-body">
+                            <pre id="log-viewer-text"></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
         <?php
     }
@@ -210,17 +229,17 @@ class Dashboard {
                             <tr data-size="<?php echo $log['size']; ?>" data-modified="<?php echo $log['modified']; ?>">
                                 <td><strong><?php echo esc_html($log['source']); ?></strong></td>
                                 <td>
-                                    <a href="<?php echo $this->get_log_url($log); ?>" class="log-file-link" target="_blank" title="<?php _e('Abrir en nueva pestaña', 'mad-suite'); ?>">
+                                    <button class="button-link view-log-btn" data-log-path="<?php echo esc_attr($log['path']); ?>" title="<?php _e('Click para visualizar', 'mad-suite'); ?>">
                                         <code><?php echo esc_html($log['file']); ?></code>
-                                    </a>
+                                    </button>
                                 </td>
                                 <td><code class="log-path" title="<?php echo esc_attr($log['path']); ?>"><?php echo esc_html($this->truncate_path($log['path'])); ?></code></td>
                                 <td><?php echo size_format($log['size']); ?></td>
                                 <td><?php echo date('Y-m-d H:i:s', $log['modified']); ?></td>
                                 <td>
-                                    <a href="<?php echo $this->get_log_url($log); ?>" class="button button-small" target="_blank">
+                                    <button class="button button-small view-log-btn" data-log-path="<?php echo esc_attr($log['path']); ?>">
                                         <?php _e('Ver', 'mad-suite'); ?>
-                                    </a>
+                                    </button>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -350,6 +369,10 @@ class Dashboard {
 
         if ( isset($filters['search']) && !empty($filters['search']) ) {
             $args['search'] = $filters['search'];
+        }
+
+        if ( isset($filters['order_by']) && !empty($filters['order_by']) ) {
+            $args['order_by'] = $filters['order_by'];
         }
 
         return $this->database->get_sessions($args);
