@@ -281,6 +281,51 @@
 
                 if (event.has_error == 1 && event.error_message) {
                     html += '<div class="error-message"><strong>Error:</strong> ' + event.error_message + '</div>';
+
+                    // Si hay información adicional del error (campos faltantes)
+                    if (event.event_data) {
+                        try {
+                            var errorData = typeof event.event_data === 'string' ? JSON.parse(event.event_data) : event.event_data;
+
+                            // Mostrar campos faltantes
+                            if (errorData.missing_fields && Object.keys(errorData.missing_fields).length > 0) {
+                                html += '<div class="missing-fields-info">';
+                                html += '<strong>⚠️ Campos vacíos detectados:</strong><ul>';
+                                $.each(errorData.missing_fields, function(field, label) {
+                                    html += '<li><code>' + field + '</code>: ' + label + '</li>';
+                                });
+                                html += '</ul></div>';
+                            }
+
+                            // Mostrar información del checkout
+                            if (errorData.checkout_data) {
+                                html += '<div class="checkout-context-info">';
+                                html += '<strong>Contexto del checkout:</strong><br>';
+                                if (errorData.checkout_data.payment_method) {
+                                    html += '💳 Método de pago: <code>' + errorData.checkout_data.payment_method + '</code><br>';
+                                }
+                                if (errorData.checkout_data.ship_to_different_address) {
+                                    html += '📦 Envío a dirección diferente: ' + errorData.checkout_data.ship_to_different_address + '<br>';
+                                }
+                                if (errorData.filled_fields_count) {
+                                    html += '✓ Campos completados: ' + errorData.filled_fields_count;
+                                }
+                                html += '</div>';
+                            }
+
+                            // Mostrar origen del error (plugin que causó la validación)
+                            if (errorData.caller_plugin && errorData.caller_plugin !== 'unknown') {
+                                html += '<div class="error-source-info">';
+                                html += '<strong>🔍 Validación ejecutada por:</strong> <code>' + errorData.caller_plugin + '</code>';
+                                if (errorData.caller_function) {
+                                    html += ' → <code>' + errorData.caller_function + '</code>';
+                                }
+                                html += '</div>';
+                            }
+                        } catch (e) {
+                            // Silently ignore JSON parse errors
+                        }
+                    }
                 }
 
                 html += '</div>';

@@ -309,11 +309,78 @@ class HookInterceptor {
     }
 
     public function log_checkout_error($error_message){
-        $this->logger->log_error([
+        $caller = $this->detect_caller_from_backtrace();
+
+        // Capturar información adicional sobre los campos del checkout
+        $checkout_data = [];
+        $missing_fields = [];
+        $filled_fields = [];
+
+        // Analizar los datos POST para identificar qué campos están vacíos
+        if ( isset($_POST) && !empty($_POST) ) {
+            // Campos obligatorios comunes de WooCommerce
+            $required_fields = [
+                'billing_first_name' => 'Nombre (facturación)',
+                'billing_last_name' => 'Apellido (facturación)',
+                'billing_email' => 'Email',
+                'billing_phone' => 'Teléfono',
+                'billing_address_1' => 'Dirección',
+                'billing_city' => 'Ciudad',
+                'billing_postcode' => 'Código postal',
+                'billing_country' => 'País',
+                'billing_state' => 'Provincia/Estado',
+                'shipping_first_name' => 'Nombre (envío)',
+                'shipping_last_name' => 'Apellido (envío)',
+                'shipping_address_1' => 'Dirección (envío)',
+                'shipping_city' => 'Ciudad (envío)',
+                'shipping_postcode' => 'Código postal (envío)',
+                'shipping_country' => 'País (envío)',
+                'shipping_state' => 'Provincia/Estado (envío)',
+            ];
+
+            foreach ( $required_fields as $field => $label ) {
+                $value = isset($_POST[$field]) ? trim($_POST[$field]) : '';
+
+                if ( empty($value) ) {
+                    $missing_fields[$field] = $label;
+                } else {
+                    // Solo guardar que está lleno, no el valor (privacidad)
+                    $filled_fields[] = $label;
+                }
+            }
+
+            // Capturar campos personalizados que puedan estar vacíos
+            foreach ( $_POST as $key => $value ) {
+                if ( strpos($key, 'billing_') === 0 || strpos($key, 'shipping_') === 0 ) {
+                    if ( !isset($required_fields[$key]) && empty(trim($value)) ) {
+                        $missing_fields[$key] = $key;
+                    }
+                }
+            }
+
+            // Información general del checkout (sin datos sensibles)
+            $checkout_data = [
+                'payment_method' => isset($_POST['payment_method']) ? $_POST['payment_method'] : 'unknown',
+                'ship_to_different_address' => isset($_POST['ship_to_different_address']) ? 'yes' : 'no',
+                'total_post_fields' => count($_POST),
+            ];
+        }
+
+        // Crear evento de error con información detallada
+        $error_data = [
             'message' => $error_message,
             'type' => 'checkout_error',
             'source' => 'woocommerce_add_error',
-        ]);
+            'caller_plugin' => $caller['plugin'],
+            'caller_file' => $caller['file'],
+            'caller_line' => $caller['line'],
+            'caller_function' => isset($caller['function']) ? $caller['function'] : null,
+            'missing_fields' => $missing_fields,
+            'filled_fields_count' => count($filled_fields),
+            'checkout_data' => $checkout_data,
+        ];
+
+        $this->logger->log_error($error_data);
     }
 
     public function log_order_processed($order_id, $posted_data, $order){
