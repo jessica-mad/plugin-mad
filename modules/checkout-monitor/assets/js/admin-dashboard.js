@@ -355,6 +355,30 @@
                         try {
                             var errorData = typeof event.event_data === 'string' ? JSON.parse(event.event_data) : event.event_data;
 
+                            // Mostrar errores de validación (WP_Error)
+                            if (errorData.validation_errors && errorData.validation_errors.length > 0) {
+                                html += '<div class="validation-errors-info">';
+                                html += '<strong>🔴 Errores de Validación (' + errorData.validation_errors.length + '):</strong><ul>';
+                                $.each(errorData.validation_errors, function(index, error) {
+                                    html += '<li>';
+                                    html += '<span class="error-code">' + error.code + '</span>: ';
+                                    html += '<span class="error-msg">' + error.message + '</span>';
+                                    html += '</li>';
+                                });
+                                html += '</ul></div>';
+
+                                // Mostrar resumen de datos enviados
+                                if (errorData.posted_data_summary) {
+                                    html += '<div class="posted-data-summary">';
+                                    html += '<strong>📋 Datos enviados:</strong><br>';
+                                    html += '💳 Método de pago: <code>' + errorData.posted_data_summary.payment_method + '</code><br>';
+                                    html += '📊 Total campos: ' + errorData.posted_data_summary.total_fields + '<br>';
+                                    html += '✉️ Email presente: ' + (errorData.posted_data_summary.has_billing_email ? '✓ Sí' : '✗ No') + '<br>';
+                                    html += '📞 Teléfono presente: ' + (errorData.posted_data_summary.has_billing_phone ? '✓ Sí' : '✗ No');
+                                    html += '</div>';
+                                }
+                            }
+
                             // Mostrar campos faltantes
                             if (errorData.missing_fields && Object.keys(errorData.missing_fields).length > 0) {
                                 html += '<div class="missing-fields-info">';

@@ -91,8 +91,12 @@ class HookInterceptor {
         add_action('woocommerce_checkout_order_created', [$this, 'log_order_created'], 10, 2);
         add_action('woocommerce_new_order', [$this, 'log_new_order'], 10, 1);
 
-        // Hooks de errores
+        // Hooks de errores y notices
         add_action('woocommerce_add_error', [$this, 'log_checkout_error'], 10, 1);
+        add_filter('woocommerce_add_notice', [$this, 'log_checkout_notice'], 10, 2);
+
+        // Hook de validación (aquí es donde se agregan errores de campos)
+        add_action('woocommerce_after_checkout_validation', [$this, 'log_validation_errors'], 10, 2);
 
         // Hook de proceso completado
         add_action('woocommerce_checkout_order_processed', [$this, 'log_order_processed'], 10, 3);
@@ -381,6 +385,65 @@ class HookInterceptor {
         ];
 
         $this->logger->log_error($error_data);
+    }
+
+    public function log_checkout_notice($message, $notice_type = 'notice'){
+        // Solo registrar notices de tipo error
+        if ( $notice_type === 'error' ) {
+            $this->log_checkout_error($message);
+        }
+
+        // Retornar el mensaje sin modificar (es un filter)
+        return $message;
+    }
+
+    public function log_validation_errors($data, $errors){
+        // $errors es un WP_Error object con todos los errores de validación
+        if ( is_wp_error($errors) && $errors->has_errors() ) {
+            $error_codes = $errors->get_error_codes();
+            $all_errors = [];
+
+            foreach ( $error_codes as $code ) {
+                $messages = $errors->get_error_messages($code);
+                foreach ( $messages as $message ) {
+                    $all_errors[] = [
+                        'code' => $code,
+                        'message' => $message,
+                    ];
+                }
+            }
+
+            // Registrar cada error de validación
+            foreach ( $all_errors as $error ) {
+                $this->log_checkout_error($error['message'] . ' (código: ' . $error['code'] . ')');
+            }
+
+            // También crear un evento específico con TODOS los errores de validación
+            $caller = $this->detect_caller_from_backtrace();
+
+            $validation_summary = [
+                'message' => 'Errores de validación del checkout (' . count($all_errors) . ' errores)',
+                'type' => 'validation_errors',
+                'source' => 'woocommerce_after_checkout_validation',
+                'caller_plugin' => $caller['plugin'],
+                'caller_file' => $caller['file'],
+                'caller_line' => $caller['line'],
+                'validation_errors' => $all_errors,
+                'error_count' => count($all_errors),
+            ];
+
+            // Agregar información de campos si hay datos POST
+            if ( isset($_POST) && !empty($_POST) ) {
+                $validation_summary['posted_data_summary'] = [
+                    'payment_method' => isset($_POST['payment_method']) ? $_POST['payment_method'] : 'unknown',
+                    'total_fields' => count($_POST),
+                    'has_billing_email' => isset($_POST['billing_email']) && !empty($_POST['billing_email']),
+                    'has_billing_phone' => isset($_POST['billing_phone']) && !empty($_POST['billing_phone']),
+                ];
+            }
+
+            $this->logger->log_error($validation_summary);
+        }
     }
 
     public function log_order_processed($order_id, $posted_data, $order){
