@@ -204,10 +204,96 @@ class HookInterceptor {
 
     /* ==== Métodos pasivos de logging (NO interfieren) ==== */
 
+    /**
+     * Detecta desde qué archivo/plugin se está ejecutando el hook actual
+     */
+    private function detect_caller_from_backtrace(){
+        $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15);
+
+        // Buscar el primer archivo que NO sea parte de nuestro plugin o WordPress core
+        foreach ( $backtrace as $trace ) {
+            if ( !isset($trace['file']) ) continue;
+
+            $file = $trace['file'];
+
+            // Ignorar nuestro propio plugin
+            if ( strpos($file, 'checkout-monitor') !== false ) continue;
+
+            // Ignorar WordPress core
+            if ( strpos($file, 'wp-includes') !== false ) continue;
+            if ( strpos($file, 'wp-admin') !== false ) continue;
+
+            // Detectar si es un plugin
+            if ( strpos($file, WP_PLUGIN_DIR) === 0 ) {
+                $relative = str_replace(WP_PLUGIN_DIR . '/', '', $file);
+                $parts = explode('/', $relative);
+                $plugin_slug = $parts[0];
+
+                $callback_info = [
+                    'file' => $file,
+                    'line' => isset($trace['line']) ? $trace['line'] : null,
+                    'plugin' => $plugin_slug,
+                    'function' => isset($trace['function']) ? $trace['function'] : null,
+                    'class' => isset($trace['class']) ? $trace['class'] : null,
+                ];
+
+                // Construir nombre del callback
+                if ( $callback_info['class'] ) {
+                    $callback_info['name'] = $callback_info['class'] . '::' . $callback_info['function'];
+                } elseif ( $callback_info['function'] ) {
+                    $callback_info['name'] = $callback_info['function'];
+                } else {
+                    $callback_info['name'] = $plugin_slug;
+                }
+
+                return $callback_info;
+            }
+
+            // Detectar si es un tema
+            if ( strpos($file, get_template_directory()) === 0 || strpos($file, get_stylesheet_directory()) === 0 ) {
+                return [
+                    'file' => $file,
+                    'line' => isset($trace['line']) ? $trace['line'] : null,
+                    'plugin' => 'theme-' . get_template(),
+                    'function' => isset($trace['function']) ? $trace['function'] : null,
+                    'class' => isset($trace['class']) ? $trace['class'] : null,
+                    'name' => isset($trace['function']) ? $trace['function'] : 'Theme',
+                ];
+            }
+        }
+
+        // Si no encontramos nada específico, buscar WooCommerce
+        foreach ( $backtrace as $trace ) {
+            if ( isset($trace['class']) && strpos($trace['class'], 'WC_') === 0 ) {
+                return [
+                    'file' => isset($trace['file']) ? $trace['file'] : null,
+                    'line' => isset($trace['line']) ? $trace['line'] : null,
+                    'plugin' => 'woocommerce',
+                    'function' => isset($trace['function']) ? $trace['function'] : null,
+                    'class' => $trace['class'],
+                    'name' => $trace['class'] . '::' . (isset($trace['function']) ? $trace['function'] : 'unknown'),
+                ];
+            }
+        }
+
+        // Fallback
+        return [
+            'file' => null,
+            'line' => null,
+            'plugin' => 'unknown',
+            'function' => null,
+            'class' => null,
+            'name' => 'Unknown',
+        ];
+    }
+
     public function log_order_created($order, $data){
         $order_id = is_object($order) ? $order->get_id() : $order;
 
-        $event_id = $this->logger->log_hook_start('woocommerce_checkout_order_created', 'WC_Checkout::create_order', 10);
+        // Detectar quién está ejecutando este hook
+        $caller = $this->detect_caller_from_backtrace();
+
+        $event_id = $this->logger->log_hook_start('woocommerce_checkout_order_created', $caller, 10);
 
         $this->logger->update_order_info($order_id);
 
@@ -215,7 +301,10 @@ class HookInterceptor {
     }
 
     public function log_new_order($order_id){
-        $event_id = $this->logger->log_hook_start('woocommerce_new_order', 'WooCommerce', 10);
+        // Detectar quién está ejecutando este hook
+        $caller = $this->detect_caller_from_backtrace();
+
+        $event_id = $this->logger->log_hook_start('woocommerce_new_order', $caller, 10);
         $this->logger->log_hook_end($event_id);
     }
 
@@ -228,7 +317,10 @@ class HookInterceptor {
     }
 
     public function log_order_processed($order_id, $posted_data, $order){
-        $event_id = $this->logger->log_hook_start('woocommerce_checkout_order_processed', 'WC_Checkout::process_checkout', 10);
+        // Detectar quién está ejecutando este hook
+        $caller = $this->detect_caller_from_backtrace();
+
+        $event_id = $this->logger->log_hook_start('woocommerce_checkout_order_processed', $caller, 10);
 
         $this->logger->complete_session('completed');
 

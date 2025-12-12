@@ -204,6 +204,11 @@ class ExecutionLogger {
             'line' => null,
         ];
 
+        // Si ya es un array de información del caller (desde HookInterceptor), usarlo directamente
+        if ( is_array($callback) && isset($callback['name']) && isset($callback['plugin']) ) {
+            return $callback;
+        }
+
         if ( is_string($callback) ) {
             $info['name'] = $callback;
         } elseif ( is_array($callback) ) {
