@@ -12,6 +12,8 @@
             this.loadSessions();
             this.setupModal();
             this.setupCleanup();
+            this.setupSettings();
+            this.setupLogsSorting();
         },
 
         setupTabs: function() {
@@ -37,11 +39,17 @@
                     status: $('#session-status-filter').val(),
                     has_errors: $('#session-errors-filter').val(),
                     date_from: $('#session-date-from').val(),
-                    date_to: $('#session-date-to').val()
+                    date_to: $('#session-date-to').val(),
+                    order_by: $('#session-order-by').val()
                 };
 
                 self.currentPage = 1;
                 self.loadSessions();
+            });
+
+            // También recargar cuando cambia el orden
+            $('#session-order-by').on('change', function() {
+                $('#session-apply-filters').click();
             });
 
             // Enter key on search
@@ -390,6 +398,72 @@
                 "'": '&#039;'
             };
             return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+        },
+
+        setupSettings: function() {
+            $('#checkout-monitor-settings-form').on('submit', function(e) {
+                e.preventDefault();
+
+                var cleanup_days = parseInt($('#cleanup_days').val()) || 30;
+
+                $.ajax({
+                    url: checkoutMonitorAdmin.ajaxUrl,
+                    type: 'POST',
+                    data: {
+                        action: 'checkout_monitor_save_settings',
+                        nonce: checkoutMonitorAdmin.nonce,
+                        cleanup_days: cleanup_days
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            $('.settings-saved-message').fadeIn().delay(2000).fadeOut();
+                        } else {
+                            alert('Error: ' + response.data.message);
+                        }
+                    }
+                });
+            });
+        },
+
+        setupLogsSorting: function() {
+            var currentSort = 'modified';
+            var currentOrder = 'desc';
+
+            $('.sortable-column').on('click', function() {
+                var sortBy = $(this).data('sort');
+
+                // Toggle order if same column
+                if (sortBy === currentSort) {
+                    currentOrder = currentOrder === 'desc' ? 'asc' : 'desc';
+                } else {
+                    currentSort = sortBy;
+                    currentOrder = 'desc';
+                }
+
+                // Update UI
+                $('.sortable-column').removeClass('sorted-asc sorted-desc');
+                $('.sortable-column .sort-arrow').text('');
+
+                $(this).addClass('sorted-' + currentOrder);
+                $(this).find('.sort-arrow').text(currentOrder === 'desc' ? '▼' : '▲');
+
+                // Sort table rows
+                var $tbody = $('#logs-table tbody');
+                var $rows = $tbody.find('tr').not(':has(td[colspan])');
+
+                $rows.sort(function(a, b) {
+                    var aVal = parseInt($(a).data(sortBy));
+                    var bVal = parseInt($(b).data(sortBy));
+
+                    if (currentOrder === 'desc') {
+                        return bVal - aVal;
+                    } else {
+                        return aVal - bVal;
+                    }
+                });
+
+                $tbody.append($rows);
+            });
         },
 
         showError: function(message) {

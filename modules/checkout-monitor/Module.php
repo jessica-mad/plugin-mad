@@ -176,6 +176,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_ajax_checkout_monitor_get_sessions', [$this, 'ajax_get_sessions']);
         add_action('wp_ajax_checkout_monitor_get_session_detail', [$this, 'ajax_get_session_detail']);
         add_action('wp_ajax_checkout_monitor_delete_old_logs', [$this, 'ajax_delete_old_logs']);
+        add_action('wp_ajax_checkout_monitor_save_settings', [$this, 'ajax_save_settings']);
 
         // Enqueue scripts
         add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_scripts']);
@@ -342,6 +343,27 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $deleted = $this->cleanup_old_logs($days);
 
         wp_send_json_success(['deleted' => $deleted]);
+    }
+
+    public function ajax_save_settings(){
+        check_ajax_referer('checkout_monitor_admin', 'nonce');
+
+        if ( !current_user_can(MAD_Suite_Core::CAPABILITY) ) {
+            wp_send_json_error(['message' => 'Permisos insuficientes']);
+        }
+
+        $cleanup_days = isset($_POST['cleanup_days']) ? intval($_POST['cleanup_days']) : 30;
+
+        // Validar rango
+        if ( $cleanup_days < 1 ) $cleanup_days = 1;
+        if ( $cleanup_days > 365 ) $cleanup_days = 365;
+
+        update_option('checkout_monitor_cleanup_days', $cleanup_days);
+
+        wp_send_json_success([
+            'message' => __('Configuración guardada correctamente', 'mad-suite'),
+            'cleanup_days' => $cleanup_days
+        ]);
     }
 
     public function cleanup_old_logs($days = 30){
