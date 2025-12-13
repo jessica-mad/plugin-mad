@@ -24,14 +24,14 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     public function init(){
         // Enviamos purchase cuando cambia el estado del pedido a alguno seleccionado
         add_action('woocommerce_order_status_changed', [$this,'maybe_send_purchase_on_status'], 10, 4);
-        
-        // Capturar gclid cuando se crea el pedido
-        add_action('woocommerce_checkout_update_order_meta', [$this, 'save_gclid_to_order']);
+
+        // Capturar gclid en la página de gracias (más seguro que durante checkout)
+        add_action('woocommerce_thankyou', [$this, 'save_gclid_to_order'], 10);
     }
 
     public function save_gclid_to_order($order_id){
         $gclid = '';
-        
+
         // Intentar desde parámetro GET (cuando el usuario llega con ?gclid=xxx)
         if (isset($_GET['gclid'])) {
             $gclid = sanitize_text_field($_GET['gclid']);
@@ -44,14 +44,20 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 $gclid = $matches[1];
             }
         }
-        
+
         if ($gclid) {
             $order = wc_get_order($order_id);
             if ($order) {
-                $order->update_meta_data('_gclid', $gclid);
-                $order->save();
-                
-                $this->logger->info(sprintf('GCLID guardado en pedido #%s: %s', $order_id, $gclid), ['source' => 'ga4-mad-suite']);
+                try {
+                    $order->update_meta_data('_gclid', $gclid);
+                    $order->save();
+
+                    $this->logger->info(sprintf('GCLID guardado en pedido #%s: %s', $order_id, $gclid), ['source' => 'ga4-mad-suite']);
+                } catch (\Exception $e) {
+                    // No romper el flujo si falla el guardado del GCLID
+                    // Solo loguear el error para debugging
+                    $this->logger->error(sprintf('Error guardando GCLID en pedido #%s: %s', $order_id, $e->getMessage()), ['source' => 'ga4-mad-suite']);
+                }
             }
         }
     }

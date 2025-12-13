@@ -70,11 +70,15 @@ class Module {
         // Usuario Login/Logout
         add_action('wp_login', [$this, 'on_user_login'], 10, 2);
         add_action('wp_logout', [$this, 'on_user_logout']);
-        
-        // Carrito y Checkout - generación automática de cupones
-        add_action('woocommerce_add_to_cart', [$this, 'auto_apply_user_coupon'], 10, 6);
-        add_action('woocommerce_before_cart', [$this, 'auto_apply_user_coupon_on_cart']);
-        add_action('woocommerce_before_checkout', [$this, 'on_before_checkout']);
+
+        // DESACTIVADO: Generación automática de cupones (ahora es manual por botón)
+        // add_action('woocommerce_add_to_cart', [$this, 'auto_apply_user_coupon'], 10, 6);
+        // add_action('woocommerce_before_cart', [$this, 'auto_apply_user_coupon_on_cart']);
+        // add_action('woocommerce_before_checkout', [$this, 'on_before_checkout']);
+
+        // Generación manual de cupones vía AJAX
+        add_action('wp_ajax_mad_ps_generate_coupons', [$this, 'ajax_generate_coupons']);
+        add_action('wp_ajax_nopriv_mad_ps_generate_coupons', [$this, 'ajax_generate_coupons']);
 
         // Cupón manual
         add_filter('woocommerce_coupon_is_valid', [$this, 'handle_manual_coupon'], 10, 2);
@@ -336,25 +340,26 @@ class Module {
     }
     
     /**
-     * Genera código de cupón
+     * Genera código de cupón único por usuario Y regla
      */
     private function generate_coupon_code($user_id, $rule) {
         $user = get_userdata($user_id);
         if (!$user) {
             return null;
         }
-        
+
         $prefix = isset($rule['coupon_config']['prefix']) ? $rule['coupon_config']['prefix'] : 'ps';
         $name_length = isset($rule['coupon_config']['name_length']) ? intval($rule['coupon_config']['name_length']) : 7;
-        
+
         $clean_name = $this->clean_username($user->user_login, $name_length);
-        
+
         // Si el nombre queda vacío después de limpiar, usar "user"
         if (empty($clean_name)) {
             $clean_name = 'user';
         }
-        
-        return strtolower($prefix . '_' . $clean_name . '_' . $user_id);
+
+        // Incluir rule_id para garantizar unicidad por regla
+        return strtolower($prefix . '_' . $clean_name . '_' . $user_id . '_r' . $rule['id']);
     }
     
     /**
@@ -365,70 +370,77 @@ class Module {
         if (!$user) {
             return false;
         }
-        
-        $coupon = new \WC_Coupon();
-        $coupon->set_code($code);
-        
-        // Tipo y valor de descuento
-        $discount_type = $rule['discount_type'] === 'percentage' ? 'percent' : 'fixed_cart';
-        $coupon->set_discount_type($discount_type);
-        $coupon->set_amount($rule['discount_value']);
-        
-        // Aplicación
-        if ($rule['apply_to'] === 'products') {
-            $coupon->set_product_ids($rule['target_ids']);
-        } else if ($rule['apply_to'] === 'categories') {
-            $coupon->set_product_categories($rule['target_ids']);
-        } else if ($rule['apply_to'] === 'tags') {
-            // Obtener productos con estos tags
-            $products = $this->get_products_by_tags($rule['target_ids']);
-            $coupon->set_product_ids($products);
-        }
-        
-        // Configuración del cupón desde la regla
-        // IMPORTANTE: Por defecto FALSE para permitir stack de sale_price + cupón
-        $exclude_sale = isset($rule['coupon_config']['exclude_sale_items'])
-            ? $rule['coupon_config']['exclude_sale_items']
-            : false;
-        $individual = isset($rule['coupon_config']['individual_use'])
-            ? $rule['coupon_config']['individual_use']
-            : true;
-            
-        $coupon->set_exclude_sale_items($exclude_sale);
-        $coupon->set_individual_use($individual);
-        
-        // Restricciones de usuario
-        $coupon->set_email_restrictions([$user->user_email]);
-        $coupon->set_usage_limit(0); // Ilimitado
-        $coupon->set_usage_limit_per_user(0); // Ilimitado
 
-        // Fechas - Solo fecha de expiración (WooCommerce nativo)
-        if (!empty($rule['date_to'])) {
-            $time_to = isset($rule['time_to']) && !empty($rule['time_to']) ? $rule['time_to'] : '23:59';
-            $coupon->set_date_expires(strtotime($rule['date_to'] . ' ' . $time_to));
-        }
+        try {
+            $coupon = new \WC_Coupon();
+            $coupon->set_code($code);
 
-        // Meta personalizada - Guardar fecha/hora de inicio (para validación manual)
-        $coupon->update_meta_data('_mad_ps_rule_id', $rule['id']);
-        $coupon->update_meta_data('_mad_ps_user_id', $user_id);
-        $coupon->update_meta_data('_mad_ps_created', current_time('mysql'));
+            // Tipo y valor de descuento
+            $discount_type = $rule['discount_type'] === 'percentage' ? 'percent' : 'fixed_cart';
+            $coupon->set_discount_type($discount_type);
+            $coupon->set_amount($rule['discount_value']);
 
-        // Guardar fecha y hora de inicio de la regla
-        if (!empty($rule['date_from'])) {
-            $coupon->update_meta_data('_mad_ps_date_from', $rule['date_from']);
+            // Aplicación
+            if ($rule['apply_to'] === 'products') {
+                $coupon->set_product_ids($rule['target_ids']);
+            } else if ($rule['apply_to'] === 'categories') {
+                $coupon->set_product_categories($rule['target_ids']);
+            } else if ($rule['apply_to'] === 'tags') {
+                // Obtener productos con estos tags
+                $products = $this->get_products_by_tags($rule['target_ids']);
+                $coupon->set_product_ids($products);
+            }
+
+            // Configuración del cupón desde la regla
+            // IMPORTANTE: Por defecto FALSE para permitir stack de sale_price + cupón
+            $exclude_sale = isset($rule['coupon_config']['exclude_sale_items'])
+                ? $rule['coupon_config']['exclude_sale_items']
+                : false;
+            $individual = isset($rule['coupon_config']['individual_use'])
+                ? $rule['coupon_config']['individual_use']
+                : true;
+
+            $coupon->set_exclude_sale_items($exclude_sale);
+            $coupon->set_individual_use($individual);
+
+            // Restricciones de usuario
+            $coupon->set_email_restrictions([$user->user_email]);
+            $coupon->set_usage_limit(0); // Ilimitado
+            $coupon->set_usage_limit_per_user(0); // Ilimitado
+
+            // Fechas - Solo fecha de expiración (WooCommerce nativo)
+            if (!empty($rule['date_to'])) {
+                $time_to = isset($rule['time_to']) && !empty($rule['time_to']) ? $rule['time_to'] : '23:59';
+                $coupon->set_date_expires(strtotime($rule['date_to'] . ' ' . $time_to));
+            }
+
+            // Meta personalizada - Guardar fecha/hora de inicio (para validación manual)
+            $coupon->update_meta_data('_mad_ps_rule_id', $rule['id']);
+            $coupon->update_meta_data('_mad_ps_user_id', $user_id);
+            $coupon->update_meta_data('_mad_ps_created', current_time('mysql'));
+
+            // Guardar fecha y hora de inicio de la regla
+            if (!empty($rule['date_from'])) {
+                $coupon->update_meta_data('_mad_ps_date_from', $rule['date_from']);
+            }
+            if (!empty($rule['time_from'])) {
+                $coupon->update_meta_data('_mad_ps_time_from', $rule['time_from']);
+            }
+            if (!empty($rule['time_to'])) {
+                $coupon->update_meta_data('_mad_ps_time_to', $rule['time_to']);
+            }
+
+            $coupon->save();
+
+            $this->log("Cupón creado: {$code} para usuario {$user->user_login} (ID: {$user_id})", 'SUCCESS');
+
+            return $coupon->get_id();
+
+        } catch (\Exception $e) {
+            // No romper el flujo, solo loguear el error
+            $this->log("Error creando cupón WC para usuario {$user->user_login}: " . $e->getMessage(), 'ERROR');
+            return false;
         }
-        if (!empty($rule['time_from'])) {
-            $coupon->update_meta_data('_mad_ps_time_from', $rule['time_from']);
-        }
-        if (!empty($rule['time_to'])) {
-            $coupon->update_meta_data('_mad_ps_time_to', $rule['time_to']);
-        }
-        
-        $coupon->save();
-        
-        $this->log("Cupón creado: {$code} para usuario {$user->user_login} (ID: {$user_id})", 'SUCCESS');
-        
-        return $coupon->get_id();
     }
     
     /**
@@ -1809,10 +1821,16 @@ class Module {
      * Shortcode [mi_cupon] - Muestra TODOS los cupones del usuario (activos, futuros, expirados)
      */
     public function render_my_coupon_shortcode($atts) {
+        // Atributos del shortcode con soporte WPML
+        $atts = shortcode_atts([
+            'button_text' => __('Generar mis cupones', 'mad-suite'),
+            'loading_text' => __('Generando...', 'mad-suite'),
+        ], $atts, 'mi_cupon');
+
         // Verificar que el usuario esté logueado
         if (!is_user_logged_in()) {
             return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
-                <p style="margin: 0; font-size: 16px;">Debes iniciar sesión para ver tus cupones</p>
+                <p style="margin: 0; font-size: 16px;">' . __('Debes iniciar sesión para ver tus cupones', 'mad-suite') . '</p>
             </div>';
         }
 
@@ -1821,11 +1839,70 @@ class Module {
         // Obtener TODOS los cupones del usuario
         $user_coupons = $this->get_all_user_coupons($user_id);
 
+        // Botón de generación manual (siempre visible)
+        $button_html = '
+        <div class="mad-ps-generate-coupons-btn-wrapper" style="margin-bottom: 20px; text-align: center;">
+            <button id="mad-ps-generate-coupons-btn" class="button" style="padding: 12px 30px; font-size: 16px; cursor: pointer;">
+                <span class="mad-ps-btn-text">' . esc_html($atts['button_text']) . '</span>
+                <span class="mad-ps-btn-loading" style="display:none;">' . esc_html($atts['loading_text']) . '</span>
+            </button>
+            <div class="mad-ps-message" style="margin-top: 10px;"></div>
+        </div>
+        <script>
+        jQuery(document).ready(function($) {
+            $("#mad-ps-generate-coupons-btn").on("click", function(e) {
+                e.preventDefault();
+                var $btn = $(this);
+                var $text = $btn.find(".mad-ps-btn-text");
+                var $loading = $btn.find(".mad-ps-btn-loading");
+                var $message = $(".mad-ps-message");
+
+                $btn.prop("disabled", true);
+                $text.hide();
+                $loading.show();
+                $message.html("");
+
+                $.ajax({
+                    url: "' . admin_url('admin-ajax.php') . '",
+                    type: "POST",
+                    data: {
+                        action: "mad_ps_generate_coupons"
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            $message.html("<p style=\"color: green; font-weight: bold;\">" + response.data.message + "</p>");
+                            if (response.data.count > 0) {
+                                setTimeout(function() {
+                                    location.reload();
+                                }, 1500);
+                            }
+                        } else {
+                            $message.html("<p style=\"color: red;\">" + response.data.message + "</p>");
+                        }
+                    },
+                    error: function() {
+                        $message.html("<p style=\"color: red;\">' . __('Error al generar cupones', 'mad-suite') . '</p>");
+                    },
+                    complete: function() {
+                        $btn.prop("disabled", false);
+                        $text.show();
+                        $loading.hide();
+                    }
+                });
+            });
+        });
+        </script>
+        ';
+
         if (empty($user_coupons)) {
-            return '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
-                <p style="margin: 0; font-size: 16px;">No tienes cupones disponibles</p>
+            return $button_html . '<div class="mad-coupon-box" style="text-align:center; padding: 30px; border: 2px solid #000; background: #fff; color: #000;">
+                <p style="margin: 0; font-size: 16px;">' . __('No tienes cupones disponibles', 'mad-suite') . '</p>
             </div>';
         }
+
+        // Añadir botón antes de los cupones
+        ob_start();
+        echo $button_html;
 
         // Ordenar cupones por fecha de activación (del más próximo al más lejano)
         usort($user_coupons, function($a, $b) {
@@ -2202,6 +2279,34 @@ class Module {
     public function get_log_url() {
         $upload_dir = wp_upload_dir();
         return $upload_dir['baseurl'] . '/mad-suite-logs/private-shop-' . date('Y-m-d') . '.log';
+    }
+
+    /**
+     * AJAX: Generar cupones manualmente
+     */
+    public function ajax_generate_coupons() {
+        // Verificar que el usuario esté logueado
+        if (!is_user_logged_in()) {
+            wp_send_json_error(['message' => __('Debes iniciar sesión para generar cupones', 'mad-suite')]);
+            return;
+        }
+
+        $user_id = get_current_user_id();
+
+        // Generar cupones (force=true para regenerar)
+        $created_count = $this->ensure_user_has_coupons($user_id, true);
+
+        if ($created_count > 0) {
+            wp_send_json_success([
+                'message' => sprintf(__('¡Perfecto! Se generaron %d cupón(es) para ti', 'mad-suite'), $created_count),
+                'count' => $created_count
+            ]);
+        } else {
+            wp_send_json_success([
+                'message' => __('Ya tienes todos tus cupones generados', 'mad-suite'),
+                'count' => 0
+            ]);
+        }
     }
 }
 

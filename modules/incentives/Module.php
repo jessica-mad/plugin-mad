@@ -526,13 +526,19 @@ return new class($core) implements MAD_Suite_Module {
       $have= isset($found[$should['inc_id']])? (int)$found[$should['inc_id']]['qty'] : 0;
       $need=max(0,$should['qty']-$have);
       if($need>0){
-        WC()->cart->add_to_cart( 
-          (int)$should['product'], 
-          (int)$need, 
-          0, 
-          [], 
-          [ $mk => (int)$should['inc_id'] ] 
-        );
+        try {
+          WC()->cart->add_to_cart(
+            (int)$should['product'],
+            (int)$need,
+            0,
+            [],
+            [ $mk => (int)$should['inc_id'] ]
+          );
+        } catch (\Exception $e) {
+          // No romper el carrito si falla añadir el regalo
+          // Solo loguear para debugging
+          error_log('MAD Incentives: Error añadiendo regalo - ' . $e->getMessage());
+        }
       }
     }
 
