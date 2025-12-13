@@ -27,9 +27,6 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     public function __construct($core)
     {
         $this->core = $core;
-
-        add_action('admin_notices', [$this, 'render_admin_notices']);
-        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
     }
 
     public function slug()
@@ -89,6 +86,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function admin_init()
     {
+        // Hooks de admin
+        add_action('admin_notices', [$this, 'render_admin_notices']);
+        add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
+
         // Acciones existentes
         add_action('admin_post_mads_role_creator_import', [$this, 'handle_import']);
         add_action('admin_post_mads_role_creator_download_template', [$this, 'download_template']);
