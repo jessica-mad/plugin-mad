@@ -25,8 +25,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         // Enviamos purchase cuando cambia el estado del pedido a alguno seleccionado
         add_action('woocommerce_order_status_changed', [$this,'maybe_send_purchase_on_status'], 10, 4);
 
-        // Capturar gclid en la página de gracias (más seguro que durante checkout)
-        add_action('woocommerce_thankyou', [$this, 'save_gclid_to_order'], 10);
+        // Capturar gclid ANTES de redirigir a pasarela de pago (Redsys, etc.)
+        // Se guarda en el pedido para usarlo después cuando se confirme el pago
+        add_action('woocommerce_checkout_order_processed', [$this, 'save_gclid_to_order'], 10);
     }
 
     public function save_gclid_to_order($order_id){
