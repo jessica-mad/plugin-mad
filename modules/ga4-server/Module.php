@@ -12,6 +12,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $this->core = $core;
         $this->option_key = MAD_Suite_Core::option_key( $this->slug() );
         $this->logger = wc_get_logger();
+
+        // Crear tablas de atribución si no existen
+        $this->maybe_create_tables();
     }
 
     /* ==== Identidad del módulo ==== */
@@ -28,38 +31,412 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         // Capturar gclid ANTES de redirigir a pasarela de pago (Redsys, etc.)
         // Se guarda en el pedido para usarlo después cuando se confirme el pago
         add_action('woocommerce_checkout_order_processed', [$this, 'save_gclid_to_order'], 10);
+
+        // FASE 2: Capturar touchpoints en todas las visitas
+        add_action('template_redirect', [$this, 'capture_touchpoint'], 5);
+    }
+
+    /* ==== Database Tables ==== */
+    private function maybe_create_tables(){
+        try {
+            $db_version_key = 'mad_attribution_db_version';
+            $current_version = '1.0.0';
+            $installed_version = get_option($db_version_key, '0');
+
+            if (version_compare($installed_version, $current_version, '<')) {
+                $this->create_tables();
+                update_option($db_version_key, $current_version);
+                $this->logger->info('Tablas de atribución creadas/actualizadas', ['source' => 'ga4-mad-suite']);
+            }
+        } catch (\Exception $e) {
+            // No romper el sitio si falla la creación de tablas
+            $this->logger->error('Error creando tablas: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
+    }
+
+    private function create_tables(){
+        global $wpdb;
+        $charset_collate = $wpdb->get_charset_collate();
+
+        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+
+        // Tabla 1: Touchpoints (puntos de contacto con click_ids)
+        $table_touchpoints = $wpdb->prefix . 'mad_attribution_touchpoints';
+        $sql_touchpoints = "CREATE TABLE {$table_touchpoints} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            session_id VARCHAR(100) NOT NULL,
+            user_id BIGINT UNSIGNED NULL,
+
+            gclid VARCHAR(255) NULL,
+            fbclid VARCHAR(255) NULL,
+            ttclid VARCHAR(255) NULL,
+            msclkid VARCHAR(255) NULL,
+            epik VARCHAR(255) NULL,
+            twclid VARCHAR(255) NULL,
+            li_fat_id VARCHAR(255) NULL,
+            scid VARCHAR(255) NULL,
+
+            utm_source VARCHAR(255) NULL,
+            utm_medium VARCHAR(255) NULL,
+            utm_campaign VARCHAR(255) NULL,
+            utm_term VARCHAR(255) NULL,
+            utm_content VARCHAR(255) NULL,
+
+            referrer TEXT NULL,
+            landing_page TEXT NULL,
+            user_agent TEXT NULL,
+            ip_address VARCHAR(45) NULL,
+
+            timestamp DATETIME NOT NULL,
+            order_id BIGINT UNSIGNED NULL,
+            converted TINYINT(1) DEFAULT 0,
+
+            PRIMARY KEY (id),
+            KEY idx_session (session_id),
+            KEY idx_user (user_id),
+            KEY idx_order (order_id),
+            KEY idx_timestamp (timestamp),
+            KEY idx_converted (converted)
+        ) {$charset_collate};";
+
+        // Tabla 2: Funnel Events (eventos del embudo de conversión)
+        $table_funnel = $wpdb->prefix . 'mad_attribution_funnel_events';
+        $sql_funnel = "CREATE TABLE {$table_funnel} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            session_id VARCHAR(100) NOT NULL,
+            user_id BIGINT UNSIGNED NULL,
+            touchpoint_id BIGINT UNSIGNED NULL,
+
+            event_type ENUM('view_item', 'add_to_cart', 'begin_checkout', 'purchase') NOT NULL,
+            event_data TEXT NULL,
+
+            product_id BIGINT UNSIGNED NULL,
+            product_name VARCHAR(255) NULL,
+            product_price DECIMAL(10,2) NULL,
+
+            cart_total DECIMAL(10,2) NULL,
+            order_id BIGINT UNSIGNED NULL,
+
+            timestamp DATETIME NOT NULL,
+
+            PRIMARY KEY (id),
+            KEY idx_session (session_id),
+            KEY idx_user (user_id),
+            KEY idx_touchpoint (touchpoint_id),
+            KEY idx_event_type (event_type),
+            KEY idx_timestamp (timestamp),
+            KEY idx_order (order_id)
+        ) {$charset_collate};";
+
+        // Tabla 3: Attribution Stats (estadísticas agregadas)
+        $table_stats = $wpdb->prefix . 'mad_attribution_stats';
+        $sql_stats = "CREATE TABLE {$table_stats} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+
+            date DATE NOT NULL,
+            platform VARCHAR(50) NOT NULL,
+
+            utm_source VARCHAR(255) NULL,
+            utm_medium VARCHAR(255) NULL,
+            utm_campaign VARCHAR(255) NULL,
+
+            sessions INT DEFAULT 0,
+            view_item_count INT DEFAULT 0,
+            add_to_cart_count INT DEFAULT 0,
+            begin_checkout_count INT DEFAULT 0,
+            purchases INT DEFAULT 0,
+            revenue DECIMAL(10,2) DEFAULT 0,
+
+            PRIMARY KEY (id),
+            UNIQUE KEY unique_stat (date, platform, utm_source(100), utm_medium(100), utm_campaign(100)),
+            KEY idx_date (date),
+            KEY idx_platform (platform)
+        ) {$charset_collate};";
+
+        dbDelta($sql_touchpoints);
+        dbDelta($sql_funnel);
+        dbDelta($sql_stats);
+    }
+
+    /* ==== Click ID Detection ==== */
+    private function detect_click_ids(){
+        try {
+            $click_ids = [];
+
+            // Google Ads - GCLID
+            if (isset($_GET['gclid'])) {
+                $click_ids['gclid'] = sanitize_text_field($_GET['gclid']);
+            } elseif (isset($_COOKIE['_gcl_aw'])) {
+                $cookie_value = sanitize_text_field($_COOKIE['_gcl_aw']);
+                if (preg_match('/GCL\.\d+\.(.+)/', $cookie_value, $matches)) {
+                    $click_ids['gclid'] = $matches[1];
+                }
+            }
+
+            // Facebook/Meta - FBCLID
+            if (isset($_GET['fbclid'])) {
+                $click_ids['fbclid'] = sanitize_text_field($_GET['fbclid']);
+            }
+
+            // TikTok - TTCLID
+            if (isset($_GET['ttclid'])) {
+                $click_ids['ttclid'] = sanitize_text_field($_GET['ttclid']);
+            }
+
+            // Microsoft Ads - MSCLKID
+            if (isset($_GET['msclkid'])) {
+                $click_ids['msclkid'] = sanitize_text_field($_GET['msclkid']);
+            }
+
+            // Pinterest - EPIK
+            if (isset($_GET['epik'])) {
+                $click_ids['epik'] = sanitize_text_field($_GET['epik']);
+            }
+
+            // Twitter/X - TWCLID
+            if (isset($_GET['twclid'])) {
+                $click_ids['twclid'] = sanitize_text_field($_GET['twclid']);
+            }
+
+            // LinkedIn - LI_FAT_ID
+            if (isset($_GET['li_fat_id'])) {
+                $click_ids['li_fat_id'] = sanitize_text_field($_GET['li_fat_id']);
+            }
+
+            // Snapchat - ScCid
+            if (isset($_GET['ScCid'])) {
+                $click_ids['scid'] = sanitize_text_field($_GET['ScCid']);
+            }
+
+            // UTM Parameters
+            $utm_params = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+            foreach ($utm_params as $param) {
+                if (isset($_GET[$param])) {
+                    $click_ids[$param] = sanitize_text_field($_GET[$param]);
+                }
+            }
+
+            // Referrer
+            if (!empty($_SERVER['HTTP_REFERER'])) {
+                $click_ids['referrer'] = esc_url_raw($_SERVER['HTTP_REFERER']);
+            }
+
+            // Landing page
+            $click_ids['landing_page'] = esc_url_raw($_SERVER['REQUEST_URI'] ?? '');
+
+            // User Agent
+            if (!empty($_SERVER['HTTP_USER_AGENT'])) {
+                $click_ids['user_agent'] = sanitize_text_field($_SERVER['HTTP_USER_AGENT']);
+            }
+
+            // IP Address
+            if (!empty($_SERVER['REMOTE_ADDR'])) {
+                $click_ids['ip_address'] = sanitize_text_field($_SERVER['REMOTE_ADDR']);
+            }
+
+            // FASE 1: Solo logging (no guardar aún)
+            if (!empty($click_ids)) {
+                $detected_platforms = [];
+                if (!empty($click_ids['gclid'])) $detected_platforms[] = 'Google Ads';
+                if (!empty($click_ids['fbclid'])) $detected_platforms[] = 'Facebook';
+                if (!empty($click_ids['ttclid'])) $detected_platforms[] = 'TikTok';
+                if (!empty($click_ids['msclkid'])) $detected_platforms[] = 'Microsoft';
+                if (!empty($click_ids['epik'])) $detected_platforms[] = 'Pinterest';
+                if (!empty($click_ids['twclid'])) $detected_platforms[] = 'Twitter';
+                if (!empty($click_ids['li_fat_id'])) $detected_platforms[] = 'LinkedIn';
+                if (!empty($click_ids['scid'])) $detected_platforms[] = 'Snapchat';
+
+                if (!empty($detected_platforms)) {
+                    $this->logger->info(
+                        sprintf('Click IDs detectados: %s', implode(', ', $detected_platforms)),
+                        ['source' => 'ga4-mad-suite', 'click_ids' => $click_ids]
+                    );
+                }
+            }
+
+            return $click_ids;
+
+        } catch (\Exception $e) {
+            // Falla silenciosamente, no romper el sitio
+            $this->logger->error('Error detectando click_ids: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+            return [];
+        }
+    }
+
+    /* ==== Session Tracking ==== */
+    private function get_session_id(){
+        try {
+            $cookie_name = 'mad_attribution_sid';
+            $cookie_lifetime = 30 * DAY_IN_SECONDS; // 30 días
+
+            // Si ya existe cookie, usarla
+            if (isset($_COOKIE[$cookie_name])) {
+                return sanitize_text_field($_COOKIE[$cookie_name]);
+            }
+
+            // Crear nuevo session_id
+            $session_id = 'mad_' . wp_generate_uuid4();
+
+            // Guardar en cookie
+            if (!headers_sent()) {
+                setcookie(
+                    $cookie_name,
+                    $session_id,
+                    time() + $cookie_lifetime,
+                    COOKIEPATH,
+                    COOKIE_DOMAIN,
+                    is_ssl(),
+                    true // httponly
+                );
+            }
+
+            return $session_id;
+
+        } catch (\Exception $e) {
+            $this->logger->error('Error generando session_id: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+            return 'mad_' . wp_generate_uuid4();
+        }
+    }
+
+    public function capture_touchpoint(){
+        try {
+            // Solo capturar si hay click_ids o UTM parameters en la URL
+            $has_tracking_params = false;
+            $tracking_params = ['gclid', 'fbclid', 'ttclid', 'msclkid', 'epik', 'twclid', 'li_fat_id', 'ScCid',
+                               'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+
+            foreach ($tracking_params as $param) {
+                if (isset($_GET[$param])) {
+                    $has_tracking_params = true;
+                    break;
+                }
+            }
+
+            // Solo guardar touchpoint si hay parámetros de tracking
+            if (!$has_tracking_params) {
+                return;
+            }
+
+            // Detectar click_ids
+            $click_ids = $this->detect_click_ids();
+
+            if (empty($click_ids)) {
+                return;
+            }
+
+            // Obtener session_id
+            $session_id = $this->get_session_id();
+
+            // Obtener user_id si está logueado
+            $user_id = is_user_logged_in() ? get_current_user_id() : null;
+
+            // Guardar touchpoint
+            $this->save_touchpoint($session_id, $user_id, $click_ids);
+
+        } catch (\Exception $e) {
+            // CRÍTICO: No romper el sitio si falla el tracking
+            $this->logger->error('Error capturando touchpoint: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
+    }
+
+    private function save_touchpoint($session_id, $user_id, $click_ids){
+        try {
+            global $wpdb;
+            $table = $wpdb->prefix . 'mad_attribution_touchpoints';
+
+            // Verificar si ya existe un touchpoint para esta sesión en las últimas 24 horas
+            // Si existe, actualizar en lugar de crear duplicado
+            $existing = $wpdb->get_var($wpdb->prepare("
+                SELECT id FROM {$table}
+                WHERE session_id = %s
+                AND timestamp > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ", $session_id));
+
+            $data = [
+                'session_id' => $session_id,
+                'user_id' => $user_id,
+                'gclid' => $click_ids['gclid'] ?? null,
+                'fbclid' => $click_ids['fbclid'] ?? null,
+                'ttclid' => $click_ids['ttclid'] ?? null,
+                'msclkid' => $click_ids['msclkid'] ?? null,
+                'epik' => $click_ids['epik'] ?? null,
+                'twclid' => $click_ids['twclid'] ?? null,
+                'li_fat_id' => $click_ids['li_fat_id'] ?? null,
+                'scid' => $click_ids['scid'] ?? null,
+                'utm_source' => $click_ids['utm_source'] ?? null,
+                'utm_medium' => $click_ids['utm_medium'] ?? null,
+                'utm_campaign' => $click_ids['utm_campaign'] ?? null,
+                'utm_term' => $click_ids['utm_term'] ?? null,
+                'utm_content' => $click_ids['utm_content'] ?? null,
+                'referrer' => $click_ids['referrer'] ?? null,
+                'landing_page' => $click_ids['landing_page'] ?? null,
+                'user_agent' => $click_ids['user_agent'] ?? null,
+                'ip_address' => $click_ids['ip_address'] ?? null,
+                'timestamp' => current_time('mysql'),
+            ];
+
+            if ($existing) {
+                // Actualizar touchpoint existente
+                $result = $wpdb->update(
+                    $table,
+                    $data,
+                    ['id' => $existing]
+                );
+
+                if ($result !== false) {
+                    $this->logger->info(
+                        sprintf('Touchpoint actualizado (ID: %d, Session: %s)', $existing, $session_id),
+                        ['source' => 'ga4-mad-suite']
+                    );
+                }
+            } else {
+                // Crear nuevo touchpoint
+                $result = $wpdb->insert($table, $data);
+
+                if ($result !== false) {
+                    $this->logger->info(
+                        sprintf('Nuevo touchpoint creado (ID: %d, Session: %s)', $wpdb->insert_id, $session_id),
+                        ['source' => 'ga4-mad-suite']
+                    );
+                }
+            }
+
+            if ($wpdb->last_error) {
+                throw new \Exception($wpdb->last_error);
+            }
+
+        } catch (\Exception $e) {
+            // No romper el sitio, solo loggear
+            $this->logger->error('Error guardando touchpoint: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
     }
 
     public function save_gclid_to_order($order_id){
-        $gclid = '';
+        try {
+            // Detectar todos los click_ids
+            $click_ids = $this->detect_click_ids();
 
-        // Intentar desde parámetro GET (cuando el usuario llega con ?gclid=xxx)
-        if (isset($_GET['gclid'])) {
-            $gclid = sanitize_text_field($_GET['gclid']);
-        }
-        // Intentar desde cookie _gcl_aw (Google Ads la crea automáticamente)
-        elseif (isset($_COOKIE['_gcl_aw'])) {
-            $cookie_value = sanitize_text_field($_COOKIE['_gcl_aw']);
-            // Formato: GCL.1234567890.gclid_aqui
-            if (preg_match('/GCL\.\d+\.(.+)/', $cookie_value, $matches)) {
-                $gclid = $matches[1];
-            }
-        }
+            // Mantener compatibilidad: guardar GCLID como antes
+            if (!empty($click_ids['gclid'])) {
+                $order = wc_get_order($order_id);
+                if ($order) {
+                    try {
+                        $order->update_meta_data('_gclid', $click_ids['gclid']);
+                        $order->save();
 
-        if ($gclid) {
-            $order = wc_get_order($order_id);
-            if ($order) {
-                try {
-                    $order->update_meta_data('_gclid', $gclid);
-                    $order->save();
-
-                    $this->logger->info(sprintf('GCLID guardado en pedido #%s: %s', $order_id, $gclid), ['source' => 'ga4-mad-suite']);
-                } catch (\Exception $e) {
-                    // No romper el flujo si falla el guardado del GCLID
-                    // Solo loguear el error para debugging
-                    $this->logger->error(sprintf('Error guardando GCLID en pedido #%s: %s', $order_id, $e->getMessage()), ['source' => 'ga4-mad-suite']);
+                        $this->logger->info(sprintf('GCLID guardado en pedido #%s: %s', $order_id, $click_ids['gclid']), ['source' => 'ga4-mad-suite']);
+                    } catch (\Exception $e) {
+                        // No romper el flujo si falla el guardado del GCLID
+                        $this->logger->error(sprintf('Error guardando GCLID en pedido #%s: %s', $order_id, $e->getMessage()), ['source' => 'ga4-mad-suite']);
+                    }
                 }
             }
+
+        } catch (\Exception $e) {
+            // No romper el checkout bajo ninguna circunstancia
+            $this->logger->error('Error en save_gclid_to_order: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
         }
     }
 
@@ -135,38 +512,170 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     /* ==== Página de ajustes ==== */
     public function render_settings_page(){
         if ( ! current_user_can(MAD_Suite_Core::CAPABILITY) ) return;
-        
-        $log_file = WC_LOG_DIR . 'ga4-mad-suite-' . date('Y-m-d') . '-' . wp_hash('ga4-mad-suite') . '.log';
+
+        $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'settings';
         ?>
         <div class="wrap">
             <h1><?php echo esc_html( $this->title() ); ?></h1>
 
-            <form method="post" action="options.php">
-                <?php
-                settings_fields( $this->option_group() );
-                do_settings_sections( $this->menu_slug() );
-                submit_button(__('Guardar cambios','mad-suite'));
-                ?>
-            </form>
-
-            <hr />
-            <h2><?php esc_html_e('Prueba rápida','mad-suite'); ?></h2>
-            <p><?php esc_html_e('Realiza un pedido de prueba y cambia su estado a uno de los seleccionados. Revisa en GA4 → Administrar → Depuración (DebugView).','mad-suite'); ?></p>
-            
-            <h3><?php esc_html_e('Ver logs','mad-suite'); ?></h3>
-            <p>
-                <?php 
-                printf(
-                    esc_html__('Los logs se guardan en: %s','mad-suite'),
-                    '<code>' . esc_html($log_file) . '</code>'
-                ); 
-                ?>
-            </p>
-            <p>
-                <a href="<?php echo esc_url(admin_url('admin.php?page=wc-status&tab=logs')); ?>" class="button">
-                    <?php esc_html_e('Ver logs de WooCommerce','mad-suite'); ?>
+            <h2 class="nav-tab-wrapper">
+                <a href="?page=<?php echo esc_attr($this->menu_slug()); ?>&tab=settings"
+                   class="nav-tab <?php echo $current_tab === 'settings' ? 'nav-tab-active' : ''; ?>">
+                    <?php esc_html_e('Configuración', 'mad-suite'); ?>
                 </a>
-            </p>
+                <a href="?page=<?php echo esc_attr($this->menu_slug()); ?>&tab=attribution"
+                   class="nav-tab <?php echo $current_tab === 'attribution' ? 'nav-tab-active' : ''; ?>">
+                    <?php esc_html_e('Attribution Tracking', 'mad-suite'); ?>
+                </a>
+            </h2>
+
+            <?php
+            if ($current_tab === 'settings') {
+                $this->render_settings_tab();
+            } elseif ($current_tab === 'attribution') {
+                $this->render_attribution_tab();
+            }
+            ?>
+        </div>
+        <?php
+    }
+
+    private function render_settings_tab(){
+        $log_file = WC_LOG_DIR . 'ga4-mad-suite-' . date('Y-m-d') . '-' . wp_hash('ga4-mad-suite') . '.log';
+        ?>
+        <form method="post" action="options.php">
+            <?php
+            settings_fields( $this->option_group() );
+            do_settings_sections( $this->menu_slug() );
+            submit_button(__('Guardar cambios','mad-suite'));
+            ?>
+        </form>
+
+        <hr />
+        <h2><?php esc_html_e('Prueba rápida','mad-suite'); ?></h2>
+        <p><?php esc_html_e('Realiza un pedido de prueba y cambia su estado a uno de los seleccionados. Revisa en GA4 → Administrar → Depuración (DebugView).','mad-suite'); ?></p>
+
+        <h3><?php esc_html_e('Ver logs','mad-suite'); ?></h3>
+        <p>
+            <?php
+            printf(
+                esc_html__('Los logs se guardan en: %s','mad-suite'),
+                '<code>' . esc_html($log_file) . '</code>'
+            );
+            ?>
+        </p>
+        <p>
+            <a href="<?php echo esc_url(admin_url('admin.php?page=wc-status&tab=logs')); ?>" class="button">
+                <?php esc_html_e('Ver logs de WooCommerce','mad-suite'); ?>
+            </a>
+        </p>
+        <?php
+    }
+
+    private function render_attribution_tab(){
+        global $wpdb;
+        $table = $wpdb->prefix . 'mad_attribution_touchpoints';
+
+        // Obtener touchpoints recientes
+        $touchpoints = $wpdb->get_results("
+            SELECT *
+            FROM {$table}
+            ORDER BY timestamp DESC
+            LIMIT 50
+        ");
+
+        // Contar totales
+        $total_touchpoints = $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+        $total_converted = $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE converted = 1");
+        $total_sessions = $wpdb->get_var("SELECT COUNT(DISTINCT session_id) FROM {$table}");
+
+        ?>
+        <div style="margin-top: 20px;">
+            <h2><?php esc_html_e('Estadísticas de Attribution', 'mad-suite'); ?></h2>
+
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 30px;">
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0;"><?php esc_html_e('Total Touchpoints', 'mad-suite'); ?></h3>
+                    <p style="font-size: 32px; font-weight: bold; margin: 0;"><?php echo number_format($total_touchpoints); ?></p>
+                </div>
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0;"><?php esc_html_e('Sesiones Únicas', 'mad-suite'); ?></h3>
+                    <p style="font-size: 32px; font-weight: bold; margin: 0;"><?php echo number_format($total_sessions); ?></p>
+                </div>
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0;"><?php esc_html_e('Conversiones', 'mad-suite'); ?></h3>
+                    <p style="font-size: 32px; font-weight: bold; margin: 0; color: #46b450;"><?php echo number_format($total_converted); ?></p>
+                </div>
+            </div>
+
+            <h2><?php esc_html_e('Touchpoints Recientes (últimos 50)', 'mad-suite'); ?></h2>
+
+            <?php if (empty($touchpoints)): ?>
+                <div class="notice notice-info">
+                    <p><?php esc_html_e('No hay touchpoints capturados aún. Los touchpoints se crean cuando un visitante llega con parámetros de tracking (gclid, fbclid, utm_source, etc.).', 'mad-suite'); ?></p>
+                    <p><?php esc_html_e('Prueba visitando tu sitio con: ?utm_source=test&utm_campaign=prueba', 'mad-suite'); ?></p>
+                </div>
+            <?php else: ?>
+                <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e('ID', 'mad-suite'); ?></th>
+                            <th><?php esc_html_e('Timestamp', 'mad-suite'); ?></th>
+                            <th><?php esc_html_e('Plataforma', 'mad-suite'); ?></th>
+                            <th><?php esc_html_e('UTM Source', 'mad-suite'); ?></th>
+                            <th><?php esc_html_e('UTM Campaign', 'mad-suite'); ?></th>
+                            <th><?php esc_html_e('Usuario', 'mad-suite'); ?></th>
+                            <th><?php esc_html_e('Convertido', 'mad-suite'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($touchpoints as $tp):
+                            // Detectar plataforma
+                            $platform = 'Direct';
+                            if (!empty($tp->gclid)) $platform = 'Google Ads';
+                            elseif (!empty($tp->fbclid)) $platform = 'Facebook';
+                            elseif (!empty($tp->ttclid)) $platform = 'TikTok';
+                            elseif (!empty($tp->msclkid)) $platform = 'Microsoft';
+                            elseif (!empty($tp->epik)) $platform = 'Pinterest';
+                            elseif (!empty($tp->twclid)) $platform = 'Twitter';
+                            elseif (!empty($tp->li_fat_id)) $platform = 'LinkedIn';
+                            elseif (!empty($tp->scid)) $platform = 'Snapchat';
+                            elseif (!empty($tp->utm_source)) $platform = $tp->utm_source;
+                        ?>
+                        <tr>
+                            <td><code><?php echo esc_html($tp->id); ?></code></td>
+                            <td><?php echo esc_html($tp->timestamp); ?></td>
+                            <td><strong><?php echo esc_html($platform); ?></strong></td>
+                            <td><?php echo esc_html($tp->utm_source ?? '-'); ?></td>
+                            <td><?php echo esc_html($tp->utm_campaign ?? '-'); ?></td>
+                            <td>
+                                <?php
+                                if ($tp->user_id) {
+                                    $user = get_userdata($tp->user_id);
+                                    echo $user ? esc_html($user->user_login) : '#' . esc_html($tp->user_id);
+                                } else {
+                                    echo '<em>' . esc_html__('Visitante', 'mad-suite') . '</em>';
+                                }
+                                ?>
+                            </td>
+                            <td>
+                                <?php if ($tp->converted): ?>
+                                    <span style="color: #46b450; font-weight: bold;">✓
+                                        <?php if ($tp->order_id): ?>
+                                            <a href="<?php echo esc_url(admin_url('post.php?post=' . $tp->order_id . '&action=edit')); ?>">
+                                                #<?php echo esc_html($tp->order_id); ?>
+                                            </a>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span style="color: #999;">—</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
         </div>
         <?php
     }
