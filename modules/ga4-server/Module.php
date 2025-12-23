@@ -34,6 +34,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         // FASE 2: Capturar touchpoints en todas las visitas
         add_action('template_redirect', [$this, 'capture_touchpoint'], 5);
+
+        // FASE 4: Funnel Event Tracking
+        add_action('woocommerce_after_single_product', [$this, 'track_view_item'], 10);
+        add_action('woocommerce_add_to_cart', [$this, 'track_add_to_cart'], 10, 6);
+        add_action('woocommerce_before_checkout_form', [$this, 'track_begin_checkout'], 10);
     }
 
     /* ==== Database Tables ==== */
@@ -415,28 +420,339 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     public function save_gclid_to_order($order_id){
         try {
-            // Detectar todos los click_ids
-            $click_ids = $this->detect_click_ids();
+            $order = wc_get_order($order_id);
+            if (!$order) {
+                return;
+            }
 
-            // Mantener compatibilidad: guardar GCLID como antes
-            if (!empty($click_ids['gclid'])) {
-                $order = wc_get_order($order_id);
-                if ($order) {
-                    try {
-                        $order->update_meta_data('_gclid', $click_ids['gclid']);
-                        $order->save();
+            // Obtener session_id actual
+            $session_id = $this->get_session_id();
 
-                        $this->logger->info(sprintf('GCLID guardado en pedido #%s: %s', $order_id, $click_ids['gclid']), ['source' => 'ga4-mad-suite']);
-                    } catch (\Exception $e) {
-                        // No romper el flujo si falla el guardado del GCLID
-                        $this->logger->error(sprintf('Error guardando GCLID en pedido #%s: %s', $order_id, $e->getMessage()), ['source' => 'ga4-mad-suite']);
-                    }
+            // Buscar touchpoint asociado a esta sesión
+            global $wpdb;
+            $table = $wpdb->prefix . 'mad_attribution_touchpoints';
+
+            $touchpoint = $wpdb->get_row($wpdb->prepare("
+                SELECT * FROM {$table}
+                WHERE session_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ", $session_id));
+
+            // Preparar attribution data
+            $attribution_data = [];
+
+            if ($touchpoint) {
+                // Usar datos del touchpoint si existe
+                $attribution_data = [
+                    'touchpoint_id' => $touchpoint->id,
+                    'session_id' => $touchpoint->session_id,
+                    'gclid' => $touchpoint->gclid,
+                    'fbclid' => $touchpoint->fbclid,
+                    'ttclid' => $touchpoint->ttclid,
+                    'msclkid' => $touchpoint->msclkid,
+                    'epik' => $touchpoint->epik,
+                    'twclid' => $touchpoint->twclid,
+                    'li_fat_id' => $touchpoint->li_fat_id,
+                    'scid' => $touchpoint->scid,
+                    'utm_source' => $touchpoint->utm_source,
+                    'utm_medium' => $touchpoint->utm_medium,
+                    'utm_campaign' => $touchpoint->utm_campaign,
+                    'utm_term' => $touchpoint->utm_term,
+                    'utm_content' => $touchpoint->utm_content,
+                    'referrer' => $touchpoint->referrer,
+                    'landing_page' => $touchpoint->landing_page,
+                ];
+
+                // FASE 3: Marcar touchpoint como convertido
+                try {
+                    $wpdb->update(
+                        $table,
+                        [
+                            'converted' => 1,
+                            'order_id' => $order_id
+                        ],
+                        ['id' => $touchpoint->id]
+                    );
+
+                    $this->logger->info(
+                        sprintf('Touchpoint #%d marcado como convertido para pedido #%s', $touchpoint->id, $order_id),
+                        ['source' => 'ga4-mad-suite']
+                    );
+                } catch (\Exception $e) {
+                    $this->logger->error(
+                        sprintf('Error marcando touchpoint como convertido: %s', $e->getMessage()),
+                        ['source' => 'ga4-mad-suite']
+                    );
+                }
+            } else {
+                // Si no hay touchpoint, detectar click_ids directamente de la request
+                $click_ids = $this->detect_click_ids();
+                if (!empty($click_ids)) {
+                    $attribution_data = array_merge(['session_id' => $session_id], $click_ids);
                 }
             }
 
+            // Guardar attribution data completa en order meta
+            if (!empty($attribution_data)) {
+                try {
+                    // Limpiar nulls del array
+                    $attribution_data = array_filter($attribution_data, function($value) {
+                        return $value !== null && $value !== '';
+                    });
+
+                    $order->update_meta_data('_attribution_data', $attribution_data);
+
+                    // Mantener compatibilidad: guardar GCLID en campo separado
+                    if (!empty($attribution_data['gclid'])) {
+                        $order->update_meta_data('_gclid', $attribution_data['gclid']);
+                    }
+
+                    $order->save();
+
+                    $platforms = [];
+                    if (!empty($attribution_data['gclid'])) $platforms[] = 'Google Ads';
+                    if (!empty($attribution_data['fbclid'])) $platforms[] = 'Facebook';
+                    if (!empty($attribution_data['ttclid'])) $platforms[] = 'TikTok';
+                    if (!empty($attribution_data['msclkid'])) $platforms[] = 'Microsoft';
+
+                    $platform_text = !empty($platforms) ? implode(', ', $platforms) : 'Direct/Organic';
+
+                    $this->logger->info(
+                        sprintf('Attribution data guardada en pedido #%s (%s)', $order_id, $platform_text),
+                        ['source' => 'ga4-mad-suite', 'attribution' => $attribution_data]
+                    );
+
+                } catch (\Exception $e) {
+                    // No romper el flujo si falla el guardado
+                    $this->logger->error(
+                        sprintf('Error guardando attribution data en pedido #%s: %s', $order_id, $e->getMessage()),
+                        ['source' => 'ga4-mad-suite']
+                    );
+                }
+            }
+
+            // FASE 4: Trackear evento de purchase en funnel
+            $this->track_purchase($order_id);
+
         } catch (\Exception $e) {
-            // No romper el checkout bajo ninguna circunstancia
+            // CRÍTICO: No romper el checkout bajo ninguna circunstancia
             $this->logger->error('Error en save_gclid_to_order: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
+    }
+
+    /* ==== Funnel Event Tracking ==== */
+    private function get_touchpoint_id(){
+        try {
+            global $wpdb;
+            $table = $wpdb->prefix . 'mad_attribution_touchpoints';
+            $session_id = $this->get_session_id();
+
+            $touchpoint_id = $wpdb->get_var($wpdb->prepare("
+                SELECT id FROM {$table}
+                WHERE session_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+            ", $session_id));
+
+            return $touchpoint_id;
+        } catch (\Exception $e) {
+            return null;
+        }
+    }
+
+    public function track_view_item(){
+        try {
+            global $product, $wpdb;
+
+            if (!$product || !is_a($product, 'WC_Product')) {
+                return;
+            }
+
+            $session_id = $this->get_session_id();
+            $user_id = is_user_logged_in() ? get_current_user_id() : null;
+            $touchpoint_id = $this->get_touchpoint_id();
+
+            $table = $wpdb->prefix . 'mad_attribution_funnel_events';
+
+            $result = $wpdb->insert($table, [
+                'session_id' => $session_id,
+                'user_id' => $user_id,
+                'touchpoint_id' => $touchpoint_id,
+                'event_type' => 'view_item',
+                'product_id' => $product->get_id(),
+                'product_name' => $product->get_name(),
+                'product_price' => (float) $product->get_price(),
+                'event_data' => wp_json_encode([
+                    'product_type' => $product->get_type(),
+                    'sku' => $product->get_sku(),
+                ]),
+                'timestamp' => current_time('mysql'),
+            ]);
+
+            if ($result !== false) {
+                $this->logger->debug(
+                    sprintf('View Item tracked: %s (ID: %d)', $product->get_name(), $product->get_id()),
+                    ['source' => 'ga4-mad-suite']
+                );
+            }
+
+        } catch (\Exception $e) {
+            // No romper la página, solo loggear
+            $this->logger->error('Error tracking view_item: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
+    }
+
+    public function track_add_to_cart($cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data){
+        try {
+            global $wpdb;
+
+            $product = wc_get_product($variation_id ?: $product_id);
+            if (!$product) {
+                return;
+            }
+
+            $session_id = $this->get_session_id();
+            $user_id = is_user_logged_in() ? get_current_user_id() : null;
+            $touchpoint_id = $this->get_touchpoint_id();
+
+            // Calcular cart total
+            $cart_total = WC()->cart ? (float) WC()->cart->get_cart_contents_total() : 0;
+
+            $table = $wpdb->prefix . 'mad_attribution_funnel_events';
+
+            $result = $wpdb->insert($table, [
+                'session_id' => $session_id,
+                'user_id' => $user_id,
+                'touchpoint_id' => $touchpoint_id,
+                'event_type' => 'add_to_cart',
+                'product_id' => $product->get_id(),
+                'product_name' => $product->get_name(),
+                'product_price' => (float) $product->get_price(),
+                'cart_total' => $cart_total,
+                'event_data' => wp_json_encode([
+                    'quantity' => $quantity,
+                    'variation_id' => $variation_id,
+                ]),
+                'timestamp' => current_time('mysql'),
+            ]);
+
+            if ($result !== false) {
+                $this->logger->debug(
+                    sprintf('Add to Cart tracked: %s x%d', $product->get_name(), $quantity),
+                    ['source' => 'ga4-mad-suite']
+                );
+            }
+
+        } catch (\Exception $e) {
+            // No romper add to cart, solo loggear
+            $this->logger->error('Error tracking add_to_cart: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
+    }
+
+    public function track_begin_checkout(){
+        try {
+            global $wpdb;
+
+            $session_id = $this->get_session_id();
+            $user_id = is_user_logged_in() ? get_current_user_id() : null;
+            $touchpoint_id = $this->get_touchpoint_id();
+
+            $cart = WC()->cart;
+            if (!$cart) {
+                return;
+            }
+
+            $cart_total = (float) $cart->get_cart_contents_total();
+            $cart_items = $cart->get_cart();
+
+            $table = $wpdb->prefix . 'mad_attribution_funnel_events';
+
+            $result = $wpdb->insert($table, [
+                'session_id' => $session_id,
+                'user_id' => $user_id,
+                'touchpoint_id' => $touchpoint_id,
+                'event_type' => 'begin_checkout',
+                'cart_total' => $cart_total,
+                'event_data' => wp_json_encode([
+                    'item_count' => $cart->get_cart_contents_count(),
+                    'items' => array_map(function($item) {
+                        return [
+                            'product_id' => $item['product_id'],
+                            'quantity' => $item['quantity'],
+                        ];
+                    }, $cart_items),
+                ]),
+                'timestamp' => current_time('mysql'),
+            ]);
+
+            if ($result !== false) {
+                $this->logger->debug(
+                    sprintf('Begin Checkout tracked: %.2f EUR (%d items)', $cart_total, $cart->get_cart_contents_count()),
+                    ['source' => 'ga4-mad-suite']
+                );
+            }
+
+        } catch (\Exception $e) {
+            // No romper checkout, solo loggear
+            $this->logger->error('Error tracking begin_checkout: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
+    }
+
+    private function track_purchase($order_id){
+        try {
+            global $wpdb;
+
+            $order = wc_get_order($order_id);
+            if (!$order) {
+                return;
+            }
+
+            $session_id = $this->get_session_id();
+            $user_id = $order->get_user_id() ?: null;
+            $touchpoint_id = $this->get_touchpoint_id();
+
+            $table = $wpdb->prefix . 'mad_attribution_funnel_events';
+
+            $items = [];
+            foreach ($order->get_items() as $item) {
+                if ($item instanceof WC_Order_Item_Product) {
+                    $items[] = [
+                        'product_id' => $item->get_product_id(),
+                        'product_name' => $item->get_name(),
+                        'quantity' => $item->get_quantity(),
+                        'total' => (float) $item->get_total(),
+                    ];
+                }
+            }
+
+            $result = $wpdb->insert($table, [
+                'session_id' => $session_id,
+                'user_id' => $user_id,
+                'touchpoint_id' => $touchpoint_id,
+                'event_type' => 'purchase',
+                'order_id' => $order_id,
+                'cart_total' => (float) $order->get_total(),
+                'event_data' => wp_json_encode([
+                    'order_total' => (float) $order->get_total(),
+                    'tax' => (float) $order->get_total_tax(),
+                    'shipping' => (float) $order->get_shipping_total(),
+                    'currency' => $order->get_currency(),
+                    'items' => $items,
+                ]),
+                'timestamp' => current_time('mysql'),
+            ]);
+
+            if ($result !== false) {
+                $this->logger->info(
+                    sprintf('Purchase tracked: Order #%s (%.2f %s)', $order_id, $order->get_total(), $order->get_currency()),
+                    ['source' => 'ga4-mad-suite']
+                );
+            }
+
+        } catch (\Exception $e) {
+            // No romper el proceso de pedido
+            $this->logger->error('Error tracking purchase: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
         }
     }
 
@@ -574,20 +890,50 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     private function render_attribution_tab(){
         global $wpdb;
-        $table = $wpdb->prefix . 'mad_attribution_touchpoints';
+        $table_touchpoints = $wpdb->prefix . 'mad_attribution_touchpoints';
+        $table_funnel = $wpdb->prefix . 'mad_attribution_funnel_events';
 
         // Obtener touchpoints recientes
         $touchpoints = $wpdb->get_results("
             SELECT *
-            FROM {$table}
+            FROM {$table_touchpoints}
             ORDER BY timestamp DESC
             LIMIT 50
         ");
 
-        // Contar totales
-        $total_touchpoints = $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
-        $total_converted = $wpdb->get_var("SELECT COUNT(*) FROM {$table} WHERE converted = 1");
-        $total_sessions = $wpdb->get_var("SELECT COUNT(DISTINCT session_id) FROM {$table}");
+        // Contar totales de touchpoints
+        $total_touchpoints = $wpdb->get_var("SELECT COUNT(*) FROM {$table_touchpoints}");
+        $total_converted = $wpdb->get_var("SELECT COUNT(*) FROM {$table_touchpoints} WHERE converted = 1");
+        $total_sessions = $wpdb->get_var("SELECT COUNT(DISTINCT session_id) FROM {$table_touchpoints}");
+
+        // Contar eventos del funnel (últimos 30 días)
+        $funnel_stats = $wpdb->get_results("
+            SELECT
+                event_type,
+                COUNT(*) as count,
+                COUNT(DISTINCT session_id) as unique_sessions
+            FROM {$table_funnel}
+            WHERE timestamp > DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY event_type
+        ");
+
+        $funnel_counts = [
+            'view_item' => 0,
+            'add_to_cart' => 0,
+            'begin_checkout' => 0,
+            'purchase' => 0,
+        ];
+
+        foreach ($funnel_stats as $stat) {
+            $funnel_counts[$stat->event_type] = (int) $stat->unique_sessions;
+        }
+
+        // Calcular conversion rates
+        $total_visitors = max(1, $funnel_counts['view_item']);
+        $view_to_cart_rate = $funnel_counts['view_item'] > 0 ? ($funnel_counts['add_to_cart'] / $funnel_counts['view_item']) * 100 : 0;
+        $cart_to_checkout_rate = $funnel_counts['add_to_cart'] > 0 ? ($funnel_counts['begin_checkout'] / $funnel_counts['add_to_cart']) * 100 : 0;
+        $checkout_to_purchase_rate = $funnel_counts['begin_checkout'] > 0 ? ($funnel_counts['purchase'] / $funnel_counts['begin_checkout']) * 100 : 0;
+        $overall_conversion_rate = $funnel_counts['view_item'] > 0 ? ($funnel_counts['purchase'] / $funnel_counts['view_item']) * 100 : 0;
 
         ?>
         <div style="margin-top: 20px;">
@@ -606,6 +952,81 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <h3 style="margin-top: 0;"><?php esc_html_e('Conversiones', 'mad-suite'); ?></h3>
                     <p style="font-size: 32px; font-weight: bold; margin: 0; color: #46b450;"><?php echo number_format($total_converted); ?></p>
                 </div>
+            </div>
+
+            <!-- Funnel Visualization -->
+            <h2><?php esc_html_e('Embudo de Conversión (últimos 30 días)', 'mad-suite'); ?></h2>
+            <div style="background: #fff; border: 1px solid #ccd0d4; padding: 30px; border-radius: 4px; margin-bottom: 30px;">
+                <div style="max-width: 600px; margin: 0 auto;">
+                    <!-- View Item -->
+                    <div style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <strong><?php esc_html_e('Vista de Producto', 'mad-suite'); ?></strong>
+                            <span><?php echo number_format($funnel_counts['view_item']); ?> sesiones</span>
+                        </div>
+                        <div style="background: #f0f0f0; height: 40px; border-radius: 4px; position: relative; overflow: hidden;">
+                            <div style="background: #2271b1; height: 100%; width: 100%;"></div>
+                        </div>
+                        <div style="text-align: right; margin-top: 5px; color: #666; font-size: 12px;">100%</div>
+                    </div>
+
+                    <!-- Arrow -->
+                    <div style="text-align: center; margin: 10px 0; color: #999;">▼ <?php echo number_format($view_to_cart_rate, 1); ?>%</div>
+
+                    <!-- Add to Cart -->
+                    <div style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <strong><?php esc_html_e('Agregar al Carrito', 'mad-suite'); ?></strong>
+                            <span><?php echo number_format($funnel_counts['add_to_cart']); ?> sesiones</span>
+                        </div>
+                        <div style="background: #f0f0f0; height: 40px; border-radius: 4px; position: relative; overflow: hidden;">
+                            <div style="background: #72aee6; height: 100%; width: <?php echo ($funnel_counts['view_item'] > 0 ? ($funnel_counts['add_to_cart'] / $funnel_counts['view_item']) * 100 : 0); ?>%;"></div>
+                        </div>
+                        <div style="text-align: right; margin-top: 5px; color: #666; font-size: 12px;">
+                            <?php echo number_format($view_to_cart_rate, 1); ?>% del total
+                        </div>
+                    </div>
+
+                    <!-- Arrow -->
+                    <div style="text-align: center; margin: 10px 0; color: #999;">▼ <?php echo number_format($cart_to_checkout_rate, 1); ?>%</div>
+
+                    <!-- Begin Checkout -->
+                    <div style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <strong><?php esc_html_e('Iniciar Checkout', 'mad-suite'); ?></strong>
+                            <span><?php echo number_format($funnel_counts['begin_checkout']); ?> sesiones</span>
+                        </div>
+                        <div style="background: #f0f0f0; height: 40px; border-radius: 4px; position: relative; overflow: hidden;">
+                            <div style="background: #f6a323; height: 100%; width: <?php echo ($funnel_counts['view_item'] > 0 ? ($funnel_counts['begin_checkout'] / $funnel_counts['view_item']) * 100 : 0); ?>%;"></div>
+                        </div>
+                        <div style="text-align: right; margin-top: 5px; color: #666; font-size: 12px;">
+                            <?php echo number_format($funnel_counts['view_item'] > 0 ? ($funnel_counts['begin_checkout'] / $funnel_counts['view_item']) * 100 : 0, 1); ?>% del total
+                        </div>
+                    </div>
+
+                    <!-- Arrow -->
+                    <div style="text-align: center; margin: 10px 0; color: #999;">▼ <?php echo number_format($checkout_to_purchase_rate, 1); ?>%</div>
+
+                    <!-- Purchase -->
+                    <div style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <strong style="color: #46b450;"><?php esc_html_e('Compra Realizada', 'mad-suite'); ?></strong>
+                            <span style="color: #46b450;"><?php echo number_format($funnel_counts['purchase']); ?> pedidos</span>
+                        </div>
+                        <div style="background: #f0f0f0; height: 40px; border-radius: 4px; position: relative; overflow: hidden;">
+                            <div style="background: #46b450; height: 100%; width: <?php echo ($funnel_counts['view_item'] > 0 ? ($funnel_counts['purchase'] / $funnel_counts['view_item']) * 100 : 0); ?>%;"></div>
+                        </div>
+                        <div style="text-align: right; margin-top: 5px; color: #46b450; font-size: 12px; font-weight: bold;">
+                            Conversión Global: <?php echo number_format($overall_conversion_rate, 1); ?>%
+                        </div>
+                    </div>
+                </div>
+
+                <?php if ($funnel_counts['view_item'] === 0): ?>
+                    <div style="text-align: center; padding: 40px; color: #666;">
+                        <p><?php esc_html_e('No hay datos de funnel aún. Los eventos se rastrearán automáticamente cuando los usuarios naveguen por tu tienda.', 'mad-suite'); ?></p>
+                    </div>
+                <?php endif; ?>
             </div>
 
             <h2><?php esc_html_e('Touchpoints Recientes (últimos 50)', 'mad-suite'); ?></h2>
