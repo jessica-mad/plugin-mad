@@ -39,6 +39,12 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('woocommerce_after_single_product', [$this, 'track_view_item'], 10);
         add_action('woocommerce_add_to_cart', [$this, 'track_add_to_cart'], 10, 6);
         add_action('woocommerce_before_checkout_form', [$this, 'track_begin_checkout'], 10);
+
+        // FASE 6: Data Retention - Cron Job
+        add_action('mad_attribution_daily_cleanup', [$this, 'cleanup_old_data']);
+        if (!wp_next_scheduled('mad_attribution_daily_cleanup')) {
+            wp_schedule_event(strtotime('tomorrow 3:00 AM'), 'daily', 'mad_attribution_daily_cleanup');
+        }
     }
 
     /* ==== Database Tables ==== */
@@ -756,6 +762,113 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         }
     }
 
+    /* ==== Data Retention & Cleanup ==== */
+    public function cleanup_old_data(){
+        try {
+            $settings = $this->get_settings();
+
+            // Verificar si auto-cleanup está activado
+            if (empty($settings['auto_cleanup'])) {
+                $this->logger->debug('Auto-cleanup desactivado, saltando limpieza', ['source' => 'ga4-mad-suite']);
+                return;
+            }
+
+            global $wpdb;
+            $table_touchpoints = $wpdb->prefix . 'mad_attribution_touchpoints';
+            $table_funnel = $wpdb->prefix . 'mad_attribution_funnel_events';
+
+            $retention_days = (int) $settings['retention_days'];
+
+            $this->logger->info(
+                sprintf('Iniciando limpieza automática (retención: %d días)', $retention_days),
+                ['source' => 'ga4-mad-suite']
+            );
+
+            // PASO 1: Contar registros a eliminar (para logging)
+            $touchpoints_to_delete = $wpdb->get_var($wpdb->prepare("
+                SELECT COUNT(*)
+                FROM {$table_touchpoints}
+                WHERE converted = 0
+                AND timestamp < DATE_SUB(NOW(), INTERVAL %d DAY)
+            ", $retention_days));
+
+            if ($touchpoints_to_delete > 0) {
+                // PASO 2: Obtener IDs de touchpoints a eliminar
+                $touchpoint_ids = $wpdb->get_col($wpdb->prepare("
+                    SELECT id
+                    FROM {$table_touchpoints}
+                    WHERE converted = 0
+                    AND timestamp < DATE_SUB(NOW(), INTERVAL %d DAY)
+                ", $retention_days));
+
+                // PASO 3: Eliminar eventos de funnel asociados a estos touchpoints
+                if (!empty($touchpoint_ids)) {
+                    $ids_placeholder = implode(',', array_fill(0, count($touchpoint_ids), '%d'));
+                    $funnel_deleted = $wpdb->query($wpdb->prepare("
+                        DELETE FROM {$table_funnel}
+                        WHERE touchpoint_id IN ($ids_placeholder)
+                        AND order_id IS NULL
+                    ", ...$touchpoint_ids));
+
+                    $this->logger->info(
+                        sprintf('Eliminados %d eventos de funnel asociados', $funnel_deleted),
+                        ['source' => 'ga4-mad-suite']
+                    );
+                }
+
+                // PASO 4: Eliminar touchpoints no convertidos
+                $touchpoints_deleted = $wpdb->query($wpdb->prepare("
+                    DELETE FROM {$table_touchpoints}
+                    WHERE converted = 0
+                    AND timestamp < DATE_SUB(NOW(), INTERVAL %d DAY)
+                ", $retention_days));
+
+                $this->logger->info(
+                    sprintf('Limpieza completada: %d touchpoints eliminados', $touchpoints_deleted),
+                    ['source' => 'ga4-mad-suite']
+                );
+
+                // PASO 5: Eliminar eventos de funnel huérfanos (sin touchpoint asociado)
+                $orphan_events = $wpdb->query("
+                    DELETE fe FROM {$table_funnel} fe
+                    LEFT JOIN {$table_touchpoints} tp ON fe.touchpoint_id = tp.id
+                    WHERE tp.id IS NULL
+                    AND fe.touchpoint_id IS NOT NULL
+                    AND fe.order_id IS NULL
+                ");
+
+                if ($orphan_events > 0) {
+                    $this->logger->info(
+                        sprintf('Eliminados %d eventos huérfanos', $orphan_events),
+                        ['source' => 'ga4-mad-suite']
+                    );
+                }
+
+                // PASO 6: Optimizar tablas
+                $wpdb->query("OPTIMIZE TABLE {$table_touchpoints}");
+                $wpdb->query("OPTIMIZE TABLE {$table_funnel}");
+
+                $this->logger->info('Tablas optimizadas', ['source' => 'ga4-mad-suite']);
+
+            } else {
+                $this->logger->debug('No hay registros que eliminar', ['source' => 'ga4-mad-suite']);
+            }
+
+            // PASO 7: Estadísticas finales
+            $total_touchpoints = $wpdb->get_var("SELECT COUNT(*) FROM {$table_touchpoints}");
+            $converted_touchpoints = $wpdb->get_var("SELECT COUNT(*) FROM {$table_touchpoints} WHERE converted = 1");
+
+            $this->logger->info(
+                sprintf('Estado después de limpieza: %d touchpoints totales (%d convertidos, %d no convertidos)',
+                    $total_touchpoints, $converted_touchpoints, $total_touchpoints - $converted_touchpoints),
+                ['source' => 'ga4-mad-suite']
+            );
+
+        } catch (\Exception $e) {
+            $this->logger->error('Error en cleanup_old_data: ' . $e->getMessage(), ['source' => 'ga4-mad-suite']);
+        }
+    }
+
     /* ==== Registro de ajustes (Settings API) ==== */
     public function admin_init(){
         register_setting( $this->option_group(), $this->option_key, [
@@ -767,6 +880,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 'fire_statuses'  => ['processing','completed'],
                 'debug'          => 0,
                 'test_coupon'    => '',
+                'retention_days' => 90,
+                'auto_cleanup'   => 1,
             ],
         ]);
 
@@ -823,6 +938,24 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             $this->menu_slug(),
             $this->section_id()
         );
+
+        // Retention Days
+        add_settings_field(
+            'retention_days',
+            __('Retención de datos (días)','mad-suite'),
+            [$this,'field_retention_days'],
+            $this->menu_slug(),
+            $this->section_id()
+        );
+
+        // Auto Cleanup
+        add_settings_field(
+            'auto_cleanup',
+            __('Limpieza automática','mad-suite'),
+            [$this,'field_auto_cleanup'],
+            $this->menu_slug(),
+            $this->section_id()
+        );
     }
 
     /* ==== Página de ajustes ==== */
@@ -841,7 +974,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 </a>
                 <a href="?page=<?php echo esc_attr($this->menu_slug()); ?>&tab=attribution"
                    class="nav-tab <?php echo $current_tab === 'attribution' ? 'nav-tab-active' : ''; ?>">
-                    <?php esc_html_e('Attribution Tracking', 'mad-suite'); ?>
+                    <?php esc_html_e('Funnel & Touchpoints', 'mad-suite'); ?>
+                </a>
+                <a href="?page=<?php echo esc_attr($this->menu_slug()); ?>&tab=platforms"
+                   class="nav-tab <?php echo $current_tab === 'platforms' ? 'nav-tab-active' : ''; ?>">
+                    <?php esc_html_e('Platform Comparison', 'mad-suite'); ?>
                 </a>
             </h2>
 
@@ -850,6 +987,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 $this->render_settings_tab();
             } elseif ($current_tab === 'attribution') {
                 $this->render_attribution_tab();
+            } elseif ($current_tab === 'platforms') {
+                $this->render_platforms_tab();
             }
             ?>
         </div>
@@ -1101,6 +1240,225 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <?php
     }
 
+    private function render_platforms_tab(){
+        global $wpdb;
+        $table_touchpoints = $wpdb->prefix . 'mad_attribution_touchpoints';
+
+        // Stats por plataforma (últimos 30 días)
+        $platform_stats = $wpdb->get_results("
+            SELECT
+                CASE
+                    WHEN gclid IS NOT NULL THEN 'Google Ads'
+                    WHEN fbclid IS NOT NULL THEN 'Facebook'
+                    WHEN ttclid IS NOT NULL THEN 'TikTok'
+                    WHEN msclkid IS NOT NULL THEN 'Microsoft'
+                    WHEN epik IS NOT NULL THEN 'Pinterest'
+                    WHEN twclid IS NOT NULL THEN 'Twitter'
+                    WHEN li_fat_id IS NOT NULL THEN 'LinkedIn'
+                    WHEN scid IS NOT NULL THEN 'Snapchat'
+                    WHEN utm_source IS NOT NULL THEN utm_source
+                    ELSE 'Direct'
+                END as platform,
+                COUNT(DISTINCT session_id) as sessions,
+                SUM(converted) as conversions,
+                COUNT(CASE WHEN converted = 1 THEN 1 END) as orders
+            FROM {$table_touchpoints}
+            WHERE timestamp > DATE_SUB(NOW(), INTERVAL 30 DAY)
+            GROUP BY platform
+            ORDER BY sessions DESC
+        ");
+
+        // Calcular revenue por plataforma
+        $revenue_by_platform = [];
+        foreach ($platform_stats as $stat) {
+            // Buscar pedidos de esta plataforma
+            $orders_query = $wpdb->prepare("
+                SELECT order_id
+                FROM {$table_touchpoints}
+                WHERE converted = 1
+                AND timestamp > DATE_SUB(NOW(), INTERVAL 30 DAY)
+                AND (
+                    (gclid IS NOT NULL AND %s = 'Google Ads')
+                    OR (fbclid IS NOT NULL AND %s = 'Facebook')
+                    OR (ttclid IS NOT NULL AND %s = 'TikTok')
+                    OR (msclkid IS NOT NULL AND %s = 'Microsoft')
+                    OR (epik IS NOT NULL AND %s = 'Pinterest')
+                    OR (twclid IS NOT NULL AND %s = 'Twitter')
+                    OR (li_fat_id IS NOT NULL AND %s = 'LinkedIn')
+                    OR (scid IS NOT NULL AND %s = 'Snapchat')
+                    OR (utm_source = %s AND utm_source IS NOT NULL)
+                )
+            ", $stat->platform, $stat->platform, $stat->platform, $stat->platform,
+               $stat->platform, $stat->platform, $stat->platform, $stat->platform, $stat->platform);
+
+            $order_ids = $wpdb->get_col($orders_query);
+
+            $revenue = 0;
+            foreach ($order_ids as $order_id) {
+                $order = wc_get_order($order_id);
+                if ($order) {
+                    $revenue += (float) $order->get_total();
+                }
+            }
+
+            $revenue_by_platform[$stat->platform] = $revenue;
+        }
+
+        // Calcular totales
+        $total_sessions = array_sum(array_column($platform_stats, 'sessions'));
+        $total_conversions = array_sum(array_column($platform_stats, 'conversions'));
+        $total_revenue = array_sum($revenue_by_platform);
+
+        ?>
+        <div style="margin-top: 20px;">
+            <h2><?php esc_html_e('Comparación de Plataformas (últimos 30 días)', 'mad-suite'); ?></h2>
+
+            <!-- Summary Cards -->
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 30px;">
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0; font-size: 14px; color: #666;"><?php esc_html_e('Total Sesiones', 'mad-suite'); ?></h3>
+                    <p style="font-size: 32px; font-weight: bold; margin: 0;"><?php echo number_format($total_sessions); ?></p>
+                </div>
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0; font-size: 14px; color: #666;"><?php esc_html_e('Conversiones', 'mad-suite'); ?></h3>
+                    <p style="font-size: 32px; font-weight: bold; margin: 0; color: #46b450;"><?php echo number_format($total_conversions); ?></p>
+                </div>
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0; font-size: 14px; color: #666;"><?php esc_html_e('Revenue Total', 'mad-suite'); ?></h3>
+                    <p style="font-size: 32px; font-weight: bold; margin: 0; color: #2271b1;">
+                        <?php echo wc_price($total_revenue); ?>
+                    </p>
+                </div>
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0; font-size: 14px; color: #666;"><?php esc_html_e('Tasa Conv. Global', 'mad-suite'); ?></h3>
+                    <p style="font-size: 32px; font-weight: bold; margin: 0;">
+                        <?php echo $total_sessions > 0 ? number_format(($total_conversions / $total_sessions) * 100, 1) : 0; ?>%
+                    </p>
+                </div>
+            </div>
+
+            <!-- Platform Comparison Table -->
+            <?php if (empty($platform_stats)): ?>
+                <div class="notice notice-info">
+                    <p><?php esc_html_e('No hay datos de plataformas aún. Las estadísticas se generarán cuando haya visitas con parámetros de tracking.', 'mad-suite'); ?></p>
+                </div>
+            <?php else: ?>
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px; margin-bottom: 30px;">
+                    <h3 style="margin-top: 0;"><?php esc_html_e('Rendimiento por Plataforma', 'mad-suite'); ?></h3>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th style="width: 20%;"><?php esc_html_e('Plataforma', 'mad-suite'); ?></th>
+                                <th style="width: 12%; text-align: right;"><?php esc_html_e('Sesiones', 'mad-suite'); ?></th>
+                                <th style="width: 12%; text-align: right;"><?php esc_html_e('Pedidos', 'mad-suite'); ?></th>
+                                <th style="width: 15%; text-align: right;"><?php esc_html_e('Revenue', 'mad-suite'); ?></th>
+                                <th style="width: 12%; text-align: right;"><?php esc_html_e('Conv. Rate', 'mad-suite'); ?></th>
+                                <th style="width: 15%; text-align: right;"><?php esc_html_e('Avg. Order Value', 'mad-suite'); ?></th>
+                                <th style="width: 14%; text-align: right;"><?php esc_html_e('% Sessions', 'mad-suite'); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php
+                            foreach ($platform_stats as $stat):
+                                $revenue = $revenue_by_platform[$stat->platform] ?? 0;
+                                $conv_rate = $stat->sessions > 0 ? ($stat->conversions / $stat->sessions) * 100 : 0;
+                                $aov = $stat->conversions > 0 ? $revenue / $stat->conversions : 0;
+                                $session_percent = $total_sessions > 0 ? ($stat->sessions / $total_sessions) * 100 : 0;
+
+                                // Color por plataforma
+                                $color = '#666';
+                                if ($stat->platform === 'Google Ads') $color = '#4285f4';
+                                elseif ($stat->platform === 'Facebook') $color = '#1877f2';
+                                elseif ($stat->platform === 'TikTok') $color = '#000';
+                                elseif ($stat->platform === 'Microsoft') $color = '#00a4ef';
+                            ?>
+                            <tr>
+                                <td>
+                                    <strong style="color: <?php echo esc_attr($color); ?>;">
+                                        <?php echo esc_html($stat->platform); ?>
+                                    </strong>
+                                </td>
+                                <td style="text-align: right;"><?php echo number_format($stat->sessions); ?></td>
+                                <td style="text-align: right;">
+                                    <strong style="color: #46b450;"><?php echo number_format($stat->conversions); ?></strong>
+                                </td>
+                                <td style="text-align: right;">
+                                    <strong><?php echo wc_price($revenue); ?></strong>
+                                </td>
+                                <td style="text-align: right;">
+                                    <span style="<?php echo $conv_rate > 5 ? 'color: #46b450; font-weight: bold;' : ''; ?>">
+                                        <?php echo number_format($conv_rate, 1); ?>%
+                                    </span>
+                                </td>
+                                <td style="text-align: right;"><?php echo wc_price($aov); ?></td>
+                                <td style="text-align: right;">
+                                    <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px;">
+                                        <div style="flex: 1; max-width: 100px; background: #f0f0f0; height: 8px; border-radius: 4px; overflow: hidden;">
+                                            <div style="background: <?php echo esc_attr($color); ?>; height: 100%; width: <?php echo number_format($session_percent, 0); ?>%;"></div>
+                                        </div>
+                                        <span style="min-width: 40px;"><?php echo number_format($session_percent, 1); ?>%</span>
+                                    </div>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                        <tfoot>
+                            <tr style="background: #f9f9f9; font-weight: bold;">
+                                <td><?php esc_html_e('TOTAL', 'mad-suite'); ?></td>
+                                <td style="text-align: right;"><?php echo number_format($total_sessions); ?></td>
+                                <td style="text-align: right; color: #46b450;"><?php echo number_format($total_conversions); ?></td>
+                                <td style="text-align: right;"><?php echo wc_price($total_revenue); ?></td>
+                                <td style="text-align: right;">
+                                    <?php echo $total_sessions > 0 ? number_format(($total_conversions / $total_sessions) * 100, 1) : 0; ?>%
+                                </td>
+                                <td style="text-align: right;">
+                                    <?php echo $total_conversions > 0 ? wc_price($total_revenue / $total_conversions) : wc_price(0); ?>
+                                </td>
+                                <td style="text-align: right;">100.0%</td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+
+                <!-- Revenue Chart -->
+                <div style="background: #fff; border: 1px solid #ccd0d4; padding: 20px; border-radius: 4px;">
+                    <h3 style="margin-top: 0;"><?php esc_html_e('Distribución de Revenue', 'mad-suite'); ?></h3>
+                    <?php
+                    arsort($revenue_by_platform);
+                    $max_revenue = max($revenue_by_platform);
+                    ?>
+                    <div style="max-width: 800px;">
+                        <?php foreach ($revenue_by_platform as $platform => $revenue):
+                            if ($revenue <= 0) continue;
+                            $percent = $total_revenue > 0 ? ($revenue / $total_revenue) * 100 : 0;
+                            $width = $max_revenue > 0 ? ($revenue / $max_revenue) * 100 : 0;
+
+                            // Mismo color que tabla
+                            $color = '#666';
+                            if ($platform === 'Google Ads') $color = '#4285f4';
+                            elseif ($platform === 'Facebook') $color = '#1877f2';
+                            elseif ($platform === 'TikTok') $color = '#000';
+                            elseif ($platform === 'Microsoft') $color = '#00a4ef';
+                        ?>
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                                <strong><?php echo esc_html($platform); ?></strong>
+                                <span><?php echo wc_price($revenue); ?> (<?php echo number_format($percent, 1); ?>%)</span>
+                            </div>
+                            <div style="background: #f0f0f0; height: 30px; border-radius: 4px; overflow: hidden;">
+                                <div style="background: <?php echo esc_attr($color); ?>; height: 100%; width: <?php echo number_format($width, 1); ?>%; display: flex; align-items: center; padding: 0 10px; color: white; font-weight: bold; font-size: 12px;">
+                                    <?php if ($width > 15) echo number_format($percent, 1) . '%'; ?>
+                                </div>
+                            </div>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
     /* ==== Settings API helpers ==== */
     private function option_group(){ return 'group_'.$this->slug(); }
     private function section_id(){ return 'section_'.$this->slug(); }
@@ -1112,6 +1470,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'fire_statuses'  => ['processing','completed'],
             'debug'          => 0,
             'test_coupon'    => '',
+            'retention_days' => 90,
+            'auto_cleanup'   => 1,
         ];
         $opts = get_option( $this->option_key, [] );
         return wp_parse_args( is_array($opts) ? $opts : [], $defaults );
@@ -1123,6 +1483,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $out['api_secret']     = isset($input['api_secret']) ? sanitize_text_field($input['api_secret']) : '';
         $out['debug']          = !empty($input['debug']) ? 1 : 0;
         $out['test_coupon']    = isset($input['test_coupon']) ? sanitize_text_field($input['test_coupon']) : '';
+        $out['retention_days'] = isset($input['retention_days']) ? max(30, min(365, (int)$input['retention_days'])) : 90;
+        $out['auto_cleanup']   = !empty($input['auto_cleanup']) ? 1 : 0;
 
         $statuses = array_keys( wc_get_order_statuses() );
         $clean_statuses = [];
@@ -1190,6 +1552,26 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             checked(1, $v, false),
             esc_html__('Registrar peticiones/respuestas en el log del servidor (error_log)','mad-suite')
         );
+    }
+
+    public function field_retention_days(){
+        $v = (int) $this->get_settings()['retention_days'];
+        printf('<input type="number" min="30" max="365" name="%s[retention_days]" value="%d" /> %s',
+            esc_attr($this->option_key),
+            $v,
+            esc_html__('días','mad-suite')
+        );
+        echo '<p class="description">'.esc_html__('Días para mantener datos de sesiones no convertidas. Las conversiones se mantienen permanentemente. Rango: 30-365 días.','mad-suite').'</p>';
+    }
+
+    public function field_auto_cleanup(){
+        $v = (int) $this->get_settings()['auto_cleanup'];
+        printf('<label><input type="checkbox" name="%s[auto_cleanup]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key),
+            checked(1, $v, false),
+            esc_html__('Activar limpieza automática diaria (3 AM)','mad-suite')
+        );
+        echo '<p class="description">'.esc_html__('Elimina automáticamente touchpoints no convertidos que superen el período de retención. Las conversiones nunca se eliminan.','mad-suite').'</p>';
     }
 
     /* ==== Lógica de envío ==== */
