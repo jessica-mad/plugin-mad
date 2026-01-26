@@ -60,18 +60,30 @@ class MAD_Refund_Meta_Box {
      * Add meta box to order edit screen
      */
     public function add_meta_box() {
-        $screen = wc_get_container()->get(\Automattic\WooCommerce\Internal\DataStores\Orders\CustomOrdersTableController::class)->custom_orders_table_usage_is_enabled()
-            ? wc_get_page_screen_id('shop-order')
-            : 'shop_order';
+        // Get screens for both legacy and HPOS
+        $screens = ['shop_order'];
 
-        add_meta_box(
-            self::META_BOX_ID,
-            __('Pre-Refund Items Selection', 'mad-suite'),
-            [$this, 'render_meta_box'],
-            $screen,
-            'normal',
-            'high'
-        );
+        // Add HPOS screen if available
+        if (function_exists('wc_get_page_screen_id')) {
+            $screens[] = wc_get_page_screen_id('shop-order');
+        }
+
+        // Also add the woocommerce_page_wc-orders screen directly
+        $screens[] = 'woocommerce_page_wc-orders';
+
+        // Remove duplicates and empty values
+        $screens = array_unique(array_filter($screens));
+
+        foreach ($screens as $screen) {
+            add_meta_box(
+                self::META_BOX_ID,
+                __('Pre-Refund Items Selection', 'mad-suite'),
+                [$this, 'render_meta_box'],
+                $screen,
+                'normal',
+                'high'
+            );
+        }
     }
 
     /**
