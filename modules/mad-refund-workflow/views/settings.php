@@ -86,7 +86,7 @@ $option_key = MAD_Suite_Core::option_key($this->slug());
         </h4>
         <p>
             <?php esc_html_e('Status badge appearance:', 'mad-suite'); ?>
-            <span class="status-preview-badge" style="background: <?php echo esc_attr($settings['status_color']); ?>; color: <?php echo $this->get_contrast_color($settings['status_color']); ?>; display: inline-block; padding: 4px 10px; border-radius: 3px; margin-left: 10px;">
+            <span class="status-preview-badge" style="background: <?php echo esc_attr($settings['status_color']); ?>; color: <?php echo esc_attr(get_contrast_color($settings['status_color'])); ?>; display: inline-block; padding: 4px 10px; border-radius: 3px; margin-left: 10px;">
                 <?php echo esc_html($settings['status_name'] ?: __('Pending Refund', 'mad-suite')); ?>
             </span>
         </p>
@@ -127,8 +127,9 @@ jQuery(document).ready(function($) {
 <?php
 
 /**
- * Helper function to get contrast color
+ * Helper function to get contrast color (only define once)
  */
+if (!function_exists('get_contrast_color')) :
 function get_contrast_color($hex) {
     $hex = ltrim($hex, '#');
     $r = hexdec(substr($hex, 0, 2));
@@ -137,3 +138,4 @@ function get_contrast_color($hex) {
     $luminance = (0.299 * $r + 0.587 * $g + 0.114 * $b) / 255;
     return $luminance > 0.5 ? '#000000' : '#ffffff';
 }
+endif;

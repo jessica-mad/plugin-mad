@@ -744,6 +744,8 @@ return new class($core) implements MAD_Suite_Module {
      * Check if WP Overnight PDF plugin is active
      */
     public function is_pdf_plugin_active() {
-        return class_exists('WPO_WCPDF') || class_exists('WooCommerce_PDF_Invoices');
+        return class_exists('WPO_WCPDF')
+            || function_exists('WPO_WCPDF')
+            || class_exists('WooCommerce_PDF_Invoices');
     }
 };
