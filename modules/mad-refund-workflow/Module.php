@@ -82,6 +82,7 @@ return new class($core) implements MAD_Suite_Module {
         add_action('wp_ajax_mad_refund_save_data', [$this, 'ajax_save_refund_data']);
         add_action('wp_ajax_mad_refund_calculate_totals', [$this, 'ajax_calculate_totals']);
         add_action('wp_ajax_mad_refund_get_order_items', [$this, 'ajax_get_order_items']);
+        add_action('wp_ajax_mad_refund_cancel', [$this, 'ajax_cancel_prerefund']);
 
         // Admin scripts and styles
         add_action('admin_enqueue_scripts', [$this, 'enqueue_admin_assets']);
@@ -279,6 +280,10 @@ return new class($core) implements MAD_Suite_Module {
                     'calculating' => __('Calculating...', 'mad-suite'),
                     'includeShipping' => __('Include shipping', 'mad-suite'),
                     'excludeShipping' => __('Exclude shipping', 'mad-suite'),
+                    'confirmCancel' => __('Are you sure you want to cancel this pre-refund? This action cannot be undone.', 'mad-suite'),
+                    'cancelling' => __('Cancelling...', 'mad-suite'),
+                    'cancelled' => __('Pre-refund cancelled successfully', 'mad-suite'),
+                    'confirmCancellation' => __('Confirm Cancellation', 'mad-suite'),
                 ],
                 'currency' => get_woocommerce_currency_symbol(),
                 'decimals' => wc_get_price_decimals(),
@@ -578,6 +583,69 @@ return new class($core) implements MAD_Suite_Module {
                 'total' => $shipping_total,
                 'tax' => $shipping_tax,
             ],
+        ]);
+    }
+
+    /**
+     * AJAX: Cancel pre-refund
+     */
+    public function ajax_cancel_prerefund() {
+        check_ajax_referer('mad_refund_nonce', 'nonce');
+
+        if (!current_user_can('edit_shop_orders')) {
+            wp_send_json_error(['message' => __('Permission denied', 'mad-suite')]);
+        }
+
+        $order_id = absint($_POST['order_id'] ?? 0);
+        if (!$order_id) {
+            wp_send_json_error(['message' => __('Invalid order ID', 'mad-suite')]);
+        }
+
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            wp_send_json_error(['message' => __('Order not found', 'mad-suite')]);
+        }
+
+        $new_status = sanitize_text_field($_POST['new_status'] ?? 'processing');
+        $refund_data = $order->get_meta('_pending_refund_data');
+
+        // Build summary for order note
+        if (!empty($refund_data) && !empty($refund_data['items'])) {
+            $items_summary = [];
+            foreach ($refund_data['items'] as $item) {
+                $items_summary[] = sprintf('%s x%d', $item['name'], $item['quantity']);
+            }
+
+            $note = sprintf(
+                __('Pre-refund CANCELLED by %1$s. Previous data: %2$s | Total: %3$s | Created: %4$s', 'mad-suite'),
+                wp_get_current_user()->display_name,
+                implode(', ', $items_summary),
+                wc_price($refund_data['total'] ?? 0),
+                isset($refund_data['created_date'])
+                    ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $refund_data['created_date'])
+                    : __('Unknown', 'mad-suite')
+            );
+
+            $order->add_order_note($note);
+        }
+
+        // Delete the pre-refund data
+        $order->delete_meta_data('_pending_refund_data');
+
+        // Change order status
+        $order->set_status($new_status, __('Pre-refund cancelled. Status reverted by admin.', 'mad-suite'));
+        $order->save();
+
+        // Log the action
+        $this->logger->log(sprintf(
+            'Pre-refund cancelled for order #%d by user #%d. New status: %s',
+            $order_id,
+            get_current_user_id(),
+            $new_status
+        ));
+
+        wp_send_json_success([
+            'message' => __('Pre-refund cancelled successfully', 'mad-suite'),
         ]);
     }
 

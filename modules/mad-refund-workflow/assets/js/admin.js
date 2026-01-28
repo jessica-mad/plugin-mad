@@ -48,6 +48,11 @@
             notesField: null,
             saveButton: null,
             clearButton: null,
+            cancelButton: null,
+            cancelModal: null,
+            cancelConfirm: null,
+            cancelDismiss: null,
+            newStatusSelect: null,
             statusMessage: null,
             subtotalEl: null,
             taxEl: null,
@@ -91,6 +96,11 @@
             this.elements.notesField = this.elements.container.find('#mad-refund-notes');
             this.elements.saveButton = this.elements.container.find('#mad-refund-save');
             this.elements.clearButton = this.elements.container.find('#mad-refund-clear');
+            this.elements.cancelButton = this.elements.container.find('#mad-refund-cancel');
+            this.elements.cancelModal = this.elements.container.find('#mad-refund-cancel-modal');
+            this.elements.cancelConfirm = this.elements.container.find('#mad-refund-cancel-confirm');
+            this.elements.cancelDismiss = this.elements.container.find('#mad-refund-cancel-dismiss');
+            this.elements.newStatusSelect = this.elements.container.find('#mad-refund-new-status');
             this.elements.statusMessage = this.elements.container.find('.mad-refund-status');
             this.elements.subtotalEl = this.elements.container.find('#mad-refund-subtotal');
             this.elements.taxEl = this.elements.container.find('#mad-refund-tax');
@@ -134,6 +144,29 @@
             this.elements.clearButton.on('click', function(e) {
                 e.preventDefault();
                 self.clearSelection();
+            });
+
+            // Cancel pre-refund button
+            this.elements.cancelButton.on('click', function(e) {
+                e.preventDefault();
+                self.showCancelModal();
+            });
+
+            // Cancel confirm
+            this.elements.cancelConfirm.on('click', function(e) {
+                e.preventDefault();
+                self.confirmCancelPrerefund();
+            });
+
+            // Cancel dismiss
+            this.elements.cancelDismiss.on('click', function(e) {
+                e.preventDefault();
+                self.hideCancelModal();
+            });
+
+            // Close modal on overlay click
+            this.elements.cancelModal.find('.mad-refund-modal-overlay').on('click', function() {
+                self.hideCancelModal();
             });
 
             // Prevent form submission on enter in quantity fields
@@ -524,6 +557,61 @@
                     $status.fadeOut();
                 }, 5000);
             }
+        },
+
+        /**
+         * Show cancel pre-refund modal
+         */
+        showCancelModal: function() {
+            this.elements.cancelModal.fadeIn(200);
+        },
+
+        /**
+         * Hide cancel pre-refund modal
+         */
+        hideCancelModal: function() {
+            this.elements.cancelModal.fadeOut(200);
+        },
+
+        /**
+         * Confirm cancel pre-refund
+         */
+        confirmCancelPrerefund: function() {
+            const self = this;
+            const newStatus = this.elements.newStatusSelect.val();
+
+            if (!confirm(this.config.strings.confirmCancel || 'Are you sure you want to cancel this pre-refund? This action cannot be undone.')) {
+                return;
+            }
+
+            this.elements.cancelConfirm.prop('disabled', true).text(this.config.strings.cancelling || 'Cancelling...');
+
+            $.ajax({
+                url: this.config.ajaxUrl,
+                type: 'POST',
+                data: {
+                    action: 'mad_refund_cancel',
+                    nonce: this.config.nonce,
+                    order_id: this.config.orderId,
+                    new_status: newStatus
+                },
+                success: function(response) {
+                    if (response.success) {
+                        self.hideCancelModal();
+                        self.showStatus(response.data.message || self.config.strings.cancelled || 'Pre-refund cancelled', 'success');
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 1500);
+                    } else {
+                        self.showStatus(response.data.message || self.config.strings.error, 'error');
+                        self.elements.cancelConfirm.prop('disabled', false).text(self.config.strings.confirmCancellation || 'Confirm Cancellation');
+                    }
+                },
+                error: function() {
+                    self.showStatus(self.config.strings.error, 'error');
+                    self.elements.cancelConfirm.prop('disabled', false).text(self.config.strings.confirmCancellation || 'Confirm Cancellation');
+                }
+            });
         },
 
         /**

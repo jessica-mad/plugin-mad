@@ -111,7 +111,7 @@ class MAD_Refund_Meta_Box {
         }
 
         // Render the full interface
-        $this->render_items_table($order, $refund_data);
+        $this->render_items_table($order, $refund_data, $is_pending_refund);
     }
 
     /**
@@ -146,8 +146,9 @@ class MAD_Refund_Meta_Box {
      *
      * @param WC_Order $order Order object
      * @param array|null $refund_data Existing refund data
+     * @param bool $is_pending_refund Whether order is in pending-refund status
      */
-    private function render_items_table($order, $refund_data = null) {
+    private function render_items_table($order, $refund_data = null, $is_pending_refund = false) {
         $items = $order->get_items();
         $currency = $order->get_currency();
         $saved_items = isset($refund_data['items']) ? $refund_data['items'] : [];
@@ -325,8 +326,50 @@ class MAD_Refund_Meta_Box {
                     <?php esc_html_e('Clear Selection', 'mad-suite'); ?>
                 </button>
 
+                <?php if ($is_pending_refund && !empty($refund_data)) : ?>
+                    <button type="button" id="mad-refund-cancel" class="button mad-refund-cancel-btn">
+                        <span class="dashicons dashicons-undo"></span>
+                        <?php esc_html_e('Cancel Pre-Refund', 'mad-suite'); ?>
+                    </button>
+                <?php endif; ?>
+
                 <span class="mad-refund-status"></span>
             </div>
+
+            <?php if ($is_pending_refund && !empty($refund_data)) : ?>
+            <!-- Cancel Pre-Refund Modal -->
+            <div id="mad-refund-cancel-modal" class="mad-refund-modal" style="display:none;">
+                <div class="mad-refund-modal-overlay"></div>
+                <div class="mad-refund-modal-content">
+                    <h3><?php esc_html_e('Cancel Pre-Refund', 'mad-suite'); ?></h3>
+                    <p><?php esc_html_e('This will remove all pre-refund data and revert the order to the selected status. A record will be saved in the order notes.', 'mad-suite'); ?></p>
+                    <div class="mad-refund-modal-field">
+                        <label for="mad-refund-new-status"><?php esc_html_e('Revert order to status:', 'mad-suite'); ?></label>
+                        <select id="mad-refund-new-status">
+                            <?php
+                            $statuses = wc_get_order_statuses();
+                            // Remove current pending-refund status from options
+                            unset($statuses['wc-pending-refund']);
+                            foreach ($statuses as $status_key => $status_label) :
+                                $clean_key = str_replace('wc-', '', $status_key);
+                            ?>
+                                <option value="<?php echo esc_attr($clean_key); ?>" <?php selected($clean_key, 'processing'); ?>>
+                                    <?php echo esc_html($status_label); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mad-refund-modal-actions">
+                        <button type="button" id="mad-refund-cancel-confirm" class="button button-primary mad-refund-cancel-confirm-btn">
+                            <?php esc_html_e('Confirm Cancellation', 'mad-suite'); ?>
+                        </button>
+                        <button type="button" id="mad-refund-cancel-dismiss" class="button">
+                            <?php esc_html_e('Go Back', 'mad-suite'); ?>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
 
         </div>
         <?php
