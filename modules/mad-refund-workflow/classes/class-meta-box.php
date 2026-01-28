@@ -162,11 +162,12 @@ class MAD_Refund_Meta_Box {
                 <div class="mad-refund-saved-notice">
                     <span class="dashicons dashicons-yes-alt"></span>
                     <?php
+                    $created_user = get_userdata($refund_data['created_by']);
                     printf(
                         /* translators: %1$s: date, %2$s: user name */
                         esc_html__('Pre-refund data saved on %1$s by %2$s', 'mad-suite'),
                         esc_html(date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $refund_data['created_date'])),
-                        esc_html(get_userdata($refund_data['created_by'])->display_name ?? __('Unknown', 'mad-suite'))
+                        esc_html($created_user ? $created_user->display_name : __('Unknown', 'mad-suite'))
                     );
                     ?>
                 </div>

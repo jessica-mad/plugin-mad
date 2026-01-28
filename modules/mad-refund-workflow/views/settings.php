@@ -9,6 +9,23 @@
 
 defined('ABSPATH') || exit;
 
+/**
+ * Helper function to get contrast color (define early so it's available in the template)
+ */
+if (!function_exists('get_contrast_color')) :
+function get_contrast_color($hex) {
+    $hex = ltrim($hex, '#');
+    if (strlen($hex) < 6) {
+        return '#000000';
+    }
+    $r = hexdec(substr($hex, 0, 2));
+    $g = hexdec(substr($hex, 2, 2));
+    $b = hexdec(substr($hex, 4, 2));
+    $luminance = (0.299 * $r + 0.587 * $g + 0.114 * $b) / 255;
+    return $luminance > 0.5 ? '#000000' : '#ffffff';
+}
+endif;
+
 $option_key = MAD_Suite_Core::option_key($this->slug());
 ?>
 <div class="wrap mad-refund-settings-wrap">
@@ -124,18 +141,3 @@ jQuery(document).ready(function($) {
     });
 });
 </script>
-<?php
-
-/**
- * Helper function to get contrast color (only define once)
- */
-if (!function_exists('get_contrast_color')) :
-function get_contrast_color($hex) {
-    $hex = ltrim($hex, '#');
-    $r = hexdec(substr($hex, 0, 2));
-    $g = hexdec(substr($hex, 2, 2));
-    $b = hexdec(substr($hex, 4, 2));
-    $luminance = (0.299 * $r + 0.587 * $g + 0.114 * $b) / 255;
-    return $luminance > 0.5 ? '#000000' : '#ffffff';
-}
-endif;
