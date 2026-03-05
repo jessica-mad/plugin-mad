@@ -17,14 +17,9 @@
 
 if ( ! defined('ABSPATH') ) exit;
 
+// Archivos sin dependencia de WooCommerce: siempre seguros de incluir.
 require_once __DIR__ . '/includes/Logger.php';
 require_once __DIR__ . '/includes/RoleManager.php';
-require_once __DIR__ . '/includes/PriceController.php';
-require_once __DIR__ . '/includes/QuoteCartUX.php';
-require_once __DIR__ . '/includes/QuoteOrders.php';
-require_once __DIR__ . '/includes/QuoteEmailAdmin.php';
-require_once __DIR__ . '/includes/QuoteEmailClient.php';
-require_once __DIR__ . '/includes/QuotePayment.php';
 
 return new class( $core ) implements MAD_Suite_Module {
 
@@ -32,19 +27,17 @@ return new class( $core ) implements MAD_Suite_Module {
     private $slug         = 'quotation';
     private $logger;
     private $role_manager;
-    private $price_ctrl;
-    private $cart_ux;
-    private $orders;
-    private $payment;
+
+    // Objetos que requieren WooCommerce activo — se crean en init().
+    private $price_ctrl  = null;
+    private $cart_ux     = null;
+    private $orders      = null;
+    private $payment     = null;
 
     public function __construct( $core ) {
         $this->core         = $core;
         $this->logger       = new MADSuite\Modules\Quotation\Logger('quotation');
         $this->role_manager = new MADSuite\Modules\Quotation\RoleManager( $this->logger );
-        $this->price_ctrl   = new MADSuite\Modules\Quotation\PriceController( $this->role_manager, $this );
-        $this->cart_ux      = new MADSuite\Modules\Quotation\QuoteCartUX( $this->role_manager, $this );
-        $this->orders       = new MADSuite\Modules\Quotation\QuoteOrders( $this->role_manager, $this, $this->logger );
-        $this->payment      = new MADSuite\Modules\Quotation\QuotePayment( $this->role_manager, $this, $this->logger );
     }
 
     /* ========== Implementación MAD_Suite_Module ========== */
@@ -72,6 +65,21 @@ return new class( $core ) implements MAD_Suite_Module {
             return;
         }
 
+        // Incluir archivos que dependen de WooCommerce (clases WC_Email, WC_Payment_Gateway…)
+        // solo cuando WC está disponible.
+        require_once __DIR__ . '/includes/PriceController.php';
+        require_once __DIR__ . '/includes/QuoteCartUX.php';
+        require_once __DIR__ . '/includes/QuoteOrders.php';
+        require_once __DIR__ . '/includes/QuoteEmailAdmin.php';
+        require_once __DIR__ . '/includes/QuoteEmailClient.php';
+        require_once __DIR__ . '/includes/QuotePayment.php';
+
+        // Instanciar componentes que dependen de WC
+        $this->price_ctrl = new MADSuite\Modules\Quotation\PriceController( $this->role_manager, $this );
+        $this->cart_ux    = new MADSuite\Modules\Quotation\QuoteCartUX( $this->role_manager, $this );
+        $this->orders     = new MADSuite\Modules\Quotation\QuoteOrders( $this->role_manager, $this, $this->logger );
+        $this->payment    = new MADSuite\Modules\Quotation\QuotePayment( $this->role_manager, $this, $this->logger );
+
         // Asegurar que el rol existe en cada carga
         $this->role_manager->create_role_if_not_exists();
 
@@ -93,6 +101,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
     public function admin_init() {
         if ( ! class_exists('WooCommerce') ) return;
+        if ( ! $this->orders ) return; // init() no se ejecutó (WC no estaba activo)
 
         // Ajustes del módulo
         $option_key = MAD_Suite_Core::option_key( $this->slug );

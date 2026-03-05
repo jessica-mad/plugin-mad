@@ -10,6 +10,7 @@
 namespace MADSuite\Modules\Quotation;
 
 if ( ! defined('ABSPATH') ) exit;
+if ( ! class_exists('\WC_Email') ) return;
 
 class QuoteEmailClient extends \WC_Email {
 
