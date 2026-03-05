@@ -100,8 +100,8 @@ class QuoteOrders {
     }
 
     public function init() {
-        // Registrar estados de pedido WC
-        add_action( 'init',              [ $this, 'register_order_statuses' ] );
+        // Registrar estados de pedido WC directamente (ya estamos en init priority 1)
+        $this->register_order_statuses();
         add_filter( 'wc_order_statuses', [ $this, 'add_order_statuses_to_list' ] );
 
         // Registrar pasarela de cotización
@@ -203,8 +203,8 @@ class QuoteOrders {
 
     /* ===== Suprimir emails estándar ===== */
 
-    public function suppress_standard_email( bool $enabled, \WC_Order $order ): bool {
-        if ( $order->get_meta('_mad_is_quote') === '1' ) return false;
+    public function suppress_standard_email( bool $enabled, $order ): bool {
+        if ( $order instanceof \WC_Order && $order->get_meta('_mad_is_quote') === '1' ) return false;
         return $enabled;
     }
 

@@ -114,6 +114,6 @@ class QuoteEmailClient extends \WC_Email {
     }
 
     public function init_form_fields() {
-        $this->form_fields = parent::get_default_email_form_fields();
+        parent::init_form_fields();
     }
 }

@@ -91,6 +91,9 @@ class QuoteEmailAdmin extends \WC_Email {
     }
 
     public function init_form_fields() {
+        parent::init_form_fields(); // sets default WC fields (enabled, subject, heading, email_type)
+
+        // Añadir campo de destinatario al principio
         $this->form_fields = array_merge(
             [
                 'recipient' => [
@@ -102,7 +105,7 @@ class QuoteEmailAdmin extends \WC_Email {
                     'desc_tip'    => true,
                 ],
             ],
-            parent::get_default_email_form_fields()
+            $this->form_fields
         );
     }
 }
