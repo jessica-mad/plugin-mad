@@ -60,10 +60,6 @@ return new class( $core ) implements MAD_Suite_Module {
             return;
         }
 
-        // Load gateway + email classes immediately. 'plugins_loaded' has already fired
-        // by the time init() is called (modules load on the 'init' hook), so we call directly.
-        $this->load_includes();
-
         // Register payment gateway.
         add_filter( 'woocommerce_payment_gateways', [ $this, 'register_gateway' ] );
 
@@ -224,19 +220,16 @@ return new class( $core ) implements MAD_Suite_Module {
     /*  Loaders                                                          */
     /* ================================================================ */
 
-    public function load_includes() {
-        require_once MAD_QUOTES_DIR . 'includes/class-mad-quotes-gateway.php';
-        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-request.php';
-        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-confirmation.php';
-        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-send-quote.php';
-    }
-
     public function register_gateway( $gateways ) {
+        require_once MAD_QUOTES_DIR . 'includes/class-mad-quotes-gateway.php';
         $gateways[] = 'MAD_Quotes_Payment_Gateway';
         return $gateways;
     }
 
     public function register_emails( $email_classes ) {
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-request.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-confirmation.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-send-quote.php';
         $email_classes['MAD_Quotes_Email_New_Request']  = new MAD_Quotes_Email_New_Request();
         $email_classes['MAD_Quotes_Email_Confirmation'] = new MAD_Quotes_Email_Confirmation();
         $email_classes['MAD_Quotes_Email_Send_Quote']   = new MAD_Quotes_Email_Send_Quote();
