@@ -1,0 +1,29 @@
+/**
+ * MAD Quotes – Frontend CSS
+ *
+ * Hides prices on cart, checkout, thank-you and order-view pages
+ * when the cart/order contains quotable products.
+ */
+
+/* Hide WooCommerce price elements */
+.woocommerce-Price-amount,
+.woocommerce-Price-currencySymbol,
+.cart-subtotal .amount,
+.order-total .amount,
+.woocommerce-checkout-review-order-table .amount,
+.woocommerce-table--order-details .amount {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+/* Blank out totals rows completely */
+.cart-subtotal,
+.order-total,
+.woocommerce-table--order-details tfoot tr {
+    visibility: hidden !important;
+}
+
+/* Hide shipping row cost */
+.shipping .amount {
+    display: none !important;
+}
