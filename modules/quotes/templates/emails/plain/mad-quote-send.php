@@ -23,8 +23,36 @@ if ( ! empty( $admin_note ) ) {
     echo esc_html( $admin_note ) . "\n\n";
 }
 
-echo esc_html__( 'Pedido #', 'mad-suite' ) . esc_html( $order->get_order_number() ) . "\n\n";
-echo wc_get_email_order_items( $order, [ 'plain_text' => true ] ); // phpcs:ignore
+// Tabla de artículos con precios de presupuesto
+echo esc_html__( 'DETALLE DEL PRESUPUESTO', 'mad-suite' ) . "\n";
+echo str_repeat( '-', 50 ) . "\n";
+
+$grand_total = 0.0;
+foreach ( $order->get_items() as $item_id => $item ) {
+    $product_id  = $item->get_product_id();
+    $qty         = $item->get_quantity();
+
+    $saved_price = $item->get_meta( '_mad_quote_line_price' );
+    $unit_price  = ( $saved_price !== '' && false !== $saved_price )
+        ? (float) $saved_price
+        : mad_quotes_get_product_quote_price( $product_id );
+    $line_total  = $unit_price * $qty;
+    $grand_total += $line_total;
+
+    printf(
+        "%s (x%d): %s c/u — %s\n",
+        esc_html( $item->get_name() ),
+        $qty,
+        wp_strip_all_tags( wc_price( $unit_price ) ),
+        wp_strip_all_tags( wc_price( $line_total ) )
+    );
+}
+
+echo str_repeat( '-', 50 ) . "\n";
+printf(
+    esc_html__( 'Total del presupuesto: %s', 'mad-suite' ) . "\n",
+    wp_strip_all_tags( wc_price( $grand_total ) )
+);
 
 echo "\n";
 echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";

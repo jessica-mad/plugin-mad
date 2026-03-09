@@ -2,8 +2,8 @@
 /**
  * MAD Quotes – Admin JS
  *
- * Handles the "Quote Complete" and "Send Quote" buttons on the
- * WooCommerce order edit screen.
+ * Handles the "Quote Complete" and "Send / Resend Quote" buttons on the
+ * WooCommerce order edit screen, including per-line price editing.
  */
 ( function ( $ ) {
     'use strict';
@@ -11,7 +11,7 @@
     var params = ( typeof mad_quotes_admin_params !== 'undefined' ) ? mad_quotes_admin_params : {};
 
     // ------------------------------------------------------------------ //
-    //  "Quote Complete" button
+    //  "Quote Complete" button                                             //
     // ------------------------------------------------------------------ //
     $( document ).on( 'click', '#mad_quote_complete', function () {
         var $btn = $( this );
@@ -33,23 +33,37 @@
     } );
 
     // ------------------------------------------------------------------ //
-    //  "Send Quote" / "Resend Quote" button
+    //  "Send Quote" / "Resend Quote" button                               //
+    //  Collects editable line prices before posting.                      //
     // ------------------------------------------------------------------ //
     $( document ).on( 'click', '#mad_send_quote', function () {
         var $btn  = $( this );
         var $note = $( '#mad_quote_admin_note' );
+        var $msg  = $( '#mad_quote_msg' );
+
+        // Collect per-line prices: { item_id: price }
+        var line_prices = {};
+        $( '.mad-quote-line-price' ).each( function () {
+            var item_id = $( this ).data( 'item-id' );
+            if ( item_id ) {
+                line_prices[ item_id ] = $( this ).val();
+            }
+        } );
+
         $btn.prop( 'disabled', true ).text( params.i18n_sending || 'Enviando…' );
+        $msg.text( '' );
 
         $.post( params.ajax_url, {
-            action    : 'mad_quotes_send_quote',
-            order_id  : params.order_id,
-            admin_note: $note.val() || '',
-            nonce     : params.nonce_send_quote,
+            action      : 'mad_quotes_send_quote',
+            order_id    : params.order_id,
+            admin_note  : $note.val() || '',
+            line_prices : line_prices,
+            nonce       : params.nonce_send_quote,
         } )
         .done( function ( response ) {
             if ( response === 'quote-sent' ) {
                 $btn.text( params.i18n_resend || 'Reenviar presupuesto' ).prop( 'disabled', false );
-                $( '#mad_quote_msg' ).text( params.i18n_sent || '✔ Presupuesto enviado' );
+                $msg.text( params.i18n_sent || '✔ Presupuesto enviado' );
             } else {
                 $btn.prop( 'disabled', false );
                 alert( params.i18n_error || 'Error. Inténtalo de nuevo.' );

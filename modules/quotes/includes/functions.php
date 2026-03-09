@@ -108,18 +108,32 @@ function mad_quotes_get_settings() {
     $opts       = get_option( $option_key, [] );
 
     $defaults = [
-        'enable_global_quote'        => false,
-        'enable_global_prices'       => false,
-        'hide_address_fields'        => false,
-        'add_to_cart_button_text'    => '',
-        'place_order_text'           => '',
-        'cart_page_name'             => '',
-        'checkout_page_name'         => '',
-        'proceed_checkout_btn_label' => '',
-        'quote_expiry_days'          => 0,
+        'quote_roles'       => [],
+        'quote_expiry_days' => 0,
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );
+}
+
+/**
+ * Get the quote price for a product.
+ *
+ * Returns the custom quote price (_mad_quote_price) if set,
+ * otherwise falls back to the product's regular price.
+ *
+ * @param  int $product_id
+ * @return float
+ */
+function mad_quotes_get_product_quote_price( $product_id ) {
+    $product_id  = absint( $product_id );
+    $quote_price = get_post_meta( $product_id, '_mad_quote_price', true );
+
+    if ( $quote_price !== '' && false !== $quote_price ) {
+        return (float) $quote_price;
+    }
+
+    $product = wc_get_product( $product_id );
+    return $product ? (float) $product->get_price() : 0.0;
 }
 
 /**
