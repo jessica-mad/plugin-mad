@@ -60,8 +60,9 @@ return new class( $core ) implements MAD_Suite_Module {
             return;
         }
 
-        // Load gateway + emails on plugins_loaded so WC classes exist.
-        add_action( 'plugins_loaded', [ $this, 'load_includes' ], 12 );
+        // Load gateway + email classes immediately. 'plugins_loaded' has already fired
+        // by the time init() is called (modules load on the 'init' hook), so we call directly.
+        $this->load_includes();
 
         // Register payment gateway.
         add_filter( 'woocommerce_payment_gateways', [ $this, 'register_gateway' ] );

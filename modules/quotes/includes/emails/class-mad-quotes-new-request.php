@@ -105,16 +105,39 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
     }
 
     public function init_form_fields() {
-        $this->form_fields = array_merge(
-            [
-                'recipient' => [
-                    'title'       => __( 'Destinatario', 'mad-suite' ),
-                    'type'        => 'text',
-                    'description' => sprintf( __( 'Separados por coma. Por defecto: %s', 'mad-suite' ), get_option( 'admin_email' ) ),
-                    'default'     => get_option( 'admin_email' ),
-                ],
+        $this->form_fields = [
+            'enabled'    => [
+                'title'   => __( 'Activar/desactivar', 'mad-suite' ),
+                'type'    => 'checkbox',
+                'label'   => __( 'Activar esta notificación', 'mad-suite' ),
+                'default' => 'yes',
             ],
-            parent::get_form_fields()
-        );
+            'recipient'  => [
+                'title'       => __( 'Destinatario', 'mad-suite' ),
+                'type'        => 'text',
+                'description' => sprintf( __( 'Separados por coma. Por defecto: %s', 'mad-suite' ), get_option( 'admin_email' ) ),
+                'default'     => get_option( 'admin_email' ),
+            ],
+            'subject'    => [
+                'title'       => __( 'Asunto', 'mad-suite' ),
+                'type'        => 'text',
+                'description' => sprintf( __( 'Asunto del email. Deja vacío para usar el predeterminado: <code>%s</code>.', 'mad-suite' ), $this->get_default_subject() ),
+                'default'     => '',
+            ],
+            'heading'    => [
+                'title'       => __( 'Cabecera', 'mad-suite' ),
+                'type'        => 'text',
+                'description' => sprintf( __( 'Título del email. Deja vacío para usar el predeterminado: <code>%s</code>.', 'mad-suite' ), $this->get_default_heading() ),
+                'default'     => '',
+            ],
+            'email_type' => [
+                'title'       => __( 'Tipo de email', 'mad-suite' ),
+                'type'        => 'select',
+                'description' => __( 'Elige el formato del email.', 'mad-suite' ),
+                'default'     => 'html',
+                'class'       => 'email_type wc-enhanced-select',
+                'options'     => $this->get_email_type_options(),
+            ],
+        ];
     }
 }
