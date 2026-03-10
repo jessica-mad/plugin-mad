@@ -36,6 +36,12 @@ return new class( $core ) implements MAD_Suite_Module {
     /** @var array Cache de precios originales antes de que el plugin original los filtre. */
     private $price_cache = [];
 
+    /** @var array Gateways disponibles ANTES de que el plugin original los filtre (capturados a prioridad 1). */
+    private $original_gateways = [];
+
+    /** @var bool Flag para evitar recursión infinita en enforce_quote_status(). */
+    private static $enforcing_status = false;
+
     public function __construct( $core ) {
         $this->core = $core;
     }
@@ -121,8 +127,14 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'qwc_hide_price_html',     [ $this, 'filter_by_role' ] );
         add_filter( 'qwc_disable_add_to_cart', [ $this, 'filter_by_role' ] );
 
-        // ── Rol: quitar gateway de presupuesto para usuarios sin rol habilitado ──
+        // ── Gateways: capturar los originales antes de que el plugin de presupuestos los filtre ──
+        add_filter( 'woocommerce_available_payment_gateways', [ $this, 'capture_original_gateways' ], 1 );
+        // Para usuarios con rol de presupuesto: dejar experiencia de presupuesto.
+        // Para el resto: restaurar gateways originales y quitar quotes-wc.
         add_filter( 'woocommerce_available_payment_gateways', [ $this, 'filter_quote_gateway' ], 999 );
+
+        // ── Checkout presupuesto: cambiar texto del botón "Realizar pedido" ──────
+        add_filter( 'woocommerce_order_button_text', [ $this, 'quote_checkout_button_text' ] );
 
         // ── Carrito: ocultar precios de línea y totales ───────────────
         add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ], 10, 2 );
@@ -137,6 +149,10 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'woocommerce_checkout_update_order_meta',   [ $this, 'save_quote_order_meta' ] );
         // Forzar estado "Presupuesto pendiente" DESPUÉS de que el gateway llame a process_payment()
         add_action( 'woocommerce_checkout_order_processed',     [ $this, 'finalize_quote_order_status' ], 999, 1 );
+        // Interceptar cualquier cambio de estado no permitido para pedidos de presupuesto
+        add_action( 'woocommerce_order_status_changed',         [ $this, 'enforce_quote_status' ], 999, 3 );
+        // Red de seguridad: corregir estado en la página de confirmación (after payment processing)
+        add_action( 'woocommerce_thankyou',                     [ $this, 'enforce_quote_status_thankyou' ], 999 );
         add_filter( 'woocommerce_can_reduce_order_stock',       [ $this, 'prevent_stock_reduction' ], 10, 2 );
         add_filter( 'woocommerce_cancel_unpaid_order',          [ $this, 'prevent_cancel' ], 10, 2 );
         add_filter( 'woocommerce_my_account_my_orders_actions', [ $this, 'my_orders_actions' ], 10, 2 );
@@ -185,6 +201,13 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_roles_multiselect',
             'mad_quotes_roles',
             __( 'Si no marcas ninguno, todos los usuarios verán la experiencia de presupuesto.', 'mad-suite' )
+        );
+        $this->register_field(
+            'quote_button_text',
+            __( 'Texto del botón de solicitud', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_roles',
+            __( 'Texto del botón en páginas de producto y carrito. Ej: "Solicitar presupuesto". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
         );
 
         // ── Sección: Caducidad ─────────────────────────────────────────
@@ -298,7 +321,10 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $this->current_user_is_quote_role() ) {
             return __( 'Añadir al carrito', 'woocommerce' );
         }
-        return $text;
+        // Para usuarios con rol de presupuesto: aplicar texto configurable si está definido
+        $settings    = mad_quotes_get_settings();
+        $custom_text = trim( $settings['quote_button_text'] ?? '' );
+        return $custom_text !== '' ? $custom_text : $text;
     }
 
     public function filter_by_role( $value ) {
@@ -353,14 +379,22 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $this->cart_is_quote_experience() ) return;
 
         echo '<style>
-            /* MAD Quotes: ocultar importes en carrito y checkout */
+            /* MAD Quotes: ocultar importes en carrito */
             .cart-subtotal,
             .shipping,
             .tax-total,
-            .order-total,
-            .woocommerce-checkout-review-order-table tfoot {
-                display: none !important;
-            }
+            .order-total { display: none !important; }
+
+            /* MAD Quotes: ocultar columna de precios en la tabla de revisión del checkout */
+            .woocommerce-checkout-review-order-table tfoot,
+            .woocommerce-checkout-review-order-table th.product-total,
+            .woocommerce-checkout-review-order-table td.product-total { display: none !important; }
+
+            /* MAD Quotes: ocultar sección de métodos de pago (el gateway quotes-wc
+               queda seleccionado por defecto en el campo oculto del formulario) */
+            .woocommerce-checkout #payment ul.wc_payment_methods,
+            .woocommerce-checkout #payment .payment_box,
+            .woocommerce-checkout #payment > h3 { display: none !important; }
         </style>';
     }
 
@@ -383,7 +417,15 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         $fields['shipping'] = [];
-        unset( $fields['order'] );
+
+        // Mantener solo las notas del pedido (útiles para que el cliente explique su solicitud)
+        if ( isset( $fields['order'] ) ) {
+            foreach ( array_keys( $fields['order'] ) as $key ) {
+                if ( $key !== 'order_comments' ) {
+                    unset( $fields['order'][ $key ] );
+                }
+            }
+        }
 
         return $fields;
     }
@@ -428,13 +470,72 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Oculta el gateway "quotes-wc" para usuarios sin rol de presupuesto habilitado.
+     * Captura los gateways disponibles ANTES de que el plugin original los filtre (prioridad 1).
+     * Necesario para poder restaurarlos a los usuarios sin rol de presupuesto.
+     */
+    public function capture_original_gateways( $gateways ) {
+        $this->original_gateways = $gateways;
+        return $gateways;
+    }
+
+    /**
+     * Para usuarios con rol de presupuesto: carrito normal.
+     * Para el resto: restaura los gateways originales (WC estándar) y quita quotes-wc.
+     *
+     * El plugin "Quotes for WooCommerce" elimina todos los gateways normales cuando hay
+     * productos de presupuesto en el carrito. Aquí revertimos eso para roles no habilitados.
      */
     public function filter_quote_gateway( $gateways ) {
-        if ( ! $this->current_user_is_quote_role() ) {
-            unset( $gateways['quotes-wc'] );
+        if ( $this->current_user_is_quote_role() ) {
+            return $gateways; // Experiencia de presupuesto: dejar que el plugin original gestione
         }
-        return $gateways;
+        // Experiencia normal: restaurar gateways originales y eliminar quotes-wc
+        $restored = ! empty( $this->original_gateways ) ? $this->original_gateways : $gateways;
+        unset( $restored['quotes-wc'] );
+        return $restored;
+    }
+
+    /**
+     * Intercepta cambios de estado no permitidos en pedidos de presupuesto.
+     * Fires cuando el gateway cambia el estado a 'pending' durante process_payment().
+     */
+    public function enforce_quote_status( $order_id, $from_status, $to_status ) {
+        if ( self::$enforcing_status ) return;
+        // Estas transiciones están permitidas
+        $allowed = [ 'quote-pending', 'quote-sent', 'cancelled', 'completed', 'refunded', 'failed', 'trash' ];
+        if ( in_array( $to_status, $allowed, true ) ) return;
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+
+        self::$enforcing_status = true;
+        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+        $order->save();
+        self::$enforcing_status = false;
+    }
+
+    /**
+     * Red de seguridad: asegura el estado correcto en la página de confirmación,
+     * después de que todo el procesamiento de pago ha terminado.
+     */
+    public function enforce_quote_status_thankyou( $order_id ) {
+        if ( self::$enforcing_status ) return;
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( $order->get_status() === 'quote-pending' ) return;
+
+        self::$enforcing_status = true;
+        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+        $order->save();
+        self::$enforcing_status = false;
+    }
+
+    /**
+     * Cambia el texto del botón "Realizar pedido" en el checkout de presupuesto.
+     */
+    public function quote_checkout_button_text( $text ) {
+        if ( ! $this->cart_is_quote_experience() ) return $text;
+        return __( 'Solicitar presupuesto', 'mad-suite' );
     }
 
     public function prevent_cancel( $return, $order ) {
@@ -816,6 +917,19 @@ return new class( $core ) implements MAD_Suite_Module {
         );
     }
 
+    public function field_text( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        printf(
+            '<input type="text" name="%1$s[%2$s]" value="%3$s" class="regular-text"><br><span class="description">%4$s</span>',
+            esc_attr( $opt_key ),
+            esc_attr( $key ),
+            esc_attr( $settings[ $key ] ?? '' ),
+            esc_html( $args['desc'] ?? '' )
+        );
+    }
+
     public function field_number( $args ) {
         $settings = mad_quotes_get_settings();
         $key      = $args['key'];
@@ -868,6 +982,8 @@ return new class( $core ) implements MAD_Suite_Module {
             : [];
 
         $clean['quote_expiry_days'] = absint( $input['quote_expiry_days'] ?? 0 );
+
+        $clean['quote_button_text'] = sanitize_text_field( $input['quote_button_text'] ?? '' );
 
         return $clean;
     }
