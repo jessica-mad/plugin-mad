@@ -111,15 +111,18 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_get_price_html',      [ $this, 'cache_original_price' ], 1, 2 );
         add_filter( 'woocommerce_variable_price_html', [ $this, 'cache_original_price' ], 1, 2 );
 
-        // ── Rol: restaurar precio/botón para roles no habilitados (prioridad 20) ──
-        add_filter( 'woocommerce_get_price_html',                  [ $this, 'maybe_restore_price' ],  20, 2 );
-        add_filter( 'woocommerce_variable_price_html',             [ $this, 'maybe_restore_price' ],  20, 2 );
-        add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 20 );
-        add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 20 );
+        // ── Rol: restaurar precio/botón para roles no habilitados (prioridad 999 para sobreescribir al plugin original) ──
+        add_filter( 'woocommerce_get_price_html',                  [ $this, 'maybe_restore_price' ],  999, 2 );
+        add_filter( 'woocommerce_variable_price_html',             [ $this, 'maybe_restore_price' ],  999, 2 );
+        add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
+        add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
 
         // ── Rol: filtros nativos del plugin original (si los expone) ─────────────
         add_filter( 'qwc_hide_price_html',     [ $this, 'filter_by_role' ] );
         add_filter( 'qwc_disable_add_to_cart', [ $this, 'filter_by_role' ] );
+
+        // ── Rol: quitar gateway de presupuesto para usuarios sin rol habilitado ──
+        add_filter( 'woocommerce_available_payment_gateways', [ $this, 'filter_quote_gateway' ], 999 );
 
         // ── Carrito: ocultar precios de línea y totales ───────────────
         add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ], 10, 2 );
@@ -132,6 +135,9 @@ return new class( $core ) implements MAD_Suite_Module {
 
         // ── Ciclo de vida del pedido ───────────────────────────────────
         add_action( 'woocommerce_checkout_update_order_meta',   [ $this, 'save_quote_order_meta' ] );
+        // Forzar estado "Presupuesto pendiente" DESPUÉS de que el gateway llame a process_payment()
+        add_action( 'woocommerce_checkout_order_processed',     [ $this, 'finalize_quote_order_status' ], 999, 1 );
+        add_filter( 'woocommerce_can_reduce_order_stock',       [ $this, 'prevent_stock_reduction' ], 10, 2 );
         add_filter( 'woocommerce_cancel_unpaid_order',          [ $this, 'prevent_cancel' ], 10, 2 );
         add_filter( 'woocommerce_my_account_my_orders_actions', [ $this, 'my_orders_actions' ], 10, 2 );
 
@@ -390,6 +396,46 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
     /*  Ciclo de vida del pedido                                         */
     /* ================================================================ */
+
+    /**
+     * Fuerza el estado "Presupuesto pendiente" después de que el gateway haya procesado el pago.
+     * Se ejecuta con prioridad 999 en woocommerce_checkout_order_processed para sobreescribir
+     * cualquier cambio de estado que el gateway quotes-wc haga en process_payment().
+     */
+    public function finalize_quote_order_status( $order_id ) {
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) return;
+        if ( $order->get_payment_method() !== 'quotes-wc'
+            && '1' !== $order->get_meta( '_mad_qwc_quote' )
+        ) {
+            return;
+        }
+        if ( $order->get_status() === 'quote-pending' ) return;
+        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+        $order->save();
+    }
+
+    /**
+     * Impide que WooCommerce reduzca el stock para pedidos de presupuesto.
+     */
+    public function prevent_stock_reduction( $can_reduce, $order ) {
+        if ( in_array( $order->get_status(), [ 'quote-pending', 'quote-sent' ], true )
+            || '1' === $order->get_meta( '_mad_qwc_quote' )
+        ) {
+            return false;
+        }
+        return $can_reduce;
+    }
+
+    /**
+     * Oculta el gateway "quotes-wc" para usuarios sin rol de presupuesto habilitado.
+     */
+    public function filter_quote_gateway( $gateways ) {
+        if ( ! $this->current_user_is_quote_role() ) {
+            unset( $gateways['quotes-wc'] );
+        }
+        return $gateways;
+    }
 
     public function prevent_cancel( $return, $order ) {
         $status = $order->get_status();
