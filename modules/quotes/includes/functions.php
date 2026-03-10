@@ -118,22 +118,16 @@ function mad_quotes_get_settings() {
 /**
  * Get the quote price for a product.
  *
- * Returns the custom quote price (_mad_quote_price) if set,
- * otherwise falls back to the product's regular price.
+ * Uses the native WooCommerce Regular Price as the quote price.
+ * The Sale Price is reserved for professional users who buy directly.
  *
  * @param  int $product_id
  * @return float
  */
 function mad_quotes_get_product_quote_price( $product_id ) {
-    $product_id  = absint( $product_id );
-    $quote_price = get_post_meta( $product_id, '_mad_quote_price', true );
-
-    if ( $quote_price !== '' && false !== $quote_price ) {
-        return (float) $quote_price;
-    }
-
-    $product = wc_get_product( $product_id );
-    return $product ? (float) $product->get_price() : 0.0;
+    $product = wc_get_product( absint( $product_id ) );
+    if ( ! $product ) return 0.0;
+    return (float) $product->get_regular_price();
 }
 
 /**

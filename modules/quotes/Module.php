@@ -657,24 +657,19 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     public function product_data_panel() {
-        global $post;
-        $product_id  = $post->ID;
-        $quote_price = get_post_meta( $product_id, '_mad_quote_price', true );
         ?>
         <div id="mad_quotes_product_data" class="panel woocommerce_options_panel">
             <div class="options_group">
-                <p class="form-field">
-                    <label for="mad_quote_price">
-                        <?php esc_html_e( 'Precio del presupuesto', 'mad-suite' ); ?>
-                    </label>
-                    <input type="text"
-                           id="mad_quote_price"
-                           name="mad_quote_price"
-                           value="<?php echo esc_attr( $quote_price ); ?>"
-                           class="short wc_input_price"
-                           placeholder="<?php esc_attr_e( 'Dejar vacío para usar el precio regular', 'mad-suite' ); ?>">
-                    <span class="description">
-                        <?php esc_html_e( 'Precio que verá el cliente cuando el admin envíe el presupuesto. Si se deja vacío se usa el precio regular del producto.', 'mad-suite' ); ?>
+                <p class="form-field" style="padding:12px 12px 12px 162px;">
+                    <span style="display:block;background:#f0f6fc;border-left:4px solid #2980b9;padding:10px 14px;border-radius:2px;">
+                        <strong><?php esc_html_e( 'Precio de cotización', 'mad-suite' ); ?></strong>
+                        &rarr; <?php esc_html_e( 'Precio regular del producto.', 'mad-suite' ); ?><br>
+                        <?php esc_html_e( 'Es el precio que el admin enviará al cliente en el email de presupuesto (editable antes de enviar).', 'mad-suite' ); ?>
+                    </span>
+                    <span style="display:block;background:#f0faf0;border-left:4px solid #27ae60;padding:10px 14px;border-radius:2px;margin-top:8px;">
+                        <strong><?php esc_html_e( 'Precio de profesionales', 'mad-suite' ); ?></strong>
+                        &rarr; <?php esc_html_e( 'Precio de oferta del producto.', 'mad-suite' ); ?><br>
+                        <?php esc_html_e( 'Los usuarios con rol profesional ven y pagan este precio directamente, sin pasar por presupuesto.', 'mad-suite' ); ?>
                     </span>
                 </p>
             </div>
@@ -683,10 +678,9 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     public function save_product_meta( $post_id ) {
-        $quote_price = isset( $_POST['mad_quote_price'] )
-            ? wc_format_decimal( sanitize_text_field( wp_unslash( $_POST['mad_quote_price'] ) ) )
-            : '';
-        update_post_meta( $post_id, '_mad_quote_price', $quote_price );
+        // La configuración de precios usa los campos nativos de WooCommerce:
+        // Precio regular → cotización | Precio de oferta → profesionales.
+        // No hay metadatos adicionales que guardar.
     }
 
     /* ================================================================ */
