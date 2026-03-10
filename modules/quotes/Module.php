@@ -69,10 +69,7 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         // ── Dependencia: Quotes for WooCommerce ───────────────────────
-        if ( ! function_exists( 'is_plugin_active' ) ) {
-            include_once ABSPATH . 'wp-admin/includes/plugin.php';
-        }
-        if ( ! is_plugin_active( 'quotes-wc/quotes-wc.php' ) ) {
+        if ( ! $this->is_quotes_plugin_active() ) {
             add_action( 'admin_notices', function () {
                 echo '<div class="notice notice-error"><p>' .
                     wp_kses(
@@ -566,6 +563,46 @@ return new class( $core ) implements MAD_Suite_Module {
         $order->save();
 
         return true;
+    }
+
+    /**
+     * Comprueba si algún plugin de "Quotes for WooCommerce" está activo.
+     *
+     * Prueba primero los slugs conocidos; si ninguno coincide, escanea todos
+     * los plugins activos buscando cualquiera cuyo path contenga "quote" y
+     * "wc" o "woo" (detección flexible ante distintos nombres de archivo).
+     */
+    private function is_quotes_plugin_active(): bool {
+        if ( ! function_exists( 'is_plugin_active' ) ) {
+            include_once ABSPATH . 'wp-admin/includes/plugin.php';
+        }
+
+        $known_slugs = [
+            'quotes-wc/quotes-wc.php',
+            'quotes-for-woocommerce/quotes-for-woocommerce.php',
+            'woocommerce-quotes/woocommerce-quotes.php',
+            'woo-quotes/woo-quotes.php',
+        ];
+
+        foreach ( $known_slugs as $slug ) {
+            if ( is_plugin_active( $slug ) ) {
+                return true;
+            }
+        }
+
+        // Escaneo flexible: cualquier plugin activo cuyo path contenga
+        // "quote" junto con "wc" o "woo" (cubre renombramientos y forks).
+        $active = (array) apply_filters( 'active_plugins', get_option( 'active_plugins', [] ) );
+        foreach ( $active as $plugin_file ) {
+            $lower = strtolower( $plugin_file );
+            if ( strpos( $lower, 'quote' ) !== false
+                && ( strpos( $lower, 'wc' ) !== false || strpos( $lower, 'woo' ) !== false )
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
