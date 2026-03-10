@@ -5,7 +5,10 @@
  * Extensión del plugin "Quotes for WooCommerce".
  * Delega al plugin original el gateway de pago, los emails básicos y la gestión
  * del carrito; MAD añade:
+ *  - Estados de pedido personalizados (Presupuesto pendiente / enviado).
  *  - Control de acceso por rol de usuario.
+ *  - Ocultación de precios y totales en carrito y checkout.
+ *  - Checkout simplificado (solo nombre, apellido y email).
  *  - Precio de presupuesto configurable por producto.
  *  - Email con tabla de precios y nota opcional del admin.
  *  - Edición de precios por línea desde el pedido y reenvío.
@@ -47,7 +50,7 @@ return new class( $core ) implements MAD_Suite_Module {
     public function menu_slug()  { return MAD_Suite_Core::MENU_SLUG_ROOT . '-' . $this->slug; }
 
     public function description() {
-        return __( 'Extensión del plugin "Quotes for WooCommerce". Añade control por rol, precios de presupuesto por producto, email con precios/nota y edición/reenvío desde el pedido.', 'mad-suite' );
+        return __( 'Extensión del plugin "Quotes for WooCommerce". Añade estados personalizados, control por rol, precios de presupuesto, email con precios/nota y edición/reenvío desde el pedido.', 'mad-suite' );
     }
 
     public function required_plugins() {
@@ -83,6 +86,27 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $this->active = true;
 
+        // ── Estados de pedido personalizados ──────────────────────────
+        register_post_status( 'wc-quote-pending', [
+            'label'                     => _x( 'Presupuesto pendiente', 'Order status', 'mad-suite' ),
+            'public'                    => false,
+            'exclude_from_search'       => false,
+            'show_in_admin_all_list'    => true,
+            'show_in_admin_status_list' => true,
+            'label_count'               => _n_noop( 'Presupuesto pendiente (%s)', 'Presupuestos pendientes (%s)', 'mad-suite' ),
+        ] );
+        register_post_status( 'wc-quote-sent', [
+            'label'                     => _x( 'Presupuesto enviado', 'Order status', 'mad-suite' ),
+            'public'                    => false,
+            'exclude_from_search'       => false,
+            'show_in_admin_all_list'    => true,
+            'show_in_admin_status_list' => true,
+            'label_count'               => _n_noop( 'Presupuesto enviado (%s)', 'Presupuestos enviados (%s)', 'mad-suite' ),
+        ] );
+        add_filter( 'wc_order_statuses',                           [ $this, 'add_wc_order_statuses' ] );
+        add_filter( 'woocommerce_valid_order_statuses_for_payment', [ $this, 'valid_payment_statuses' ] );
+        add_action( 'admin_head', [ $this, 'order_status_css' ] );
+
         // ── Rol: cachear precio HTML antes de que el plugin original lo modifique ──
         add_filter( 'woocommerce_get_price_html',      [ $this, 'cache_original_price' ], 1, 2 );
         add_filter( 'woocommerce_variable_price_html', [ $this, 'cache_original_price' ], 1, 2 );
@@ -96,6 +120,15 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Rol: filtros nativos del plugin original (si los expone) ─────────────
         add_filter( 'qwc_hide_price_html',     [ $this, 'filter_by_role' ] );
         add_filter( 'qwc_disable_add_to_cart', [ $this, 'filter_by_role' ] );
+
+        // ── Carrito: ocultar precios de línea y totales ───────────────
+        add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ], 10, 2 );
+        add_filter( 'woocommerce_cart_item_subtotal', [ $this, 'hide_cart_item_price' ], 10, 2 );
+        add_action( 'wp_head', [ $this, 'inject_cart_css' ] );
+
+        // ── Checkout: simplificar campos y deshabilitar envío ─────────
+        add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], 9999 );
+        add_filter( 'woocommerce_cart_needs_shipping', [ $this, 'no_shipping_for_quotes' ] );
 
         // ── Ciclo de vida del pedido ───────────────────────────────────
         add_action( 'woocommerce_checkout_update_order_meta',   [ $this, 'save_quote_order_meta' ] );
@@ -192,6 +225,28 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /* ================================================================ */
+    /*  Estados de pedido personalizados                                 */
+    /* ================================================================ */
+
+    public function add_wc_order_statuses( $statuses ) {
+        $statuses['wc-quote-pending'] = __( 'Presupuesto pendiente', 'mad-suite' );
+        $statuses['wc-quote-sent']    = __( 'Presupuesto enviado',   'mad-suite' );
+        return $statuses;
+    }
+
+    public function valid_payment_statuses( $statuses ) {
+        $statuses[] = 'quote-sent';
+        return $statuses;
+    }
+
+    public function order_status_css() {
+        echo '<style>
+            .order-status.status-quote-pending { background: #c0392b !important; color: #fff !important; }
+            .order-status.status-quote-sent    { background: #2980b9 !important; color: #fff !important; }
+        </style>';
+    }
+
+    /* ================================================================ */
     /*  Email                                                             */
     /* ================================================================ */
 
@@ -205,10 +260,6 @@ return new class( $core ) implements MAD_Suite_Module {
     /*  Rol: control de acceso                                           */
     /* ================================================================ */
 
-    /**
-     * Devuelve true si el usuario actual tiene un rol habilitado para presupuestos.
-     * Si no hay ningún rol seleccionado en ajustes, todos ven presupuestos.
-     */
     private function current_user_is_quote_role(): bool {
         $settings    = mad_quotes_get_settings();
         $quote_roles = array_filter( (array) ( $settings['quote_roles'] ?? [] ) );
@@ -225,17 +276,11 @@ return new class( $core ) implements MAD_Suite_Module {
         return (bool) array_intersect( $quote_roles, (array) $user->roles );
     }
 
-    /**
-     * Cachea el precio HTML original (prioridad 1, antes de cualquier plugin).
-     */
     public function cache_original_price( $price, $product ) {
         $this->price_cache[ $product->get_id() ] = $price;
         return $price;
     }
 
-    /**
-     * Para usuarios sin rol de presupuesto, restaura el precio HTML original.
-     */
     public function maybe_restore_price( $price, $product ) {
         if ( ! $this->current_user_is_quote_role() ) {
             return $this->price_cache[ $product->get_id() ] ?? $price;
@@ -243,9 +288,6 @@ return new class( $core ) implements MAD_Suite_Module {
         return $price;
     }
 
-    /**
-     * Para usuarios sin rol de presupuesto, restaura el texto del botón "Añadir al carrito".
-     */
     public function maybe_restore_button( $text ) {
         if ( ! $this->current_user_is_quote_role() ) {
             return __( 'Añadir al carrito', 'woocommerce' );
@@ -253,10 +295,6 @@ return new class( $core ) implements MAD_Suite_Module {
         return $text;
     }
 
-    /**
-     * Devuelve false si el usuario no tiene rol de presupuesto.
-     * Útil para filtros nativos del plugin original (qwc_hide_price_html, qwc_disable_add_to_cart…).
-     */
     public function filter_by_role( $value ) {
         if ( ! $this->current_user_is_quote_role() ) {
             return false;
@@ -265,11 +303,100 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /* ================================================================ */
+    /*  Carrito: detección y ocultación de precios                       */
+    /* ================================================================ */
+
+    /**
+     * Devuelve true si el carrito contiene artículos del plugin original de presupuestos.
+     * El plugin "Quotes for WooCommerce" usa el meta 'qwc_quote_status' = 'on' en el producto.
+     */
+    private function cart_contains_quote_items(): bool {
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return false;
+
+        foreach ( WC()->cart->get_cart() as $item ) {
+            if ( get_post_meta( $item['product_id'], 'qwc_quote_status', true ) === 'on' ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * True si el usuario tiene rol de presupuesto Y el carrito tiene artículos de presupuesto.
+     */
+    private function cart_is_quote_experience(): bool {
+        return $this->current_user_is_quote_role() && $this->cart_contains_quote_items();
+    }
+
+    /**
+     * Oculta el precio individual de cada línea del carrito en experiencia de presupuesto.
+     */
+    public function hide_cart_item_price( $price, $cart_item ) {
+        if ( $this->cart_is_quote_experience() ) {
+            return '—';
+        }
+        return $price;
+    }
+
+    /**
+     * Inyecta CSS en carrito/checkout para ocultar subtotales, taxes y total.
+     */
+    public function inject_cart_css() {
+        if ( ! is_cart() && ! is_checkout() ) return;
+        if ( ! $this->cart_is_quote_experience() ) return;
+
+        echo '<style>
+            /* MAD Quotes: ocultar importes en carrito y checkout */
+            .cart-subtotal,
+            .shipping,
+            .tax-total,
+            .order-total,
+            .woocommerce-checkout-review-order-table tfoot {
+                display: none !important;
+            }
+        </style>';
+    }
+
+    /* ================================================================ */
+    /*  Checkout: simplificar campos                                     */
+    /* ================================================================ */
+
+    /**
+     * En experiencia de presupuesto solo pedimos nombre, apellido y email.
+     */
+    public function simplify_quote_checkout_fields( $fields ) {
+        if ( ! $this->cart_is_quote_experience() ) return $fields;
+
+        $keep = [ 'billing_first_name', 'billing_last_name', 'billing_email' ];
+
+        foreach ( array_keys( $fields['billing'] ?? [] ) as $key ) {
+            if ( ! in_array( $key, $keep, true ) ) {
+                unset( $fields['billing'][ $key ] );
+            }
+        }
+
+        $fields['shipping'] = [];
+        unset( $fields['order'] );
+
+        return $fields;
+    }
+
+    public function no_shipping_for_quotes( $needs_shipping ) {
+        if ( $this->cart_is_quote_experience() ) return false;
+        return $needs_shipping;
+    }
+
+    /* ================================================================ */
     /*  Ciclo de vida del pedido                                         */
     /* ================================================================ */
 
     public function prevent_cancel( $return, $order ) {
-        if ( '1' === $order->get_meta( '_mad_qwc_quote' ) || $order->get_payment_method() === 'quotes-wc' ) {
+        $status = $order->get_status();
+        if ( in_array( $status, [ 'quote-pending', 'quote-sent' ], true )
+            || '1' === $order->get_meta( '_mad_qwc_quote' )
+            || $order->get_payment_method() === 'quotes-wc'
+        ) {
             return false;
         }
         return $return;
@@ -279,21 +406,41 @@ return new class( $core ) implements MAD_Suite_Module {
         $order = wc_get_order( $order_id );
         if ( ! $order ) return;
 
-        // El plugin original usa el gateway con ID 'quotes-wc'
-        if ( $order->get_payment_method() === 'quotes-wc' ) {
-            $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
-            $order->update_meta_data( '_mad_qwc_quote', '1' );
-            $order->save();
+        if ( $order->get_payment_method() !== 'quotes-wc' ) return;
+
+        // Marcar como pedido de presupuesto MAD
+        $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
+        $order->update_meta_data( '_mad_qwc_quote', '1' );
+
+        // Poner a 0 todos los importes: se revelarán cuando el admin envíe el presupuesto
+        foreach ( $order->get_items() as $item ) {
+            $item->set_subtotal( 0 );
+            $item->set_total( 0 );
+            $item->save();
         }
+        $order->set_cart_tax( 0 );
+        $order->set_shipping_total( 0 );
+        $order->set_shipping_tax( 0 );
+        $order->set_total( 0 );
+
+        // Cambiar a estado personalizado "Presupuesto pendiente"
+        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+        $order->save();
     }
 
     public function my_orders_actions( $actions, $order ) {
-        if ( $order->has_status( 'pending' ) && $order->get_payment_method() === 'quotes-wc' ) {
-            $quote_status = $order->get_meta( '_mad_quote_status' );
-            if ( in_array( $quote_status, [ 'quote-pending', 'quote-cancelled' ], true ) ) {
-                unset( $actions['pay'] );
+        $status = $order->get_status();
+
+        if ( $status === 'quote-pending' ) {
+            // Pendiente de revisión: ocultar "Pagar"
+            unset( $actions['pay'] );
+        } elseif ( $status === 'quote-sent' ) {
+            // Presupuesto enviado: renombrar "Pagar" como "Pagar presupuesto"
+            if ( isset( $actions['pay'] ) ) {
+                $actions['pay']['name'] = __( 'Pagar presupuesto', 'mad-suite' );
             }
         }
+
         return $actions;
     }
 
@@ -302,13 +449,12 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function add_order_buttons( $order ) {
-        // Solo actúa sobre pedidos de presupuesto del plugin original
         if ( $order->get_payment_method() !== 'quotes-wc' && ! $order->get_meta( '_mad_qwc_quote' ) ) {
             return;
         }
 
         $order_status     = $order->get_status();
-        $allowed_statuses = apply_filters( 'mad_quotes_allowed_statuses_for_buttons', [ 'pending' ] );
+        $allowed_statuses = apply_filters( 'mad_quotes_allowed_statuses_for_buttons', [ 'quote-pending', 'quote-sent', 'pending' ] );
         if ( ! in_array( $order_status, $allowed_statuses, true ) ) return;
 
         $quote_status = $order->get_meta( '_mad_quote_status' ) ?: 'quote-pending';
@@ -320,7 +466,6 @@ return new class( $core ) implements MAD_Suite_Module {
             </button>
             <?php
         } else {
-            // quote-complete o quote-sent: mostrar tabla editable + botón enviar
             $label = 'quote-sent' === $quote_status
                 ? esc_html__( 'Reenviar presupuesto', 'mad-suite' )
                 : esc_html__( 'Enviar presupuesto', 'mad-suite' );
@@ -413,10 +558,10 @@ return new class( $core ) implements MAD_Suite_Module {
         $status   = sanitize_text_field( wp_unslash( $_POST['status'] ?? '' ) );
 
         if ( $order_id && $status ) {
-            $this->update_quote_status( $order_id, $status );
             $order = wc_get_order( $order_id );
             if ( $order ) {
-                $order->add_order_note( __( 'Presupuesto marcado como completo.', 'mad-suite' ) );
+                $order->update_meta_data( '_mad_quote_status', $status );
+                $order->add_order_note( __( 'Presupuesto marcado como completo. Listo para enviar.', 'mad-suite' ) );
                 $order->save();
             }
         }
@@ -438,18 +583,32 @@ return new class( $core ) implements MAD_Suite_Module {
 
         if ( ! $order_id ) wp_die();
 
-        // Guardar precios editados en cada línea del pedido
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) wp_die();
+
+        // Guardar precios editados en la meta y en los totales reales de línea
         if ( ! empty( $line_prices ) ) {
-            $order = wc_get_order( $order_id );
-            if ( $order ) {
-                foreach ( $line_prices as $item_id => $price ) {
-                    $item = $order->get_item( absint( $item_id ) );
-                    if ( $item ) {
-                        $item->update_meta_data( '_mad_quote_line_price', wc_format_decimal( sanitize_text_field( (string) $price ) ) );
-                        $item->save();
-                    }
+            foreach ( $line_prices as $item_id => $price ) {
+                $item = $order->get_item( absint( $item_id ) );
+                if ( $item ) {
+                    $decimal = wc_format_decimal( sanitize_text_field( (string) $price ) );
+                    $qty     = $item->get_quantity();
+                    $item->update_meta_data( '_mad_quote_line_price', $decimal );
+                    $item->set_subtotal( (float) $decimal * $qty );
+                    $item->set_total( (float) $decimal * $qty );
+                    $item->save();
                 }
             }
+            // Recalcular total del pedido; luego eliminar impuestos (presupuesto sin IVA)
+            $order->calculate_totals();
+            $order->set_cart_tax( 0 );
+            $order->set_shipping_tax( 0 );
+            foreach ( $order->get_taxes() as $tax_item ) {
+                $tax_item->set_tax_total( 0 );
+                $tax_item->set_shipping_tax_total( 0 );
+                $tax_item->save();
+            }
+            $order->save();
         }
 
         $result = $this->send_quote_email( $order_id, $admin_note );
@@ -469,7 +628,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $cutoff = strtotime( "-{$days} days" );
 
         $orders = wc_get_orders( [
-            'status'       => 'pending',
+            'status'       => [ 'quote-pending', 'quote-sent' ],
             'meta_key'     => '_mad_quote_status',
             'meta_value'   => 'quote-pending',
             'date_created' => '<' . $cutoff,
@@ -478,7 +637,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
         foreach ( $orders as $order ) {
             $order->update_meta_data( '_mad_quote_status', 'quote-cancelled' );
-            $order->add_order_note( __( 'Presupuesto caducado automáticamente.', 'mad-suite' ) );
+            $order->update_status( 'cancelled', __( 'Presupuesto caducado automáticamente.', 'mad-suite' ) );
             $order->save();
         }
     }
@@ -534,17 +693,6 @@ return new class( $core ) implements MAD_Suite_Module {
     /*  Helpers privados                                                  */
     /* ================================================================ */
 
-    private function update_quote_status( $order_id, $status ) {
-        $order = wc_get_order( $order_id );
-        if ( ! $order ) return;
-
-        $old = $order->get_meta( '_mad_quote_status' );
-        $order->update_meta_data( '_mad_quote_status', $status );
-        /* translators: 1: old status, 2: new status */
-        $order->add_order_note( sprintf( __( 'Estado del presupuesto: %1$s → %2$s', 'mad-suite' ), $old, $status ) );
-        $order->save();
-    }
-
     private function send_quote_email( $order_id, $admin_note = '' ) {
         $order = wc_get_order( $order_id );
         if ( ! $order ) return false;
@@ -552,14 +700,13 @@ return new class( $core ) implements MAD_Suite_Module {
         WC_Emails::instance();
         do_action( 'mad_quotes_send_quote_notification', $order_id, $admin_note );
 
-        $this->update_quote_status( $order_id, 'quote-sent' );
-        $order->add_order_note(
-            sprintf(
-                /* translators: email address */
-                __( 'Presupuesto enviado a %s.', 'mad-suite' ),
-                $order->get_billing_email()
-            )
-        );
+        // Actualizar meta de estado y cambiar estado WC a "Presupuesto enviado"
+        $order->update_meta_data( '_mad_quote_status', 'quote-sent' );
+        $order->update_status( 'quote-sent', sprintf(
+            /* translators: email address */
+            __( 'Presupuesto enviado a %s.', 'mad-suite' ),
+            $order->get_billing_email()
+        ) );
         $order->save();
 
         return true;
@@ -567,10 +714,6 @@ return new class( $core ) implements MAD_Suite_Module {
 
     /**
      * Comprueba si algún plugin de "Quotes for WooCommerce" está activo.
-     *
-     * Prueba primero los slugs conocidos; si ninguno coincide, escanea todos
-     * los plugins activos buscando cualquiera cuyo path contenga "quote" y
-     * "wc" o "woo" (detección flexible ante distintos nombres de archivo).
      */
     private function is_quotes_plugin_active(): bool {
         if ( ! function_exists( 'is_plugin_active' ) ) {
@@ -590,8 +733,7 @@ return new class( $core ) implements MAD_Suite_Module {
             }
         }
 
-        // Escaneo flexible: cualquier plugin activo cuyo path contenga
-        // "quote" junto con "wc" o "woo" (cubre renombramientos y forks).
+        // Escaneo flexible
         $active = (array) apply_filters( 'active_plugins', get_option( 'active_plugins', [] ) );
         foreach ( $active as $plugin_file ) {
             $lower = strtolower( $plugin_file );
@@ -655,7 +797,6 @@ return new class( $core ) implements MAD_Suite_Module {
 
         echo '<fieldset>';
 
-        // Opción: visitantes no registrados
         $checked = in_array( 'guest', $selected, true ) ? ' checked' : '';
         printf(
             '<label><input type="checkbox" name="%s[quote_roles][]" value="guest"%s> %s</label><br>',
