@@ -136,10 +136,11 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Checkout presupuesto: cambiar texto del botón "Realizar pedido" ──────
         add_filter( 'woocommerce_order_button_text', [ $this, 'quote_checkout_button_text' ] );
 
-        // ── Carrito: ocultar precios de línea y totales ───────────────
-        add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ], 10, 2 );
-        add_filter( 'woocommerce_cart_item_subtotal', [ $this, 'hide_cart_item_price' ], 10, 2 );
-        add_action( 'wp_head', [ $this, 'inject_cart_css' ] );
+        // ── Carrito: plantilla propia para la experiencia de presupuesto ─
+        add_filter( 'template_include', [ $this, 'quote_cart_template_override' ] );
+
+        // ── Checkout: CSS para ocultar sección de pagos y precios ────────
+        add_action( 'wp_head', [ $this, 'inject_checkout_css' ] );
 
         // ── Checkout: simplificar campos y deshabilitar envío ─────────
         add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], 9999 );
@@ -362,39 +363,38 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Oculta el precio individual de cada línea del carrito en experiencia de presupuesto.
+     * Reemplaza la plantilla de carrito de WooCommerce con la plantilla propia
+     * de presupuesto para usuarios con rol habilitado.
+     * Los usuarios normales siguen viendo el carrito estándar de WooCommerce.
      */
-    public function hide_cart_item_price( $price, $cart_item ) {
-        if ( $this->cart_is_quote_experience() ) {
-            return '—';
-        }
-        return $price;
+    public function quote_cart_template_override( $template ) {
+        if ( ! is_cart() ) return $template;
+        if ( ! $this->cart_is_quote_experience() ) return $template;
+
+        $custom = MAD_QUOTES_TEMPLATE_PATH . 'quote-cart.php';
+        return file_exists( $custom ) ? $custom : $template;
     }
 
     /**
-     * Inyecta CSS en carrito/checkout para ocultar subtotales, taxes y total.
+     * Inyecta CSS en el checkout de presupuesto para ocultar la sección de pagos
+     * y la columna de precios en la tabla de revisión.
+     * El gateway quotes-wc sigue seleccionado en el campo hidden del formulario.
      */
-    public function inject_cart_css() {
-        if ( ! is_cart() && ! is_checkout() ) return;
+    public function inject_checkout_css() {
+        if ( ! is_checkout() || is_order_received_page() ) return;
         if ( ! $this->cart_is_quote_experience() ) return;
 
         echo '<style>
-            /* MAD Quotes: ocultar importes en carrito */
-            .cart-subtotal,
-            .shipping,
-            .tax-total,
-            .order-total { display: none !important; }
-
-            /* MAD Quotes: ocultar columna de precios en la tabla de revisión del checkout */
-            .woocommerce-checkout-review-order-table tfoot,
-            .woocommerce-checkout-review-order-table th.product-total,
-            .woocommerce-checkout-review-order-table td.product-total { display: none !important; }
-
-            /* MAD Quotes: ocultar sección de métodos de pago (el gateway quotes-wc
-               queda seleccionado por defecto en el campo oculto del formulario) */
+            /* MAD Quotes: ocultar sección de métodos de pago */
             .woocommerce-checkout #payment ul.wc_payment_methods,
             .woocommerce-checkout #payment .payment_box,
             .woocommerce-checkout #payment > h3 { display: none !important; }
+
+            /* MAD Quotes: ocultar columna de precios y totales en la tabla de revisión */
+            .woocommerce-checkout-review-order-table tfoot,
+            .woocommerce-checkout-review-order-table th.product-total,
+            .woocommerce-checkout-review-order-table td.product-total,
+            .cart-subtotal, .shipping, .tax-total, .order-total { display: none !important; }
         </style>';
     }
 
