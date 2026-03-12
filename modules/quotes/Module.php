@@ -137,7 +137,7 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_order_button_text', [ $this, 'quote_checkout_button_text' ] );
 
         // ── Carrito: plantilla propia para la experiencia de presupuesto ─
-        add_filter( 'template_include', [ $this, 'quote_cart_template_override' ] );
+        add_filter( 'template_include', [ $this, 'quote_cart_template_override' ], 100 );
 
         // ── Checkout: CSS para ocultar sección de pagos y precios ────────
         add_action( 'wp_head', [ $this, 'inject_checkout_css' ] );
@@ -221,6 +221,23 @@ return new class( $core ) implements MAD_Suite_Module {
             $this->menu_slug()
         );
         $this->register_field( 'quote_expiry_days', __( 'Días hasta caducidad', 'mad-suite' ), 'field_number', 'mad_quotes_expiry' );
+
+        // ── Sección: Aspecto del checkout ──────────────────────────────
+        add_settings_section(
+            'mad_quotes_appearance',
+            __( 'Aspecto del checkout de presupuesto', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Añade selectores CSS adicionales cuyo contenido quieras ocultar en el checkout de presupuesto (uno por línea). Útil si tu tema usa clases distintas a las de WooCommerce por defecto.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'quote_hide_selectors',
+            __( 'Selectores adicionales a ocultar', 'mad-suite' ),
+            'field_textarea',
+            'mad_quotes_appearance',
+            __( 'Ej: .wc-block-cart__totals-item o #custom-price-row — uno por línea.', 'mad-suite' )
+        );
 
         // ── AJAX ───────────────────────────────────────────────────────
         add_action( 'wp_ajax_mad_quotes_update_status', [ $this, 'ajax_update_status' ] );
@@ -384,18 +401,25 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! is_checkout() || is_order_received_page() ) return;
         if ( ! $this->cart_is_quote_experience() ) return;
 
-        echo '<style>
-            /* MAD Quotes: ocultar sección de métodos de pago */
-            .woocommerce-checkout #payment ul.wc_payment_methods,
-            .woocommerce-checkout #payment .payment_box,
-            .woocommerce-checkout #payment > h3 { display: none !important; }
+        $default_selectors = [
+            '.woocommerce-checkout #payment ul.wc_payment_methods',
+            '.woocommerce-checkout #payment .payment_box',
+            '.woocommerce-checkout #payment > h3',
+            '.woocommerce-checkout-review-order-table tfoot',
+            '.woocommerce-checkout-review-order-table th.product-total',
+            '.woocommerce-checkout-review-order-table td.product-total',
+            '.cart-subtotal', '.shipping', '.tax-total', '.order-total',
+        ];
 
-            /* MAD Quotes: ocultar columna de precios y totales en la tabla de revisión */
-            .woocommerce-checkout-review-order-table tfoot,
-            .woocommerce-checkout-review-order-table th.product-total,
-            .woocommerce-checkout-review-order-table td.product-total,
-            .cart-subtotal, .shipping, .tax-total, .order-total { display: none !important; }
-        </style>';
+        $settings  = mad_quotes_get_settings();
+        $extra_raw = trim( $settings['quote_hide_selectors'] ?? '' );
+        $extra     = $extra_raw ? array_filter( array_map( 'trim', explode( "\n", $extra_raw ) ) ) : [];
+
+        $all_selectors = array_merge( $default_selectors, $extra );
+        $css_rule      = implode( ', ', $all_selectors );
+
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        echo '<style>' . $css_rule . ' { display: none !important; }</style>';
     }
 
     /* ================================================================ */
@@ -461,6 +485,11 @@ return new class( $core ) implements MAD_Suite_Module {
      * Impide que WooCommerce reduzca el stock para pedidos de presupuesto.
      */
     public function prevent_stock_reduction( $can_reduce, $order ) {
+        // Comprobación primaria: payment method disponible sin depender del cache de metas.
+        if ( $order->get_payment_method() === 'quotes-wc' ) {
+            return false;
+        }
+        // Comprobación secundaria: estado o meta explícita (pedidos ya procesados).
         if ( in_array( $order->get_status(), [ 'quote-pending', 'quote-sent' ], true )
             || '1' === $order->get_meta( '_mad_qwc_quote' )
         ) {
@@ -943,6 +972,19 @@ return new class( $core ) implements MAD_Suite_Module {
         );
     }
 
+    public function field_textarea( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        printf(
+            '<textarea name="%1$s[%2$s]" rows="5" class="large-text code">%3$s</textarea><br><span class="description">%4$s</span>',
+            esc_attr( $opt_key ),
+            esc_attr( $key ),
+            esc_textarea( $settings[ $key ] ?? '' ),
+            esc_html( $args['desc'] ?? '' )
+        );
+    }
+
     public function field_roles_multiselect( $args ) {
         $settings = mad_quotes_get_settings();
         $selected = array_filter( (array) ( $settings['quote_roles'] ?? [] ) );
@@ -984,6 +1026,8 @@ return new class( $core ) implements MAD_Suite_Module {
         $clean['quote_expiry_days'] = absint( $input['quote_expiry_days'] ?? 0 );
 
         $clean['quote_button_text'] = sanitize_text_field( $input['quote_button_text'] ?? '' );
+
+        $clean['quote_hide_selectors'] = sanitize_textarea_field( $input['quote_hide_selectors'] ?? '' );
 
         return $clean;
     }

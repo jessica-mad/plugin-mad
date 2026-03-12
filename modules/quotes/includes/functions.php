@@ -108,9 +108,10 @@ function mad_quotes_get_settings() {
     $opts       = get_option( $option_key, [] );
 
     $defaults = [
-        'quote_roles'        => [],
-        'quote_expiry_days'  => 0,
-        'quote_button_text'  => '',
+        'quote_roles'           => [],
+        'quote_expiry_days'     => 0,
+        'quote_button_text'     => '',
+        'quote_hide_selectors'  => '',
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );
