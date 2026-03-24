@@ -424,13 +424,16 @@ return new class( $core ) implements MAD_Suite_Module {
     public function simplify_quote_checkout_fields( $fields ) {
         if ( ! $this->cart_is_quote_experience() ) return $fields;
 
-        $keep = [ 'billing_first_name', 'billing_last_name', 'billing_email' ];
-
-        foreach ( array_keys( $fields['billing'] ?? [] ) as $key ) {
-            if ( ! in_array( $key, $keep, true ) ) {
-                unset( $fields['billing'][ $key ] );
-            }
-        }
+        // En la solicitud de presupuesto solo pedimos el email de contacto.
+        // El resto de datos de facturación se solicitarán cuando el cliente acepte y pague.
+        // billing_email es imprescindible: WooCommerce lo requiere para crear el pedido
+        // y para enviar el email de confirmación de solicitud.
+        $fields['billing'] = [
+            'billing_email' => array_merge(
+                $fields['billing']['billing_email'] ?? [],
+                [ 'label' => __( 'Email de contacto', 'mad-suite' ), 'required' => true ]
+            ),
+        ];
 
         $fields['shipping'] = [];
 
