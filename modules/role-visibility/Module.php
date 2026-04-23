@@ -31,15 +31,16 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     // ── Hooks públicos ──────────────────────────────────────────────────────
     public function init(): void {
-        // Concede la capacidad nativa de WordPress para leer posts privados del tipo product
+        // Capacidad nativa de WordPress para leer posts privados del CPT product
         add_filter('user_has_cap', [$this, 'grant_private_product_cap'], 10, 4);
 
-        // WooCommerce fuerza post_status='publish' en sus queries, así que añadimos
-        // 'private' explícitamente para los usuarios con acceso
+        // Cubre la query principal (tienda clásica, categorías, búsqueda)
         add_action('pre_get_posts', [$this, 'include_private_products_in_query'], 999);
 
-        // WooCommerce marca productos privados como no comprables por defecto;
-        // hay que habilitarlo para los roles con acceso
+        // Cubre el loop interno de WooCommerce (shortcodes, bloques, widgets)
+        add_action('woocommerce_product_query', [$this, 'include_private_products_in_wc_query']);
+
+        // WooCommerce marca productos privados como no comprables por defecto
         add_filter('woocommerce_is_purchasable', [$this, 'allow_private_product_purchase'], 10, 2);
     }
 
@@ -57,7 +58,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     }
 
     public function include_private_products_in_query(\WP_Query $query): void {
-        if (is_admin() || ! $query->is_main_query()) return;
+        if (is_admin()) return;
         if (! $this->current_user_has_access()) return;
 
         $post_type = $query->get('post_type');
@@ -66,14 +67,23 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
         if (! $is_product_query) return;
 
+        $this->add_private_status($query);
+    }
+
+    public function include_private_products_in_wc_query(\WP_Query $query): void {
+        if (! $this->current_user_has_access()) return;
+        $this->add_private_status($query);
+    }
+
+    private function add_private_status(\WP_Query $query): void {
         $statuses = $query->get('post_status') ?: 'publish';
         if (is_string($statuses)) {
             $statuses = [$statuses];
         }
         if (! in_array('private', $statuses, true)) {
             $statuses[] = 'private';
+            $query->set('post_status', $statuses);
         }
-        $query->set('post_status', $statuses);
     }
 
     public function allow_private_product_purchase(bool $purchasable, \WC_Product $product): bool {
