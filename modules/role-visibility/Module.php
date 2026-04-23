@@ -6,7 +6,8 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     private const OPTION_KEY     = 'madsuite_role_visibility_settings';
     private const NONCE_SETTINGS = 'mads_rv_save_settings';
 
-    private array $debug_log = [];
+    private array $debug_log        = [];
+    private array $wc_product_queries = [];
 
     public function __construct($core) {}
 
@@ -83,6 +84,11 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             || (is_array($post_type) && in_array('product', $post_type, true))) {
             return true;
         }
+        // Taxonomy archive pages: post_type is not set in query vars, but the
+        // taxonomy itself implies products (e.g. /etiqueta-producto/early-access/)
+        if ($query->is_tax('product_tag') || $query->is_tax('product_cat')) {
+            return true;
+        }
         foreach ((array) $query->get('tax_query') as $tax) {
             if (! isset($tax['taxonomy'])) continue;
             $t = (string) $tax['taxonomy'];
@@ -91,7 +97,8 @@ return new class ($core ?? null) implements MAD_Suite_Module {
                 return true;
             }
         }
-        return false;
+        // Tracked by woocommerce_product_query hook (covers cases not matched above)
+        return isset($this->wc_product_queries[spl_object_hash($query)]);
     }
 
     private function add_private_status(\WP_Query $query): void {
@@ -143,6 +150,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     public function include_private_products_in_wc_query(\WP_Query $query): void {
         if (! $this->current_user_has_access()) return;
         $this->add_private_status($query);
+        $this->wc_product_queries[spl_object_hash($query)] = true;
         $this->log('woocommerce_product_query: post_status actualizado a [publish, private]');
     }
 
