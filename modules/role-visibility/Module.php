@@ -157,37 +157,66 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         global $wpdb;
 
         if (is_admin()) return $where;
+        if (! $this->current_user_has_access()) return $where;
 
-        $has_access = $this->current_user_has_access();
         $has_product_sql = strpos($where, $wpdb->posts . ".post_type = 'product'") !== false;
-        $already_private = strpos($where, "post_status = 'private'") !== false
-                           || strpos($where, "post_status IN") !== false;
 
         $this->log(sprintf(
-            'ensure_private_in_where: has_access=%s | product_en_sql=%s | ya_tiene_private=%s',
-            $has_access ? 'SI' : 'NO',
-            $has_product_sql ? 'SI' : 'NO',
-            $already_private ? 'SI' : 'NO'
+            'ensure_private_in_where: product_en_sql=%s',
+            $has_product_sql ? 'SI' : 'NO'
         ));
         $this->log('WHERE: ' . substr($where, 0, 600));
 
-        if (! $has_access) return $where;
         if (! $has_product_sql) return $where;
-        if ($already_private) return $where;
 
-        $new_where = str_replace(
-            $wpdb->posts . ".post_status = 'publish'",
-            $wpdb->posts . ".post_status IN ('publish','private')",
-            $where
-        );
-
-        if ($new_where !== $where) {
-            $this->log('ensure_private_in_where: SQL modificado ✓');
-        } else {
-            $this->log('ensure_private_in_where: ⚠ str_replace no encontró el patrón esperado');
+        // ── Fix 1: post_status ──────────────────────────────────────────────
+        $already_private = strpos($where, "post_status = 'private'") !== false
+                           || strpos($where, "post_status IN") !== false;
+        if (! $already_private) {
+            $where = str_replace(
+                $wpdb->posts . ".post_status = 'publish'",
+                $wpdb->posts . ".post_status IN ('publish','private')",
+                $where
+            );
+            $this->log('Fix 1 aplicado: post_status');
         }
 
-        return $new_where;
+        // ── Fix 2: catalog visibility (exclude-from-catalog) ───────────────
+        // WooCommerce excluye productos con el término exclude-from-catalog mediante:
+        //   wp_posts.ID NOT IN (SELECT object_id FROM wp_term_relationships
+        //                       WHERE term_taxonomy_id IN (N))
+        // Cuando un producto es Private, WooCommerce puede haberle asignado ese
+        // término. Permitimos el paso añadiendo OR post_status = 'private'.
+        $vis_pattern = '/'
+            . preg_quote($wpdb->posts, '/')
+            . '\.ID\s+NOT IN\s*\(\s*SELECT\s+object_id\s+FROM\s+'
+            . preg_quote($wpdb->term_relationships, '/')
+            . '\s+WHERE\s+term_taxonomy_id\s+IN\s*\(\s*[\d,\s]+\s*\)\s*\)/i';
+
+        if (preg_match($vis_pattern, $where)) {
+            $where = preg_replace(
+                $vis_pattern,
+                "($0 OR {$wpdb->posts}.post_status = 'private')",
+                $where
+            );
+            $this->log('Fix 2 aplicado: catalog visibility NOT IN');
+        }
+
+        // ── Fix 3: WPML ────────────────────────────────────────────────────
+        // WPML hace INNER JOIN con wpml_translations. Si el producto privado
+        // no tiene entrada en esa tabla, el JOIN lo excluye.
+        // Añadimos OR post_status = 'private' a la primera condición de language_code.
+        if (strpos($where, 'wpml_translations.language_code') !== false) {
+            $where = preg_replace(
+                '/wpml_translations\.language_code\s*=\s*\'([a-z_\-]+)\'/i',
+                "(wpml_translations.language_code = '$1' OR {$wpdb->posts}.post_status = 'private')",
+                $where,
+                1
+            );
+            $this->log('Fix 3 aplicado: WPML language_code');
+        }
+
+        return $where;
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────
