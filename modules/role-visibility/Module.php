@@ -6,6 +6,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     private const OPTION_KEY     = 'madsuite_role_visibility_settings';
     private const NONCE_SETTINGS = 'mads_rv_save_settings';
 
+    /** Datos recogidos durante la request para el panel de debug */
+    private array $debug_log = [];
+
     public function __construct($core) {}
 
     public function slug()        { return 'role-visibility'; }
@@ -15,55 +18,65 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     public function description() { return __('Permite que roles específicos vean los productos privados de WooCommerce.', 'mad-suite'); }
     public function required_plugins() { return ['WooCommerce' => 'woocommerce/woocommerce.php']; }
 
+    // ── Debug ───────────────────────────────────────────────────────────────
+    private function is_debug(): bool {
+        return defined('MADS_RV_DEBUG') && MADS_RV_DEBUG;
+    }
+
+    private function log(string $msg): void {
+        if (! $this->is_debug()) return;
+        error_log('[MADS_RV] ' . $msg);
+        $this->debug_log[] = $msg;
+    }
+
+    public function render_debug_panel(): void {
+        if (! $this->is_debug()) return;
+        if (! is_user_logged_in()) return;
+        ?>
+        <div id="mads-rv-debug" style="position:fixed;bottom:0;left:0;right:0;background:#1d2327;color:#f0f0f1;font:12px/1.6 monospace;padding:12px 16px;z-index:999999;max-height:260px;overflow-y:auto;border-top:3px solid #d63638;">
+            <strong style="color:#72aee6;">🔍 MADS RV Debug</strong>
+            <span style="float:right;cursor:pointer;color:#f0f0f1;" onclick="this.parentNode.style.display='none'">✕ cerrar</span>
+            <br>
+            <?php foreach ($this->debug_log as $line) : ?>
+                <div><?php echo esc_html($line); ?></div>
+            <?php endforeach; ?>
+            <?php if (empty($this->debug_log)) : ?>
+                <div style="color:#f0b849;">⚠ Ningún hook de MADS_RV se ejecutó en esta página.</div>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────────────
     private function get_allowed_roles(): array {
         $settings = get_option(self::OPTION_KEY, []);
         return isset($settings['allowed_roles']) ? (array) $settings['allowed_roles'] : [];
     }
 
     private function current_user_has_access(): bool {
-        if (current_user_can('manage_options')) return true;
-        $user = wp_get_current_user();
-        if (! $user || ! $user->ID) return false;
-        $allowed = $this->get_allowed_roles();
-        if (empty($allowed)) return false;
-        return (bool) array_intersect((array) $user->roles, $allowed);
-    }
-
-    // ── Hooks públicos ──────────────────────────────────────────────────────
-    public function init(): void {
-        // Capacidad nativa de WordPress para acceso directo por URL
-        add_filter('user_has_cap', [$this, 'grant_private_product_cap'], 10, 4);
-
-        // Intento 1: modificar los args antes de que WP construya el SQL
-        add_action('pre_get_posts', [$this, 'include_private_products_in_query'], 999);
-        add_action('woocommerce_product_query', [$this, 'include_private_products_in_wc_query']);
-
-        // Safety net: modifica el SQL ya construido (funciona incluso si WooCommerce
-        // fuerza post_status='publish' después de nuestro pre_get_posts)
-        add_filter('posts_where', [$this, 'ensure_private_in_where'], PHP_INT_MAX, 2);
-
-        // WooCommerce marca productos privados como no comprables por defecto
-        add_filter('woocommerce_is_purchasable', [$this, 'allow_private_product_purchase'], 10, 2);
-    }
-
-    public function grant_private_product_cap(array $allcaps, array $caps, array $args, \WP_User $user): array {
-        if (! empty($allcaps['read_private_products'])) return $allcaps;
-
-        $allowed = $this->get_allowed_roles();
-        if (empty($allowed)) return $allcaps;
-
-        if (! empty(array_intersect((array) $user->roles, $allowed))) {
-            $allcaps['read_private_products'] = true;
+        if (current_user_can('manage_options')) {
+            $this->log('current_user_has_access → TRUE (administrador)');
+            return true;
         }
-
-        return $allcaps;
-    }
-
-    public function include_private_products_in_query(\WP_Query $query): void {
-        if (is_admin()) return;
-        if (! $this->current_user_has_access()) return;
-        if (! $this->is_product_query($query)) return;
-        $this->add_private_status($query);
+        $user = wp_get_current_user();
+        if (! $user || ! $user->ID) {
+            $this->log('current_user_has_access → FALSE (no hay usuario)');
+            return false;
+        }
+        $allowed = $this->get_allowed_roles();
+        if (empty($allowed)) {
+            $this->log('current_user_has_access → FALSE (no hay roles configurados)');
+            return false;
+        }
+        $result = (bool) array_intersect((array) $user->roles, $allowed);
+        $this->log(sprintf(
+            'current_user_has_access: user=%d roles=[%s] allowed=[%s] → %s',
+            $user->ID,
+            implode(', ', (array) $user->roles),
+            implode(', ', $allowed),
+            $result ? 'TRUE' : 'FALSE'
+        ));
+        return $result;
     }
 
     private function is_product_query(\WP_Query $query): bool {
@@ -72,9 +85,6 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             || (is_array($post_type) && in_array('product', $post_type, true))) {
             return true;
         }
-
-        // En páginas de taxonomía (product_tag, product_cat, pa_*) post_type
-        // puede estar vacío; lo detectamos por la tax_query
         foreach ((array) $query->get('tax_query') as $tax) {
             if (! isset($tax['taxonomy'])) continue;
             $t = (string) $tax['taxonomy'];
@@ -83,24 +93,58 @@ return new class ($core ?? null) implements MAD_Suite_Module {
                 return true;
             }
         }
-
         return false;
-    }
-
-    public function include_private_products_in_wc_query(\WP_Query $query): void {
-        if (! $this->current_user_has_access()) return;
-        $this->add_private_status($query);
     }
 
     private function add_private_status(\WP_Query $query): void {
         $statuses = $query->get('post_status') ?: 'publish';
-        if (is_string($statuses)) {
-            $statuses = [$statuses];
-        }
+        if (is_string($statuses)) $statuses = [$statuses];
         if (! in_array('private', $statuses, true)) {
             $statuses[] = 'private';
             $query->set('post_status', $statuses);
+            $this->log('add_private_status: post_status actualizado a [' . implode(', ', $statuses) . ']');
         }
+    }
+
+    // ── Hooks públicos ──────────────────────────────────────────────────────
+    public function init(): void {
+        add_filter('user_has_cap', [$this, 'grant_private_product_cap'], 10, 4);
+        add_action('pre_get_posts', [$this, 'include_private_products_in_query'], 999);
+        add_action('woocommerce_product_query', [$this, 'include_private_products_in_wc_query']);
+        add_filter('posts_where', [$this, 'ensure_private_in_where'], PHP_INT_MAX, 2);
+        add_filter('woocommerce_is_purchasable', [$this, 'allow_private_product_purchase'], 10, 2);
+
+        if ($this->is_debug()) {
+            add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
+        }
+    }
+
+    public function grant_private_product_cap(array $allcaps, array $caps, array $args, \WP_User $user): array {
+        if (! empty($allcaps['read_private_products'])) return $allcaps;
+        $allowed = $this->get_allowed_roles();
+        if (empty($allowed)) return $allcaps;
+        if (! empty(array_intersect((array) $user->roles, $allowed))) {
+            $allcaps['read_private_products'] = true;
+            $this->log(sprintf('grant_private_product_cap: user=%d → read_private_products=true', $user->ID));
+        }
+        return $allcaps;
+    }
+
+    public function include_private_products_in_query(\WP_Query $query): void {
+        if (is_admin()) return;
+        if (! $this->current_user_has_access()) return;
+        if (! $this->is_product_query($query)) {
+            $this->log('include_private_products_in_query: NO es query de productos (post_type=' . print_r($query->get('post_type'), true) . ')');
+            return;
+        }
+        $this->log('include_private_products_in_query: es query de productos');
+        $this->add_private_status($query);
+    }
+
+    public function include_private_products_in_wc_query(\WP_Query $query): void {
+        if (! $this->current_user_has_access()) return;
+        $this->log('include_private_products_in_wc_query: woocommerce_product_query disparado');
+        $this->add_private_status($query);
     }
 
     public function allow_private_product_purchase(bool $purchasable, \WC_Product $product): bool {
@@ -113,25 +157,37 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         global $wpdb;
 
         if (is_admin()) return $where;
-        if (! $this->current_user_has_access()) return $where;
 
-        // Detectamos por el SQL construido, no por los args: cubre shop, cat, tag y bloques
-        if (strpos($where, $wpdb->posts . ".post_type = 'product'") === false) {
-            return $where;
-        }
+        $has_access = $this->current_user_has_access();
+        $has_product_sql = strpos($where, $wpdb->posts . ".post_type = 'product'") !== false;
+        $already_private = strpos($where, "post_status = 'private'") !== false
+                           || strpos($where, "post_status IN") !== false;
 
-        // Ya incluye privados: nada que hacer
-        if (strpos($where, "post_status = 'private'") !== false
-            || strpos($where, "post_status IN") !== false) {
-            return $where;
-        }
+        $this->log(sprintf(
+            'ensure_private_in_where: has_access=%s | product_en_sql=%s | ya_tiene_private=%s',
+            $has_access ? 'SI' : 'NO',
+            $has_product_sql ? 'SI' : 'NO',
+            $already_private ? 'SI' : 'NO'
+        ));
+        $this->log('WHERE: ' . substr($where, 0, 600));
 
-        // Reemplaza la restricción publish-only por publish+private directamente en el SQL
-        return str_replace(
+        if (! $has_access) return $where;
+        if (! $has_product_sql) return $where;
+        if ($already_private) return $where;
+
+        $new_where = str_replace(
             $wpdb->posts . ".post_status = 'publish'",
             $wpdb->posts . ".post_status IN ('publish','private')",
             $where
         );
+
+        if ($new_where !== $where) {
+            $this->log('ensure_private_in_where: SQL modificado ✓');
+        } else {
+            $this->log('ensure_private_in_where: ⚠ str_replace no encontró el patrón esperado');
+        }
+
+        return $new_where;
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────
