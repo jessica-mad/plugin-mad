@@ -111,7 +111,8 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         add_filter('user_has_cap', [$this, 'grant_private_product_cap'], 10, 4);
         add_action('pre_get_posts', [$this, 'include_private_products_in_query'], 999);
         add_action('woocommerce_product_query', [$this, 'include_private_products_in_wc_query']);
-        add_filter('posts_where', [$this, 'ensure_private_in_where'], PHP_INT_MAX, 2);
+        add_filter('posts_join',  [$this, 'fix_wpml_join_for_private'], PHP_INT_MAX, 2);
+        add_filter('posts_where', [$this, 'ensure_private_in_where'],  PHP_INT_MAX, 2);
         add_filter('woocommerce_is_purchasable', [$this, 'allow_private_product_purchase'], 10, 2);
 
         if ($this->is_debug()) {
@@ -151,6 +152,37 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if ($purchasable) return $purchasable;
         if ($product->get_status() !== 'private') return $purchasable;
         return $this->current_user_has_access();
+    }
+
+    public function fix_wpml_join_for_private(string $join, \WP_Query $query): string {
+        if (is_admin()) return $join;
+        if (! $this->current_user_has_access()) return $join;
+
+        // Aplicar solo a queries de producto (por post_type o por el contenido del JOIN)
+        $is_product = $this->is_product_query($query)
+            || strpos($join, 'post_product') !== false;
+        if (! $is_product) return $join;
+        if (strpos($join, 'wpml_translations') === false) return $join;
+
+        $this->log('posts_join (primeros 400): ' . substr($join, 0, 400));
+
+        $original = $join;
+        // WPML genera: INNER JOIN wp_icl_translations wpml_translations ON ...
+        // Lo cambiamos a LEFT JOIN para que productos privados sin entrada en
+        // wpml_translations no queden excluidos por el JOIN antes del WHERE.
+        $join = preg_replace(
+            '/\bINNER(\s+JOIN\s+\S+\s+(?:AS\s+)?wpml_translations\s)/i',
+            'LEFT$1',
+            $join
+        );
+
+        if ($join !== $original) {
+            $this->log('fix_wpml_join: INNER JOIN → LEFT JOIN ✓');
+        } else {
+            $this->log('fix_wpml_join: patrón INNER JOIN no encontrado (ya es LEFT JOIN u otro formato)');
+        }
+
+        return $join;
     }
 
     public function ensure_private_in_where(string $where, \WP_Query $query): string {
