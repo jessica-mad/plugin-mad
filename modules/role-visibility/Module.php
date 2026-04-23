@@ -37,6 +37,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         // WooCommerce fuerza post_status='publish' en sus queries, así que añadimos
         // 'private' explícitamente para los usuarios con acceso
         add_action('pre_get_posts', [$this, 'include_private_products_in_query'], 999);
+
+        // WooCommerce marca productos privados como no comprables por defecto;
+        // hay que habilitarlo para los roles con acceso
+        add_filter('woocommerce_is_purchasable', [$this, 'allow_private_product_purchase'], 10, 2);
     }
 
     public function grant_private_product_cap(array $allcaps, array $caps, array $args, \WP_User $user): array {
@@ -70,6 +74,12 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             $statuses[] = 'private';
         }
         $query->set('post_status', $statuses);
+    }
+
+    public function allow_private_product_purchase(bool $purchasable, \WC_Product $product): bool {
+        if ($purchasable) return $purchasable;
+        if ($product->get_status() !== 'private') return $purchasable;
+        return $this->current_user_has_access();
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────
