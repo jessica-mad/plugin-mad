@@ -20,9 +20,23 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         return isset($settings['allowed_roles']) ? (array) $settings['allowed_roles'] : [];
     }
 
+    private function current_user_has_access(): bool {
+        if (current_user_can('manage_options')) return true;
+        $user = wp_get_current_user();
+        if (! $user || ! $user->ID) return false;
+        $allowed = $this->get_allowed_roles();
+        if (empty($allowed)) return false;
+        return (bool) array_intersect((array) $user->roles, $allowed);
+    }
+
     // ── Hooks públicos ──────────────────────────────────────────────────────
     public function init(): void {
+        // Concede la capacidad nativa de WordPress para leer posts privados del tipo product
         add_filter('user_has_cap', [$this, 'grant_private_product_cap'], 10, 4);
+
+        // WooCommerce fuerza post_status='publish' en sus queries, así que añadimos
+        // 'private' explícitamente para los usuarios con acceso
+        add_action('pre_get_posts', [$this, 'include_private_products_in_query'], 999);
     }
 
     public function grant_private_product_cap(array $allcaps, array $caps, array $args, \WP_User $user): array {
@@ -36,6 +50,26 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         }
 
         return $allcaps;
+    }
+
+    public function include_private_products_in_query(\WP_Query $query): void {
+        if (is_admin() || ! $query->is_main_query()) return;
+        if (! $this->current_user_has_access()) return;
+
+        $post_type = $query->get('post_type');
+        $is_product_query = $post_type === 'product'
+            || (is_array($post_type) && in_array('product', $post_type, true));
+
+        if (! $is_product_query) return;
+
+        $statuses = $query->get('post_status') ?: 'publish';
+        if (is_string($statuses)) {
+            $statuses = [$statuses];
+        }
+        if (! in_array('private', $statuses, true)) {
+            $statuses[] = 'private';
+        }
+        $query->set('post_status', $statuses);
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────
