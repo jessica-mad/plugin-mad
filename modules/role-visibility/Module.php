@@ -31,14 +31,16 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     // ── Hooks públicos ──────────────────────────────────────────────────────
     public function init(): void {
-        // Capacidad nativa de WordPress para leer posts privados del CPT product
+        // Capacidad nativa de WordPress para acceso directo por URL
         add_filter('user_has_cap', [$this, 'grant_private_product_cap'], 10, 4);
 
-        // Cubre la query principal (tienda clásica, categorías, búsqueda)
+        // Intento 1: modificar los args antes de que WP construya el SQL
         add_action('pre_get_posts', [$this, 'include_private_products_in_query'], 999);
-
-        // Cubre el loop interno de WooCommerce (shortcodes, bloques, widgets)
         add_action('woocommerce_product_query', [$this, 'include_private_products_in_wc_query']);
+
+        // Safety net: modifica el SQL ya construido (funciona incluso si WooCommerce
+        // fuerza post_status='publish' después de nuestro pre_get_posts)
+        add_filter('posts_where', [$this, 'ensure_private_in_where'], PHP_INT_MAX, 2);
 
         // WooCommerce marca productos privados como no comprables por defecto
         add_filter('woocommerce_is_purchasable', [$this, 'allow_private_product_purchase'], 10, 2);
@@ -90,6 +92,31 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if ($purchasable) return $purchasable;
         if ($product->get_status() !== 'private') return $purchasable;
         return $this->current_user_has_access();
+    }
+
+    public function ensure_private_in_where(string $where, \WP_Query $query): string {
+        global $wpdb;
+
+        if (is_admin()) return $where;
+        if (! $this->current_user_has_access()) return $where;
+
+        $post_type = $query->get('post_type');
+        if ($post_type !== 'product' && ! (is_array($post_type) && in_array('product', $post_type, true))) {
+            return $where;
+        }
+
+        // Ya incluye privados: nada que hacer
+        if (strpos($where, "post_status = 'private'") !== false
+            || strpos($where, "post_status IN") !== false) {
+            return $where;
+        }
+
+        // Reemplaza la restricción publish-only por publish+private directamente en el SQL
+        return str_replace(
+            $wpdb->posts . ".post_status = 'publish'",
+            $wpdb->posts . ".post_status IN ('publish','private')",
+            $where
+        );
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────
