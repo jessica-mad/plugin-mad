@@ -62,14 +62,29 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     public function include_private_products_in_query(\WP_Query $query): void {
         if (is_admin()) return;
         if (! $this->current_user_has_access()) return;
-
-        $post_type = $query->get('post_type');
-        $is_product_query = $post_type === 'product'
-            || (is_array($post_type) && in_array('product', $post_type, true));
-
-        if (! $is_product_query) return;
-
+        if (! $this->is_product_query($query)) return;
         $this->add_private_status($query);
+    }
+
+    private function is_product_query(\WP_Query $query): bool {
+        $post_type = $query->get('post_type');
+        if ($post_type === 'product'
+            || (is_array($post_type) && in_array('product', $post_type, true))) {
+            return true;
+        }
+
+        // En páginas de taxonomía (product_tag, product_cat, pa_*) post_type
+        // puede estar vacío; lo detectamos por la tax_query
+        foreach ((array) $query->get('tax_query') as $tax) {
+            if (! isset($tax['taxonomy'])) continue;
+            $t = (string) $tax['taxonomy'];
+            if (in_array($t, ['product_cat', 'product_tag', 'product_shipping_class'], true)
+                || strpos($t, 'pa_') === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function include_private_products_in_wc_query(\WP_Query $query): void {
@@ -100,8 +115,8 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if (is_admin()) return $where;
         if (! $this->current_user_has_access()) return $where;
 
-        $post_type = $query->get('post_type');
-        if ($post_type !== 'product' && ! (is_array($post_type) && in_array('product', $post_type, true))) {
+        // Detectamos por el SQL construido, no por los args: cubre shop, cat, tag y bloques
+        if (strpos($where, $wpdb->posts . ".post_type = 'product'") === false) {
             return $where;
         }
 
