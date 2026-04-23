@@ -165,15 +165,6 @@ return new class ($core ?? null) implements MAD_Suite_Module {
      *   - El propio filtro the_posts (sin riesgo de recursión)
      */
     public function inject_missing_private_products(array $posts, \WP_Query $query): array {
-        $this->log(sprintf(
-            'the_posts | is_admin=%s | access=%s | is_product_q=%s | post_type=%s | n=%d',
-            is_admin() ? 'y' : 'n',
-            $this->current_user_has_access() ? 'y' : 'n',
-            $this->is_product_query($query) ? 'y' : 'n',
-            is_array($query->get('post_type')) ? implode(',', $query->get('post_type')) : (string) $query->get('post_type'),
-            count($posts)
-        ));
-
         if (is_admin()) return $posts;
         if (! $this->current_user_has_access()) return $posts;
         if (! $this->is_product_query($query)) return $posts;
