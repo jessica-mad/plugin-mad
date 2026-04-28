@@ -21,7 +21,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     // ── Debug ───────────────────────────────────────────────────────────────
     private function is_debug(): bool {
-        return defined('MADS_RV_DEBUG') && MADS_RV_DEBUG;
+        if (defined('MADS_RV_DEBUG') && MADS_RV_DEBUG) return true;
+        // URL-based trigger for admins: append ?mads_debug=1 to any frontend URL.
+        // No wp-config.php change needed — useful when OPcache prevents constant propagation.
+        return ! empty($_GET['mads_debug']) && is_user_logged_in() && current_user_can('manage_options');
     }
 
     private function log(string $msg): void {
