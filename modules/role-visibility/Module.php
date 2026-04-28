@@ -184,6 +184,19 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             return $posts;
         }
 
+        // suppress_filters bypasa el filtro de idioma de WPML, lo que provocaría
+        // que aparezcan los mismos productos en todos los idiomas como entradas
+        // separadas. Filtramos manualmente por el idioma activo cuando WPML está activo.
+        $current_lang = apply_filters('wpml_current_language', null);
+        if ($current_lang) {
+            $all_private = array_values(array_filter($all_private, function ($post) use ($current_lang) {
+                $details = apply_filters('wpml_post_language_details', null, $post->ID);
+                return ! is_array($details)
+                    || ! isset($details['language_code'])
+                    || $details['language_code'] === $current_lang;
+            }));
+        }
+
         $existing_ids = array_map('intval', wp_list_pluck($posts, 'ID'));
         $injected     = [];
 
