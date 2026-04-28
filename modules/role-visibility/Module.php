@@ -126,6 +126,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         add_filter('woocommerce_product_is_visible',   [$this, 'allow_private_product_visibility'],  10, 2);
         add_filter('woocommerce_is_purchasable',      [$this, 'allow_private_product_purchase'],    10, 2);
         add_filter('woocommerce_variation_is_visible', [$this, 'allow_private_variation_visibility'], 10, 4);
+        add_filter('woocommerce_available_variation',  [$this, 'fix_private_variation_data'],         10, 3);
 
         if ($this->is_debug()) {
             add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
@@ -216,12 +217,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             return $this->current_user_has_access();
         }
 
-        // Variations have status 'publish' but their parent may be private.
-        if ($product->is_type('variation')) {
-            $parent = wc_get_product($product->get_parent_id());
-            if ($parent && $parent->get_status() === 'private') {
-                return $this->current_user_has_access();
-            }
+        // Variations have post_status 'publish' but their parent may be private.
+        // Use get_post_status() instead of wc_get_product() to avoid WPML side-effects.
+        if ($product->is_type('variation') && 'private' === get_post_status($product->get_parent_id())) {
+            return $this->current_user_has_access();
         }
 
         return $purchasable;
@@ -229,9 +228,30 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function allow_private_variation_visibility(bool $visible, int $variation_id, int $parent_id, \WC_Product_Variation $variation): bool {
         if ($visible) return $visible;
-        $parent = wc_get_product($parent_id);
-        if (! $parent || $parent->get_status() !== 'private') return $visible;
+        // Use get_post_status() directly — avoids wc_get_product() which can trigger WPML language switching.
+        if ('private' !== get_post_status($parent_id)) return $visible;
         return $this->current_user_has_access();
+    }
+
+    /**
+     * Last-resort: force variation data to active/purchasable for private products.
+     * Covers WooCommerce versions where variation_is_purchasable() evaluates the parent
+     * status internally without going through the woocommerce_is_purchasable filter.
+     *
+     * @param array|false          $data      Variation data array (false = exclude variation).
+     * @param \WC_Product_Variable $product   Parent variable product.
+     * @param \WC_Product_Variation $variation The variation.
+     */
+    public function fix_private_variation_data($data, \WC_Product_Variable $product, \WC_Product_Variation $variation) {
+        if (! is_array($data)) return $data;
+        if ($product->get_status() !== 'private') return $data;
+        if (! $this->current_user_has_access()) return $data;
+
+        $data['is_purchasable']       = true;
+        $data['variation_is_visible'] = true;
+        $data['variation_is_active']  = true;
+
+        return $data;
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────
