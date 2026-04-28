@@ -214,13 +214,12 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if ($purchasable) return $purchasable;
 
         if ($product->get_status() === 'private') {
-            return $this->current_user_has_access();
+            return current_user_can('read_private_products');
         }
 
         // Variations have post_status 'publish' but their parent may be private.
-        // Use get_post_status() instead of wc_get_product() to avoid WPML side-effects.
         if ($product->is_type('variation') && 'private' === get_post_status($product->get_parent_id())) {
-            return $this->current_user_has_access();
+            return current_user_can('read_private_products');
         }
 
         return $purchasable;
@@ -228,13 +227,12 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function allow_private_variation_visibility(bool $visible, int $variation_id, int $parent_id, \WC_Product_Variation $variation): bool {
         if ($visible) return $visible;
-        // Use get_post_status() directly — avoids wc_get_product() which can trigger WPML language switching.
         if ('private' !== get_post_status($parent_id)) return $visible;
-        return $this->current_user_has_access();
+        return current_user_can('read_private_products');
     }
 
     /**
-     * Last-resort: force variation data to active/purchasable for private products.
+     * Force variation data to active/purchasable for private products.
      * Covers WooCommerce versions where variation_is_purchasable() evaluates the parent
      * status internally without going through the woocommerce_is_purchasable filter.
      *
@@ -245,7 +243,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     public function fix_private_variation_data($data, \WC_Product_Variable $product, \WC_Product_Variation $variation) {
         if (! is_array($data)) return $data;
         if ($product->get_status() !== 'private') return $data;
-        if (! $this->current_user_has_access()) return $data;
+        if (! current_user_can('read_private_products')) return $data;
 
         $data['is_purchasable']       = true;
         $data['variation_is_visible'] = true;
