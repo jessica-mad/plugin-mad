@@ -123,10 +123,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         // suppress_filters=true en la sub-query bypasea WPML, catalog visibility, etc.
         add_filter('the_posts', [$this, 'inject_missing_private_products'], 10, 2);
 
-        add_filter('woocommerce_product_is_visible',   [$this, 'allow_private_product_visibility'],  10, 2);
-        add_filter('woocommerce_is_purchasable',      [$this, 'allow_private_product_purchase'],    10, 2);
-        add_filter('woocommerce_variation_is_visible', [$this, 'allow_private_variation_visibility'], 10, 4);
-        add_filter('woocommerce_available_variation',  [$this, 'fix_private_variation_data'],         10, 3);
+        add_filter('woocommerce_product_is_visible',   [$this, 'allow_private_product_visibility'],  10,   2);
+        add_filter('woocommerce_is_purchasable',      [$this, 'allow_private_product_purchase'],    9999, 2);
+        add_filter('woocommerce_variation_is_visible', [$this, 'allow_private_variation_visibility'], 9999, 4);
+        add_filter('woocommerce_available_variation',  [$this, 'fix_private_variation_data'],         9999, 3);
 
         if ($this->is_debug()) {
             add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
@@ -228,12 +228,12 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if ($purchasable) return $purchasable;
 
         if ($product->get_status() === 'private') {
-            return current_user_can('read_private_products');
+            return $this->current_user_has_access();
         }
 
         // Variations have post_status 'publish' but their parent may be private.
         if ($product->is_type('variation') && 'private' === get_post_status($product->get_parent_id())) {
-            return current_user_can('read_private_products');
+            return $this->current_user_has_access();
         }
 
         return $purchasable;
@@ -242,7 +242,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     public function allow_private_variation_visibility(bool $visible, int $variation_id, int $parent_id, \WC_Product_Variation $variation): bool {
         if ($visible) return $visible;
         if ('private' !== get_post_status($parent_id)) return $visible;
-        return current_user_can('read_private_products');
+        return $this->current_user_has_access();
     }
 
     /**
@@ -257,7 +257,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     public function fix_private_variation_data($data, \WC_Product_Variable $product, \WC_Product_Variation $variation) {
         if (! is_array($data)) return $data;
         if ($product->get_status() !== 'private') return $data;
-        if (! current_user_can('read_private_products')) return $data;
+        if (! $this->current_user_has_access()) return $data;
 
         $data['is_purchasable']       = true;
         $data['variation_is_visible'] = true;
