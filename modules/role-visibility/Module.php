@@ -6,8 +6,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
     private const OPTION_KEY     = 'madsuite_role_visibility_settings';
     private const NONCE_SETTINGS = 'mads_rv_save_settings';
 
-    private array $debug_log        = [];
-    private array $wc_product_queries = [];
+    private array  $debug_log           = [];
+    private array  $wc_product_queries  = [];
+    private ?array $private_posts_cache = null;
 
     public function __construct($core) {}
 
@@ -181,13 +182,19 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if (! $this->current_user_has_access()) return $posts;
         if (! $this->is_product_query($query)) return $posts;
 
-        $all_private = get_posts([
-            'post_type'        => 'product',
-            'post_status'      => 'private',
-            'posts_per_page'   => -1,
-            'no_found_rows'    => true,
-            'suppress_filters' => true,   // bypasea WPML, WooCommerce y the_posts
-        ]);
+        // Cache the private posts list for the lifetime of this request — the filter
+        // fires once per WP_Query (sidebar widgets, related products, etc.) and each
+        // uncached call would otherwise issue a separate DB query.
+        if ($this->private_posts_cache === null) {
+            $this->private_posts_cache = get_posts([
+                'post_type'        => 'product',
+                'post_status'      => 'private',
+                'posts_per_page'   => -1,
+                'no_found_rows'    => true,
+                'suppress_filters' => true,   // bypasea WPML, WooCommerce y the_posts
+            ]) ?: [];
+        }
+        $all_private = $this->private_posts_cache;
 
         if (empty($all_private)) {
             $this->log('inject: no existen productos privados en la BD');
