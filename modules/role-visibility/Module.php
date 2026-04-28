@@ -26,8 +26,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     private function log(string $msg): void {
         if (! $this->is_debug()) return;
-        error_log('[MADS_RV] ' . $msg);
         $this->debug_log[] = $msg;
+        // Write directly to a file — works on LiteSpeed regardless of php.ini error_log setting.
+        $file = (defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : ABSPATH . 'wp-content') . '/mads-rv.log';
+        @file_put_contents($file, date('[Y-m-d H:i:s] ') . $msg . PHP_EOL, FILE_APPEND | LOCK_EX);
     }
 
     public function render_debug_panel(): void {
@@ -130,15 +132,11 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         add_filter('woocommerce_is_purchasable',       [$this, 'allow_private_product_purchase'],     9999, 2);
 
         // Evitar que caché de página (LiteSpeed, etc.) sirva HTML con is_purchasable:false a usuarios VIP.
-        // LiteSpeed ejecuta PHP para generar la respuesta solo si no hay entrada de caché; el JSON de
-        // variaciones queda incrustado en el HTML por WooCommerce en tiempo de render, por lo que un
-        // usuario VIP que recibe una página cacheada de un visitante anónimo vería is_purchasable:false
-        // aunque nuestros filtros PHP devuelvan true.
         add_action('send_headers', [$this, 'maybe_set_nocache_for_vip']);
 
-        if ($this->is_debug()) {
-            add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
-        }
+        // Always register — render_debug_panel() checks is_debug() at render time, not here.
+        // If the check were here, a constant defined after init priority-1 would be missed.
+        add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
     }
 
     public function grant_private_product_cap(array $allcaps, array $caps, array $args, \WP_User $user): array {
