@@ -137,6 +137,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $allowed = $this->get_allowed_roles();
         if (! empty($allowed) && ! empty(array_intersect((array) $user->roles, $allowed))) {
             $allcaps['read_private_products'] = true;
+            // WPML uses the generic read_private_posts cap (not the WooCommerce-specific one)
+            // to decide whether to expose private post translations on the frontend.
+            $allcaps['read_private_posts'] = true;
         }
         return $allcaps;
     }
