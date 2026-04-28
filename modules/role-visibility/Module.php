@@ -128,6 +128,13 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         // Priority 9999: run after pre-order plugin (which resets purchasable to false for non-admins)
         add_filter('woocommerce_is_purchasable',       [$this, 'allow_private_product_purchase'],     9999, 2);
 
+        // Evitar que caché de página (LiteSpeed, etc.) sirva HTML con is_purchasable:false a usuarios VIP.
+        // LiteSpeed ejecuta PHP para generar la respuesta solo si no hay entrada de caché; el JSON de
+        // variaciones queda incrustado en el HTML por WooCommerce en tiempo de render, por lo que un
+        // usuario VIP que recibe una página cacheada de un visitante anónimo vería is_purchasable:false
+        // aunque nuestros filtros PHP devuelvan true.
+        add_action('send_headers', [$this, 'maybe_set_nocache_for_vip']);
+
         if ($this->is_debug()) {
             add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
         }
@@ -206,6 +213,34 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         return $posts;
     }
 
+    /**
+     * Cuando un usuario VIP carga una página de productos, forzamos que LiteSpeed
+     * no sirva la entrada de caché genérica (que tiene is_purchasable:false en el JSON
+     * de variaciones). Se logra con dos mecanismos complementarios:
+     *
+     * 1. nocache_headers(): envía Cache-Control/Pragma para que el servidor no almacene
+     *    esta respuesta como caché.
+     * 2. X-LiteSpeed-Cache-Control: no-cache — header nativo de LiteSpeed para saltarse
+     *    cualquier caché acelerada aunque PHP no sea quien sirva la respuesta.
+     * 3. litespeed_vary_add (LiteSpeed Cache plugin API): crea un "bucket" de caché
+     *    separado para usuarios VIP, de modo que sus páginas se cachean con los
+     *    productos privados visibles y no se mezclan con las de visitantes anónimos.
+     */
+    public function maybe_set_nocache_for_vip(): void {
+        if (! $this->current_user_has_access()) return;
+        if (! (is_product() || is_shop() || is_product_category() || is_product_tag())) return;
+
+        nocache_headers();
+        header('X-LiteSpeed-Cache-Control: no-cache');
+
+        // LiteSpeed Cache Plugin API: crea un bucket de caché por rol VIP
+        if (has_action('litespeed_vary_add')) {
+            do_action('litespeed_vary_add', 'mads_vip_access');
+        }
+
+        $this->log('send_headers: no-cache forzado para usuario VIP en página de productos');
+    }
+
     public function allow_private_product_visibility(bool $visible, int $product_id): bool {
         if ($visible) return $visible;
         $product = wc_get_product($product_id);
@@ -223,12 +258,24 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if ($purchasable) return $purchasable;
         if (! $this->current_user_has_access()) return $purchasable;
 
-        if ($product->get_status() === 'private') return true;
+        $status = $product->get_status();
 
-        // Variation whose parent product is private
-        if ($product instanceof \WC_Product_Variation
-            && get_post_status($product->get_parent_id()) === 'private') {
+        if ($status === 'private') {
+            $this->log(sprintf('is_purchasable: product=%d status=private → true', $product->get_id()));
             return true;
+        }
+
+        if ($product instanceof \WC_Product_Variation) {
+            $parent_status = get_post_status($product->get_parent_id());
+            $this->log(sprintf(
+                'is_purchasable: variation=%d parent=%d parent_status=%s price=%s → %s',
+                $product->get_id(),
+                $product->get_parent_id(),
+                (string) $parent_status,
+                $product->get_price(),
+                $parent_status === 'private' ? 'true' : 'false (parent not private)'
+            ));
+            if ($parent_status === 'private') return true;
         }
 
         return $purchasable;
