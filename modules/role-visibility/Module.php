@@ -184,16 +184,15 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             return $posts;
         }
 
-        // suppress_filters bypasa el filtro de idioma de WPML, lo que provocaría
-        // que aparezcan los mismos productos en todos los idiomas como entradas
-        // separadas. Filtramos manualmente por el idioma activo cuando WPML está activo.
+        // suppress_filters bypasa el filtro de idioma de WPML, devolviendo productos
+        // de todos los idiomas. Filtramos con wpml_object_id: dado un post ID en
+        // cualquier idioma, retorna el ID de su traducción al idioma objetivo.
+        // Si coincide con el propio ID, ese post ES la versión del idioma activo.
         $current_lang = apply_filters('wpml_current_language', null);
         if ($current_lang) {
             $all_private = array_values(array_filter($all_private, function ($post) use ($current_lang) {
-                $details = apply_filters('wpml_post_language_details', null, $post->ID);
-                return ! is_array($details)
-                    || ! isset($details['language_code'])
-                    || $details['language_code'] === $current_lang;
+                $id_in_lang = apply_filters('wpml_object_id', $post->ID, 'product', false, $current_lang);
+                return (int) $id_in_lang === (int) $post->ID;
             }));
         }
 
@@ -218,8 +217,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function allow_private_product_visibility(bool $visible, int $product_id): bool {
         if ($visible) return $visible;
-        $product = wc_get_product($product_id);
-        if (! $product || $product->get_status() !== 'private') return $visible;
+        // Usar get_post_status() en lugar de wc_get_product() para evitar que WPML
+        // cambie el contexto de idioma al cargar el producto, lo que rompía las
+        // conexiones de traducción entre productos.
+        if (get_post_status($product_id) !== 'private') return $visible;
         return $this->current_user_has_access();
     }
 
