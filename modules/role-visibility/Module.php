@@ -123,9 +123,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         // suppress_filters=true en la sub-query bypasea WPML, catalog visibility, etc.
         add_filter('the_posts', [$this, 'inject_missing_private_products'], 10, 2);
 
-        add_filter('woocommerce_product_is_visible',   [$this, 'allow_private_product_visibility'],   10, 2);
-        add_filter('woocommerce_variation_is_visible', [$this, 'allow_private_variation_visibility'], 10, 4);
-        add_filter('woocommerce_is_purchasable',       [$this, 'allow_private_product_purchase'],     10, 2);
+        add_filter('woocommerce_product_is_visible',   [$this, 'allow_private_product_visibility'],   10,   2);
+        add_filter('woocommerce_variation_is_visible', [$this, 'allow_private_variation_visibility'], 10,   4);
+        // Priority 9999: run after pre-order plugin (which resets purchasable to false for non-admins)
+        add_filter('woocommerce_is_purchasable',       [$this, 'allow_private_product_purchase'],     9999, 2);
 
         if ($this->is_debug()) {
             add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
