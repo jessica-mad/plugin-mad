@@ -123,8 +123,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         // suppress_filters=true en la sub-query bypasea WPML, catalog visibility, etc.
         add_filter('the_posts', [$this, 'inject_missing_private_products'], 10, 2);
 
-        add_filter('woocommerce_product_is_visible', [$this, 'allow_private_product_visibility'], 10, 2);
-        add_filter('woocommerce_is_purchasable',    [$this, 'allow_private_product_purchase'],    10, 2);
+        add_filter('woocommerce_product_is_visible',   [$this, 'allow_private_product_visibility'],  10, 2);
+        add_filter('woocommerce_is_purchasable',      [$this, 'allow_private_product_purchase'],    10, 2);
+        add_filter('woocommerce_variation_is_visible', [$this, 'allow_private_variation_visibility'], 10, 4);
 
         if ($this->is_debug()) {
             add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
@@ -210,7 +211,26 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function allow_private_product_purchase(bool $purchasable, \WC_Product $product): bool {
         if ($purchasable) return $purchasable;
-        if ($product->get_status() !== 'private') return $purchasable;
+
+        if ($product->get_status() === 'private') {
+            return $this->current_user_has_access();
+        }
+
+        // Variations have status 'publish' but their parent may be private.
+        if ($product->is_type('variation')) {
+            $parent = wc_get_product($product->get_parent_id());
+            if ($parent && $parent->get_status() === 'private') {
+                return $this->current_user_has_access();
+            }
+        }
+
+        return $purchasable;
+    }
+
+    public function allow_private_variation_visibility(bool $visible, int $variation_id, int $parent_id, \WC_Product_Variation $variation): bool {
+        if ($visible) return $visible;
+        $parent = wc_get_product($parent_id);
+        if (! $parent || $parent->get_status() !== 'private') return $visible;
         return $this->current_user_has_access();
     }
 
