@@ -220,8 +220,17 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function allow_private_product_purchase(bool $purchasable, \WC_Product $product): bool {
         if ($purchasable) return $purchasable;
-        if ($product->get_status() !== 'private') return $purchasable;
-        return $this->current_user_has_access();
+        if (! $this->current_user_has_access()) return $purchasable;
+
+        if ($product->get_status() === 'private') return true;
+
+        // Variation whose parent product is private
+        if ($product instanceof \WC_Product_Variation
+            && get_post_status($product->get_parent_id()) === 'private') {
+            return true;
+        }
+
+        return $purchasable;
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────
