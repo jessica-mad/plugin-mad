@@ -181,6 +181,9 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         if (is_admin()) return $posts;
         if (! $this->current_user_has_access()) return $posts;
         if (! $this->is_product_query($query)) return $posts;
+        // On a single product page the product is already loaded by ID — injecting
+        // all private products into the singular main query would break the template.
+        if ($query->is_singular()) return $posts;
 
         // Cache the private posts list for the lifetime of this request — the filter
         // fires once per WP_Query (sidebar widgets, related products, etc.) and each
