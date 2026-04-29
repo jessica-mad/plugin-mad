@@ -113,8 +113,7 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     // ── Admin ───────────────────────────────────────────────────────────────
     public function admin_init(): void {
-        add_action('admin_post_mads_rp_save_settings',  [$this, 'handle_save_settings']);
-        add_action('admin_post_mads_rp_regen_password', [$this, 'handle_regen_password']);
+        add_action('admin_post_mads_rp_save_settings', [$this, 'handle_save_settings']);
     }
 
     public function handle_save_settings(): void {
@@ -127,26 +126,18 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $valid_roles   = array_keys(wp_roles()->roles);
         $allowed_roles = array_values(array_intersect($allowed_roles, $valid_roles));
 
-        $s                  = $this->get_settings();
+        $s = $this->get_settings();
         $s['allowed_roles'] = $allowed_roles;
+
+        $new_password = isset($_POST['master_password']) ? trim($_POST['master_password']) : '';
+        if ($new_password !== '') {
+            $s['master_password'] = sanitize_text_field($new_password);
+        }
+
         update_option(self::OPTION_KEY, $s);
 
         wp_safe_redirect(
             add_query_arg(['page' => $this->menu_slug(), 'saved' => '1'], admin_url('admin.php'))
-        );
-        exit;
-    }
-
-    public function handle_regen_password(): void {
-        if (! current_user_can(MAD_Suite_Core::CAPABILITY)) wp_die('Sin permisos.');
-        check_admin_referer('mads_rp_regen', 'mads_rp_regen_nonce');
-
-        $s                  = $this->get_settings();
-        $s['master_password'] = wp_generate_password(32, false);
-        update_option(self::OPTION_KEY, $s);
-
-        wp_safe_redirect(
-            add_query_arg(['page' => $this->menu_slug(), 'regen' => '1'], admin_url('admin.php'))
         );
         exit;
     }
@@ -159,7 +150,6 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         $roles         = wp_roles()->roles;
         $allowed_roles = $this->get_allowed_roles();
         $saved         = isset($_GET['saved']) && $_GET['saved'] === '1';
-        $regen         = isset($_GET['regen']) && $_GET['regen'] === '1';
         ?>
         <div class="wrap">
             <h1><?php esc_html_e('Acceso por Rol (Contraseña)', 'mad-suite'); ?></h1>
@@ -167,12 +157,6 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             <?php if ($saved) : ?>
                 <div class="notice notice-success is-dismissible">
                     <p><?php esc_html_e('Configuración guardada.', 'mad-suite'); ?></p>
-                </div>
-            <?php endif; ?>
-
-            <?php if ($regen) : ?>
-                <div class="notice notice-warning is-dismissible">
-                    <p><?php esc_html_e('Contraseña maestra regenerada. Actualiza la contraseña en los productos que ya tenías configurados.', 'mad-suite'); ?></p>
                 </div>
             <?php endif; ?>
 
@@ -206,27 +190,32 @@ return new class ($core ?? null) implements MAD_Suite_Module {
                     <tr>
                         <th scope="row"><?php esc_html_e('Contraseña maestra', 'mad-suite'); ?></th>
                         <td>
-                            <code id="mads-rp-password" style="background:#f0f0f1;padding:6px 12px;display:inline-block;border-radius:3px;font-size:13px;letter-spacing:1px;"><?php echo esc_html($password); ?></code>
+                            <input type="text"
+                                   id="mads-rp-password"
+                                   name="master_password"
+                                   value="<?php echo esc_attr($password); ?>"
+                                   class="regular-text"
+                                   style="font-family:monospace;">
                             <button type="button"
-                                    onclick="navigator.clipboard.writeText('<?php echo esc_js($password); ?>').then(()=>{ this.textContent='<?php esc_attr_e('¡Copiado!', 'mad-suite'); ?>'; setTimeout(()=>{ this.textContent='<?php esc_attr_e('Copiar', 'mad-suite'); ?>'; }, 2000); })"
-                                    class="button button-secondary" style="margin-left:8px;vertical-align:middle;">
-                                <?php esc_html_e('Copiar', 'mad-suite'); ?>
+                                    class="button button-secondary"
+                                    style="vertical-align:middle;"
+                                    onclick="
+                                        var c = '<?php echo esc_js(substr(str_shuffle('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'), 0, 32)); ?>';
+                                        var chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                                        var pass = '';
+                                        if (window.crypto && window.crypto.getRandomValues) {
+                                            var arr = new Uint8Array(32);
+                                            window.crypto.getRandomValues(arr);
+                                            arr.forEach(function(b){ pass += chars[b % chars.length]; });
+                                        } else {
+                                            for(var i=0;i<32;i++) pass += chars[Math.floor(Math.random()*chars.length)];
+                                        }
+                                        document.getElementById('mads-rp-password').value = pass;
+                                    ">
+                                <?php esc_html_e('Generar aleatoria', 'mad-suite'); ?>
                             </button>
                             <p class="description" style="margin-top:8px;">
-                                <?php esc_html_e('Copia esta contraseña y pégala en el campo "Contraseña" de cada producto de WooCommerce que quieras proteger por rol (en Editar producto → Visibilidad del catálogo → Contraseña).', 'mad-suite'); ?>
-                            </p>
-                            <p style="margin-top:10px;">
-                                <a href="<?php echo esc_url(
-                                    wp_nonce_url(
-                                        add_query_arg(['action' => 'mads_rp_regen_password'], admin_url('admin-post.php')),
-                                        'mads_rp_regen',
-                                        'mads_rp_regen_nonce'
-                                    )
-                                ); ?>"
-                                   onclick="return confirm('<?php esc_attr_e('¿Regenerar la contraseña? Tendrás que actualizarla manualmente en todos los productos que ya la tienen asignada.', 'mad-suite'); ?>')"
-                                   class="button button-secondary">
-                                    <?php esc_html_e('Regenerar contraseña', 'mad-suite'); ?>
-                                </a>
+                                <?php esc_html_e('Pega esta contraseña en el campo "Contraseña" de cada producto de WooCommerce que quieras proteger (Editar producto → Visibilidad del catálogo → Contraseña). Si dejas el campo vacío al guardar, se mantiene la contraseña actual.', 'mad-suite'); ?>
                             </p>
                         </td>
                     </tr>
