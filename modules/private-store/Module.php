@@ -55,7 +55,6 @@ class Module {
      */
     private function init_hooks() {
         // Admin
-        add_action('admin_menu', [$this, 'add_admin_menu']);
         add_action('admin_post_save_private_shop_rule', [$this, 'save_discount_rule']);
         add_action('admin_post_delete_private_shop_rule', [$this, 'delete_discount_rule']);
         add_action('admin_post_toggle_private_shop_rule', [$this, 'toggle_discount_rule']);
@@ -2205,5 +2204,22 @@ class Module {
     }
 }
 
-// Inicializar módulo
-Module::instance();
+// ── MAD Suite wrapper ────────────────────────────────────────────────────────
+return new class(null) implements \MAD_Suite_Module {
+    public function slug()        { return 'private-store'; }
+    public function title()       { return 'Private Shop'; }
+    public function menu_label()  { return 'Private Shop'; }
+    public function menu_slug()   { return 'mad-private-shop'; }
+    public function description() { return 'Sistema de precios y cupones para tienda privada VIP.'; }
+    public function required_plugins() { return ['WooCommerce' => 'woocommerce/woocommerce.php']; }
+
+    public function init(): void {
+        Module::instance();
+    }
+
+    public function admin_init(): void {}
+
+    public function render_settings_page(): void {
+        Module::instance()->render_admin_page();
+    }
+};

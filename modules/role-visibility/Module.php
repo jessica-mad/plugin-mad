@@ -123,8 +123,10 @@ return new class ($core ?? null) implements MAD_Suite_Module {
         // suppress_filters=true en la sub-query bypasea WPML, catalog visibility, etc.
         add_filter('the_posts', [$this, 'inject_missing_private_products'], 10, 2);
 
-        add_filter('woocommerce_product_is_visible', [$this, 'allow_private_product_visibility'], 10, 2);
-        add_filter('woocommerce_is_purchasable',    [$this, 'allow_private_product_purchase'],    10, 2);
+        add_filter('woocommerce_product_is_visible',   [$this, 'allow_private_product_visibility'],  10,   2);
+        add_filter('woocommerce_is_purchasable',      [$this, 'allow_private_product_purchase'],    9999, 2);
+        add_filter('woocommerce_variation_is_visible', [$this, 'allow_private_variation_visibility'], 9999, 4);
+        add_filter('woocommerce_available_variation',  [$this, 'fix_private_variation_data'],         9999, 3);
 
         if ($this->is_debug()) {
             add_action('wp_footer', [$this, 'render_debug_panel'], PHP_INT_MAX);
@@ -182,6 +184,18 @@ return new class ($core ?? null) implements MAD_Suite_Module {
             return $posts;
         }
 
+        // suppress_filters bypasa el filtro de idioma de WPML, devolviendo productos
+        // de todos los idiomas. Filtramos con wpml_object_id: dado un post ID en
+        // cualquier idioma, retorna el ID de su traducción al idioma objetivo.
+        // Si coincide con el propio ID, ese post ES la versión del idioma activo.
+        $current_lang = apply_filters('wpml_current_language', null);
+        if ($current_lang) {
+            $all_private = array_values(array_filter($all_private, function ($post) use ($current_lang) {
+                $id_in_lang = apply_filters('wpml_object_id', $post->ID, 'product', false, $current_lang);
+                return (int) $id_in_lang === (int) $post->ID;
+            }));
+        }
+
         $existing_ids = array_map('intval', wp_list_pluck($posts, 'ID'));
         $injected     = [];
 
@@ -203,15 +217,53 @@ return new class ($core ?? null) implements MAD_Suite_Module {
 
     public function allow_private_product_visibility(bool $visible, int $product_id): bool {
         if ($visible) return $visible;
-        $product = wc_get_product($product_id);
-        if (! $product || $product->get_status() !== 'private') return $visible;
+        // Usar get_post_status() en lugar de wc_get_product() para evitar que WPML
+        // cambie el contexto de idioma al cargar el producto, lo que rompía las
+        // conexiones de traducción entre productos.
+        if (get_post_status($product_id) !== 'private') return $visible;
         return $this->current_user_has_access();
     }
 
     public function allow_private_product_purchase(bool $purchasable, \WC_Product $product): bool {
         if ($purchasable) return $purchasable;
-        if ($product->get_status() !== 'private') return $purchasable;
+
+        if ($product->get_status() === 'private') {
+            return $this->current_user_has_access();
+        }
+
+        // Variations have post_status 'publish' but their parent may be private.
+        if ($product->is_type('variation') && 'private' === get_post_status($product->get_parent_id())) {
+            return $this->current_user_has_access();
+        }
+
+        return $purchasable;
+    }
+
+    public function allow_private_variation_visibility(bool $visible, int $variation_id, int $parent_id, \WC_Product_Variation $variation): bool {
+        if ($visible) return $visible;
+        if ('private' !== get_post_status($parent_id)) return $visible;
         return $this->current_user_has_access();
+    }
+
+    /**
+     * Force variation data to active/purchasable for private products.
+     * Covers WooCommerce versions where variation_is_purchasable() evaluates the parent
+     * status internally without going through the woocommerce_is_purchasable filter.
+     *
+     * @param array|false          $data      Variation data array (false = exclude variation).
+     * @param \WC_Product_Variable $product   Parent variable product.
+     * @param \WC_Product_Variation $variation The variation.
+     */
+    public function fix_private_variation_data($data, \WC_Product_Variable $product, \WC_Product_Variation $variation) {
+        if (! is_array($data)) return $data;
+        if ($product->get_status() !== 'private') return $data;
+        if (! $this->current_user_has_access()) return $data;
+
+        $data['is_purchasable']       = true;
+        $data['variation_is_visible'] = true;
+        $data['variation_is_active']  = true;
+
+        return $data;
     }
 
     // ── Hooks de admin ──────────────────────────────────────────────────────

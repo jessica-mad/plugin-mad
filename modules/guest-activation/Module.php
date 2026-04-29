@@ -374,8 +374,12 @@ return new class($core ?? null) implements MAD_Suite_Module {
                 ]);
             } else {
                 echo '<div class="mad-guest-activation-error">';
-                echo '<p>' . esc_html__('El enlace de activación ha expirado o no es válido.', 'mad-suite') . '</p>';
+                echo '<p>' . esc_html__('El enlace de activación ha expirado o no es válido. Puedes solicitar uno nuevo a continuación.', 'mad-suite') . '</p>';
                 echo '</div>';
+                $this->render_view('activation-form', [
+                    'settings' => $this->get_settings(),
+                    'recaptcha_site_key' => $atts['recaptcha_site_key'],
+                ]);
             }
         } else {
             // Mostrar formulario de solicitud de activación
