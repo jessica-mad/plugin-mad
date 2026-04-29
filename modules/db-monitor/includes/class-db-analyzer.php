@@ -127,20 +127,10 @@ class MAD_DBM_Analyzer {
     public function get_all_tables(): array {
         global $wpdb;
 
-        $rows = $wpdb->get_results( $wpdb->prepare(
-            "SELECT
-                TABLE_NAME        AS name,
-                TABLE_ROWS        AS rows,
-                DATA_LENGTH       AS data_bytes,
-                INDEX_LENGTH      AS index_bytes,
-                (DATA_LENGTH + INDEX_LENGTH) AS total_bytes,
-                ENGINE            AS engine,
-                UPDATE_TIME       AS updated_at
-             FROM information_schema.TABLES
-             WHERE TABLE_SCHEMA = %s
-             ORDER BY total_bytes DESC",
-            DB_NAME
-        ), ARRAY_A );
+        // SHOW TABLE STATUS is universally accessible (no information_schema privilege needed)
+        // and automatically scopes to the current database connection.
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $rows = $wpdb->get_results( 'SHOW TABLE STATUS', ARRAY_A );
 
         if ( ! $rows ) return [];
 
@@ -150,11 +140,13 @@ class MAD_DBM_Analyzer {
 
         $tables = [];
         foreach ( $rows as $row ) {
-            $name      = $row['name'];
-            $total_mb  = round( $row['total_bytes'] / 1048576, 3 );
-            $data_mb   = round( $row['data_bytes'] / 1048576, 3 );
-            $index_mb  = round( $row['index_bytes'] / 1048576, 3 );
-            $row_count = (int) $row['rows'];
+            $name        = $row['Name'];
+            $data_bytes  = (int) ( $row['Data_length'] ?? 0 );
+            $index_bytes = (int) ( $row['Index_length'] ?? 0 );
+            $total_mb    = round( ( $data_bytes + $index_bytes ) / 1048576, 3 );
+            $data_mb     = round( $data_bytes / 1048576, 3 );
+            $index_mb    = round( $index_bytes / 1048576, 3 );
+            $row_count   = (int) ( $row['Rows'] ?? 0 );
 
             $is_protected = in_array( $name, $protected, true );
             $is_cleanable = isset( $cleanable[ $name ] );
@@ -166,14 +158,17 @@ class MAD_DBM_Analyzer {
                 'total_mb'      => $total_mb,
                 'data_mb'       => $data_mb,
                 'index_mb'      => $index_mb,
-                'engine'        => $row['engine'],
-                'updated_at'    => $row['updated_at'],
+                'engine'        => $row['Engine'] ?? '—',
+                'updated_at'    => $row['Update_time'] ?? null,
                 'is_protected'  => $is_protected,
                 'is_cleanable'  => $is_cleanable,
                 'suspect_flags' => $flags,
                 'is_suspicious' => ! empty( $flags ),
             ];
         }
+
+        // Sort by total size descending (SHOW TABLE STATUS returns alphabetical order)
+        usort( $tables, fn( $a, $b ) => $b['total_mb'] <=> $a['total_mb'] );
 
         return $tables;
     }
@@ -215,10 +210,13 @@ class MAD_DBM_Analyzer {
     /** Validates table actually exists in DB (prevents injection via crafted names). */
     public function table_exists( string $table ): bool {
         global $wpdb;
-        return (int) $wpdb->get_var( $wpdb->prepare(
-            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
-            DB_NAME, $table
-        ) ) > 0;
+        // Use SHOW TABLE STATUS LIKE with esc_like() to safely escape pattern chars (%, _).
+        $row = $wpdb->get_row( $wpdb->prepare(
+            'SHOW TABLE STATUS LIKE %s',
+            $wpdb->esc_like( $table )
+        ), ARRAY_A );
+        // Confirm exact name match — LIKE can still match partial patterns on edge cases.
+        return ! empty( $row ) && isset( $row['Name'] ) && $row['Name'] === $table;
     }
 
     // ── private helpers ───────────────────────────────────────────────────────

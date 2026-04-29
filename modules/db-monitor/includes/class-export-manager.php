@@ -392,9 +392,10 @@ class MAD_DBM_ExportManager {
 
     private function table_exists_in_db( string $table ): bool {
         global $wpdb;
-        return (int) $wpdb->get_var( $wpdb->prepare(
-            "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
-            DB_NAME, $table
-        ) ) > 0;
+        $row = $wpdb->get_row( $wpdb->prepare(
+            'SHOW TABLE STATUS LIKE %s',
+            $wpdb->esc_like( $table )
+        ), ARRAY_A );
+        return ! empty( $row ) && isset( $row['Name'] ) && $row['Name'] === $table;
     }
 }
