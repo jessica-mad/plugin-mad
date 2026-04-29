@@ -1,0 +1,174 @@
+/* MAD DB Monitor — Admin Styles */
+
+/* ── Layout ───────────────────────────────────────────────────── */
+.mad-dbm-wrap { max-width: 1200px; }
+
+.mad-dbm-tab-content {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-top: none;
+    padding: 24px;
+}
+
+.mad-dbm-section { margin-top: 28px; }
+
+/* ── Stat cards ───────────────────────────────────────────────── */
+.mad-dbm-stat-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.mad-dbm-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 16px 20px;
+    flex: 1 1 200px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+
+.mad-dbm-card-icon {
+    font-size: 32px;
+    color: #2271b1;
+}
+
+.mad-dbm-card-value {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1;
+    color: #1d2327;
+}
+
+.mad-dbm-card-label {
+    font-size: 12px;
+    color: #646970;
+    margin-top: 4px;
+}
+
+.mad-dbm-card-label code { font-size: 11px; }
+
+.mad-dbm-danger { color: #d63638; }
+.mad-dbm-ok { color: #46b450; }
+
+/* ── Badges ───────────────────────────────────────────────────── */
+.mad-dbm-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.6;
+    margin: 1px 2px;
+}
+
+.mad-dbm-badge-protected  { background: #fee; color: #d63638; border: 1px solid #f1a1a8; }
+.mad-dbm-badge-cleanable  { background: #edfaef; color: #2a6d2e; border: 1px solid #a8ddb0; }
+.mad-dbm-badge-warning    { background: #fff8e1; color: #a84300; border: 1px solid #f0c040; }
+.mad-dbm-badge-neutral    { background: #f0f0f1; color: #646970; border: 1px solid #c3c4c7; }
+.mad-dbm-badge-manual     { background: #e8f3fc; color: #2271b1; border: 1px solid #72aee6; }
+.mad-dbm-badge-auto       { background: #f0f0f1; color: #646970; border: 1px solid #c3c4c7; }
+
+/* ── Table list ───────────────────────────────────────────────── */
+.mad-dbm-table-list .mad-dbm-row-suspect td { background: #fffbe5; }
+.mad-dbm-table-name { font-size: 12px; }
+
+.mad-dbm-actions { white-space: nowrap; }
+.mad-dbm-actions .button { margin: 1px 2px; }
+
+/* ── Modal ────────────────────────────────────────────────────── */
+.mad-dbm-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.45);
+    z-index: 9998;
+}
+
+.mad-dbm-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 9999;
+    width: min(640px, 94vw);
+    max-height: 88vh;
+    overflow-y: auto;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.25);
+}
+
+.mad-dbm-modal-inner { padding: 28px 32px; }
+.mad-dbm-modal h2 { margin-top: 0; }
+
+.mad-dbm-modal-warning {
+    background: #fff8e1;
+    border-left: 4px solid #f0c040;
+    padding: 10px 14px;
+    border-radius: 2px;
+    font-size: 13px;
+}
+
+.mad-dbm-modal-actions {
+    margin-top: 20px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.mad-dbm-preview-box {
+    margin: 12px 0;
+    padding: 12px 16px;
+    background: #f0f6fc;
+    border: 1px solid #72aee6;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+/* ── Token / download box ─────────────────────────────────────── */
+.mad-dbm-token-row td { background: #f0f6fc !important; }
+
+.mad-dbm-token-box {
+    padding: 12px 16px;
+}
+
+.mad-dbm-token-box input[type="text"] {
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.mad-dbm-countdown {
+    font-weight: 700;
+    color: #2271b1;
+}
+.mad-dbm-countdown.expired { color: #d63638; }
+.mad-dbm-warning { color: #a84300; font-size: 12px; }
+
+/* ── Restore steps ────────────────────────────────────────────── */
+.mad-dbm-restore-step {
+    margin-bottom: 24px;
+}
+
+.mad-dbm-restore-step h3 {
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 8px;
+}
+
+/* ── Spinner ──────────────────────────────────────────────────── */
+.mad-dbm-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #c3c4c7;
+    border-top-color: #2271b1;
+    border-radius: 50%;
+    animation: mad-dbm-spin .7s linear infinite;
+    vertical-align: middle;
+    margin-left: 6px;
+}
+
+@keyframes mad-dbm-spin { to { transform: rotate(360deg); } }
