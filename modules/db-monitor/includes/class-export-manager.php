@@ -39,14 +39,14 @@ class MAD_DBM_ExportManager {
     // ── Export ────────────────────────────────────────────────────────────────
 
     /**
-     * Export a table to .sql.gz. Returns export record array on success, WP_Error on failure.
-     * @param string $table      Full table name (with prefix).
-     * @param string $action_type 'manual' | 'auto_before_clean' | 'auto_before_truncate' | etc.
-     * @param int    $retention_days How many days to keep the file.
+     * Export a table to .sql.gz using streaming writes (memory-safe for large tables).
+     * Returns export record array on success, WP_Error on failure.
+     *
+     * @param string $table          Full table name (with prefix).
+     * @param string $action_type    'manual' | 'auto_before_clean' | etc.
+     * @param int    $retention_days Days to keep the file before cron removes it.
      */
     public function export_table( string $table, string $action_type = 'manual', int $retention_days = 30 ) {
-        global $wpdb;
-
         $export_dir = $this->get_export_dir();
         if ( is_wp_error( $export_dir ) ) return $export_dir;
 
@@ -61,15 +61,19 @@ class MAD_DBM_ExportManager {
         $file_name  = "dbm_{$safe_table}_{$timestamp}.sql.gz";
         $file_path  = trailingslashit( $export_dir ) . $file_name;
 
-        $sql_content = $this->generate_sql( $table, $action_type, $login, $user_id );
-        if ( is_wp_error( $sql_content ) ) return $sql_content;
-
+        // Open gz file for streaming — no large string built in memory
         $gz = gzopen( $file_path, 'wb9' );
         if ( ! $gz ) {
             return new WP_Error( 'gz_open_failed', 'No se pudo crear el archivo comprimido.' );
         }
-        gzwrite( $gz, $sql_content );
+
+        $ok = $this->write_sql_to_gz( $gz, $table, $action_type, $login, $user_id );
         gzclose( $gz );
+
+        if ( is_wp_error( $ok ) ) {
+            @unlink( $file_path );
+            return $ok;
+        }
 
         if ( ! file_exists( $file_path ) || filesize( $file_path ) === 0 ) {
             return new WP_Error( 'export_empty', 'El archivo exportado está vacío.' );
@@ -79,6 +83,7 @@ class MAD_DBM_ExportManager {
             ? gmdate( 'Y-m-d H:i:s', time() + $retention_days * DAY_IN_SECONDS )
             : null;
 
+        global $wpdb;
         $wpdb->insert( $this->exports_table, [
             'table_name'  => $table,
             'file_name'   => $file_name,
@@ -104,27 +109,21 @@ class MAD_DBM_ExportManager {
 
     // ── Token / download ─────────────────────────────────────────────────────
 
-    /**
-     * Generate a 5-minute single-use download token for an export.
-     */
+    /** Generate a 5-minute single-use download token. */
     public function generate_download_token( int $export_id ): string {
-        $token = bin2hex( random_bytes( 32 ) ); // 64-char hex
-        $data  = [
+        $token = bin2hex( random_bytes( 32 ) );
+        set_transient( 'mad_dbm_token_' . $token, [
             'export_id'  => $export_id,
             'expires_at' => time() + self::TOKEN_TTL,
             'used'       => false,
-        ];
-        set_transient( 'mad_dbm_token_' . $token, $data, self::TOKEN_TTL );
+        ], self::TOKEN_TTL );
         return $token;
     }
 
-    /**
-     * Validate token. Returns export record or null.
-     */
+    /** Validate token — returns export record merged with token metadata, or null. */
     public function validate_download_token( string $token ): ?array {
         $data = get_transient( 'mad_dbm_token_' . sanitize_text_field( $token ) );
-        if ( ! $data ) return null;
-        if ( $data['used'] ) return null;
+        if ( ! $data || $data['used'] ) return null;
         if ( time() > $data['expires_at'] ) {
             delete_transient( 'mad_dbm_token_' . $token );
             return null;
@@ -134,9 +133,7 @@ class MAD_DBM_ExportManager {
         return array_merge( $export, [ '_token' => $token, '_expires_at' => $data['expires_at'] ] );
     }
 
-    /**
-     * Mark token as used (single-use).
-     */
+    /** Mark token as used (prevents second download with same token). */
     public function invalidate_token( string $token ): void {
         $data = get_transient( 'mad_dbm_token_' . $token );
         if ( $data ) {
@@ -145,9 +142,7 @@ class MAD_DBM_ExportManager {
         }
     }
 
-    /**
-     * Stream .sql.gz file to browser. Exits after sending.
-     */
+    /** Stream .sql.gz to browser and exit. */
     public function serve_download( string $token ): void {
         $export = $this->validate_download_token( $token );
         if ( ! $export ) {
@@ -168,37 +163,34 @@ class MAD_DBM_ExportManager {
         header( 'Cache-Control: no-cache, must-revalidate' );
         header( 'Pragma: no-cache' );
 
-        // Disable output buffering
         while ( ob_get_level() ) ob_end_clean();
         flush();
         readfile( $file_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions
         exit;
     }
 
-    /**
-     * Send admin email with a temporary download link (not the file itself).
-     */
+    /** Send admin email with a temporary link (never attaches the file). */
     public function send_email_notification( int $export_id ): bool {
         $export = $this->get_export_by_id( $export_id );
         if ( ! $export ) return false;
 
-        $token         = $this->generate_download_token( $export_id );
-        $download_url  = add_query_arg( [
+        $token        = $this->generate_download_token( $export_id );
+        $download_url = add_query_arg( [
             'action'    => 'mad_dbm_download',
             'mad_token' => $token,
         ], admin_url( 'admin-post.php' ) );
 
-        $admin_email  = get_option( 'admin_email' );
-        $site_name    = get_bloginfo( 'name' );
-        $table        = $export['table_name'];
-        $file_mb      = round( $export['file_size'] / 1048576, 2 );
-        $ttl_minutes  = self::TOKEN_TTL / 60;
+        $admin_email = get_option( 'admin_email' );
+        $site_name   = get_bloginfo( 'name' );
+        $table       = $export['table_name'];
+        $file_mb     = round( $export['file_size'] / 1048576, 2 );
+        $ttl_min     = self::TOKEN_TTL / 60;
 
         $subject = "[{$site_name}] Exportación disponible: {$table}";
         $body    = "Se ha generado una exportación de la tabla `{$table}` ({$file_mb} MB).\n\n"
-                 . "Haz clic en el siguiente enlace para descargar el archivo (caduca en {$ttl_minutes} minutos):\n\n"
+                 . "Haz clic en el siguiente enlace para descargar el archivo (caduca en {$ttl_min} minutos):\n\n"
                  . $download_url . "\n\n"
-                 . "IMPORTANTE: Este enlace es de un solo uso y expira en {$ttl_minutes} minutos.\n"
+                 . "IMPORTANTE: Este enlace es de un solo uso y expira en {$ttl_min} minutos.\n"
                  . "Si ya expiró, genera una nueva exportación desde el panel.\n\n"
                  . "El archivo NO está adjunto a este email por seguridad.\n\n"
                  . "— MAD DB Monitor";
@@ -208,11 +200,12 @@ class MAD_DBM_ExportManager {
 
     // ── Listing / retrieval ───────────────────────────────────────────────────
 
+    /** Returns only non-deleted exports, newest first. */
     public function get_all_exports(): array {
         global $wpdb;
         // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         return $wpdb->get_results(
-            "SELECT * FROM {$this->exports_table} ORDER BY created_at DESC",
+            "SELECT * FROM {$this->exports_table} WHERE status != 'deleted' ORDER BY created_at DESC",
             ARRAY_A
         ) ?: [];
     }
@@ -244,7 +237,7 @@ class MAD_DBM_ExportManager {
         return true;
     }
 
-    /** Called by cron to remove exports that have passed their retention period. */
+    /** Cron: mark expired exports and delete their files. */
     public function cleanup_expired_exports(): void {
         global $wpdb;
         $now = current_time( 'mysql' );
@@ -259,15 +252,11 @@ class MAD_DBM_ExportManager {
                 @unlink( $export['file_path'] );
             }
             // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-            $wpdb->update( $this->exports_table,
-                [ 'status' => 'expired' ],
-                [ 'id'     => $export['id'] ],
-                [ '%s' ], [ '%d' ]
-            );
+            $wpdb->update( $this->exports_table, [ 'status' => 'expired' ], [ 'id' => $export['id'] ], [ '%s' ], [ '%d' ] );
         }
     }
 
-    /** Remove orphaned .sql.gz files not in the DB table. */
+    /** Cron: remove .sql.gz files on disk that have no DB record. */
     public function cleanup_orphaned_files(): void {
         $dir = $this->get_export_dir();
         if ( is_wp_error( $dir ) || ! is_dir( $dir ) ) return;
@@ -277,8 +266,7 @@ class MAD_DBM_ExportManager {
         $known = $wpdb->get_col( "SELECT file_name FROM {$this->exports_table}" );
 
         foreach ( glob( trailingslashit( $dir ) . '*.sql.gz' ) as $file ) {
-            $base = basename( $file );
-            if ( ! in_array( $base, $known, true ) ) {
+            if ( ! in_array( basename( $file ), $known, true ) ) {
                 @unlink( $file );
             }
         }
@@ -287,7 +275,7 @@ class MAD_DBM_ExportManager {
     // ── Directory / protection ────────────────────────────────────────────────
 
     public function get_export_dir() {
-        $upload  = wp_upload_dir();
+        $upload = wp_upload_dir();
         if ( ! empty( $upload['error'] ) ) {
             return new WP_Error( 'upload_dir', $upload['error'] );
         }
@@ -301,7 +289,8 @@ class MAD_DBM_ExportManager {
     private function ensure_dir_protected( string $dir ): void {
         $htaccess = trailingslashit( $dir ) . '.htaccess';
         if ( ! file_exists( $htaccess ) ) {
-            file_put_contents( $htaccess,
+            file_put_contents(
+                $htaccess,
                 "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
                 . "<IfModule !mod_authz_core.c>\n    Order deny,allow\n    Deny from all\n</IfModule>\n"
             );
@@ -312,46 +301,51 @@ class MAD_DBM_ExportManager {
         }
     }
 
-    // ── SQL generation ────────────────────────────────────────────────────────
+    // ── SQL generation (streaming — no large strings in memory) ──────────────
 
-    private function generate_sql( string $table, string $action_type, string $user_login, int $user_id ) {
+    /**
+     * Write the full SQL dump directly into an open gz resource, in batches.
+     * Returns true on success, WP_Error on failure.
+     *
+     * @param resource $gz       Open gzfile handle (gzopen).
+     * @param string   $table    Full table name.
+     */
+    private function write_sql_to_gz( $gz, string $table, string $action_type, string $login, int $user_id ) {
         global $wpdb;
 
         if ( ! $this->table_exists_in_db( $table ) ) {
             return new WP_Error( 'table_not_found', "La tabla {$table} no existe." );
         }
 
-        $user    = wp_get_current_user();
-        $login   = $user ? $user->user_login : $user_login;
+        // Row count (one cheap query before streaming)
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        $row_count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$table}`" );
 
+        // ── Header ──
         $header  = "-- MAD-DB-EXPORT\n";
         $header .= "-- Table: {$table}\n";
         $header .= "-- Date: " . current_time( 'Y-m-d H:i:s' ) . "\n";
         $header .= "-- Action: {$action_type}\n";
         $header .= "-- User: {$login} ({$user_id})\n";
+        $header .= "-- Rows: {$row_count}\n";
         $header .= "-- Plugin-Version: 1.0.0\n";
         $header .= "-- WordPress-Version: " . get_bloginfo( 'version' ) . "\n\n";
         $header .= "SET FOREIGN_KEY_CHECKS=0;\n";
         $header .= "SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n\n";
+        gzwrite( $gz, $header );
 
-        // CREATE TABLE statement
+        // ── CREATE TABLE ──
         // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
         $create_row = $wpdb->get_row( "SHOW CREATE TABLE `{$table}`", ARRAY_N );
         if ( ! $create_row ) {
             return new WP_Error( 'show_create_failed', "No se pudo obtener CREATE TABLE para {$table}." );
         }
-        $create_sql  = "DROP TABLE IF EXISTS `{$table}`;\n";
-        $create_sql .= $create_row[1] . ";\n\n";
+        gzwrite( $gz, "DROP TABLE IF EXISTS `{$table}`;\n" );
+        gzwrite( $gz, $create_row[1] . ";\n\n" );
 
-        // Row count for header comment
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-        $row_count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$table}`" );
-        $header   .= "-- Rows: {$row_count}\n\n";
-
-        // Data
-        $data_sql = '';
-        $batch    = 500;
-        $offset   = 0;
+        // ── Data in batches (avoids PHP memory exhaustion) ──
+        $batch  = 500;
+        $offset = 0;
 
         while ( true ) {
             // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
@@ -361,33 +355,33 @@ class MAD_DBM_ExportManager {
             );
             if ( empty( $rows ) ) break;
 
-            $columns = '`' . implode( '`, `', array_keys( $rows[0] ) ) . '`';
+            $columns     = '`' . implode( '`, `', array_keys( $rows[0] ) ) . '`';
             $values_list = [];
 
             foreach ( $rows as $row ) {
                 $vals = [];
                 foreach ( $row as $val ) {
-                    if ( is_null( $val ) ) {
-                        $vals[] = 'NULL';
-                    } else {
-                        $vals[] = "'" . esc_sql( $val ) . "'";
-                    }
+                    $vals[] = is_null( $val ) ? 'NULL' : "'" . esc_sql( $val ) . "'";
                 }
                 $values_list[] = '(' . implode( ', ', $vals ) . ')';
             }
 
-            $data_sql .= "INSERT INTO `{$table}` ({$columns}) VALUES\n"
-                       . implode( ",\n", $values_list ) . ";\n";
+            gzwrite( $gz, "INSERT INTO `{$table}` ({$columns}) VALUES\n"
+                        . implode( ",\n", $values_list ) . ";\n" );
 
             $offset += $batch;
+            // Yield control back periodically to avoid max_execution_time on huge tables
+            if ( $offset % 5000 === 0 ) {
+                @set_time_limit( 60 );
+            }
         }
 
-        return $header . $create_sql . $data_sql . "\nSET FOREIGN_KEY_CHECKS=1;\n";
+        gzwrite( $gz, "\nSET FOREIGN_KEY_CHECKS=1;\n" );
+        return true;
     }
 
     private function table_exists_in_db( string $table ): bool {
         global $wpdb;
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
         return (int) $wpdb->get_var( $wpdb->prepare(
             "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
             DB_NAME, $table

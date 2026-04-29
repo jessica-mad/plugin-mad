@@ -1,4 +1,4 @@
-/* MAD DB Monitor — Admin Styles */
+/* MAD DB Monitor — Admin Styles v1.1 */
 
 /* ── Layout ───────────────────────────────────────────────────── */
 .mad-dbm-wrap { max-width: 1200px; }
@@ -29,16 +29,17 @@
     border-radius: 4px;
     padding: 16px 20px;
     flex: 1 1 200px;
-    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    box-shadow: 0 1px 3px rgba(0,0,0,.07);
 }
 
 .mad-dbm-card-icon {
     font-size: 32px;
     color: #2271b1;
+    flex-shrink: 0;
 }
 
 .mad-dbm-card-value {
-    font-size: 28px;
+    font-size: 26px;
     font-weight: 700;
     line-height: 1;
     color: #1d2327;
@@ -53,7 +54,34 @@
 .mad-dbm-card-label code { font-size: 11px; }
 
 .mad-dbm-danger { color: #d63638; }
-.mad-dbm-ok { color: #46b450; }
+.mad-dbm-ok    { color: #46b450; }
+
+/* ── Quick actions (dashboard) ────────────────────────────────── */
+.mad-dbm-quick-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.mad-dbm-quick-action-card {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 16px 20px;
+    flex: 1 1 280px;
+}
+
+.mad-dbm-qa-icon {
+    font-size: 28px;
+    color: #2271b1;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.mad-dbm-quick-action-card p.description { margin: 4px 0 10px; }
 
 /* ── Badges ───────────────────────────────────────────────────── */
 .mad-dbm-badge {
@@ -64,21 +92,58 @@
     font-weight: 600;
     line-height: 1.6;
     margin: 1px 2px;
+    white-space: nowrap;
 }
 
-.mad-dbm-badge-protected  { background: #fee; color: #d63638; border: 1px solid #f1a1a8; }
-.mad-dbm-badge-cleanable  { background: #edfaef; color: #2a6d2e; border: 1px solid #a8ddb0; }
-.mad-dbm-badge-warning    { background: #fff8e1; color: #a84300; border: 1px solid #f0c040; }
-.mad-dbm-badge-neutral    { background: #f0f0f1; color: #646970; border: 1px solid #c3c4c7; }
-.mad-dbm-badge-manual     { background: #e8f3fc; color: #2271b1; border: 1px solid #72aee6; }
-.mad-dbm-badge-auto       { background: #f0f0f1; color: #646970; border: 1px solid #c3c4c7; }
+.mad-dbm-badge-protected { background: #fee; color: #d63638; border: 1px solid #f1a1a8; }
+.mad-dbm-badge-cleanable { background: #edfaef; color: #2a6d2e; border: 1px solid #a8ddb0; }
+.mad-dbm-badge-warning   { background: #fff8e1; color: #a84300; border: 1px solid #f0c040; }
+.mad-dbm-badge-neutral   { background: #f0f0f1; color: #646970; border: 1px solid #c3c4c7; }
+.mad-dbm-badge-manual    { background: #e8f3fc; color: #2271b1; border: 1px solid #72aee6; }
+.mad-dbm-badge-auto      { background: #f0f0f1; color: #646970; border: 1px solid #c3c4c7; }
+
+/* ── Search bar ───────────────────────────────────────────────── */
+.mad-dbm-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.mad-dbm-search-bar input { max-width: 280px; }
 
 /* ── Table list ───────────────────────────────────────────────── */
-.mad-dbm-table-list .mad-dbm-row-suspect td { background: #fffbe5; }
+.mad-dbm-table-list .mad-dbm-row-suspect td { background: #fffbe6; }
 .mad-dbm-table-name { font-size: 12px; }
 
 .mad-dbm-actions { white-space: nowrap; }
 .mad-dbm-actions .button { margin: 1px 2px; }
+
+/* ── Size bar ─────────────────────────────────────────────────── */
+.mad-dbm-size-bar-wrap {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.mad-dbm-size-bar {
+    flex: 1;
+    max-width: 56px;
+    height: 6px;
+    background: #e0e0e0;
+    border-radius: 3px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.mad-dbm-size-bar-fill {
+    height: 100%;
+    background: #2271b1;
+    border-radius: 3px;
+    transition: width .3s ease;
+}
+
+.mad-dbm-row-suspect .mad-dbm-size-bar-fill { background: #d63638; }
 
 /* ── Modal ────────────────────────────────────────────────────── */
 .mad-dbm-modal-overlay {
@@ -94,16 +159,32 @@
     left: 50%;
     transform: translate(-50%, -50%);
     z-index: 9999;
-    width: min(640px, 94vw);
-    max-height: 88vh;
+    width: min(660px, 94vw);
+    max-height: 90vh;
     overflow-y: auto;
     background: #fff;
     border-radius: 6px;
     box-shadow: 0 8px 40px rgba(0,0,0,.25);
 }
 
-.mad-dbm-modal-inner { padding: 28px 32px; }
-.mad-dbm-modal h2 { margin-top: 0; }
+.mad-dbm-modal-inner { padding: 28px 32px; position: relative; }
+.mad-dbm-modal h2 { margin: 0 0 16px; font-size: 18px; }
+
+.mad-dbm-modal-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    color: #646970;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+.mad-dbm-modal-close:hover { background: #f0f0f1; color: #1d2327; }
 
 .mad-dbm-modal-warning {
     background: #fff8e1;
@@ -111,6 +192,7 @@
     padding: 10px 14px;
     border-radius: 2px;
     font-size: 13px;
+    margin-bottom: 16px;
 }
 
 .mad-dbm-modal-actions {
@@ -118,10 +200,11 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    align-items: center;
 }
 
 .mad-dbm-preview-box {
-    margin: 12px 0;
+    margin: 14px 0;
     padding: 12px 16px;
     background: #f0f6fc;
     border: 1px solid #72aee6;
@@ -134,35 +217,62 @@
 
 .mad-dbm-token-box {
     padding: 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.mad-dbm-token-box .mad-dbm-token-url-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
 }
 
 .mad-dbm-token-box input[type="text"] {
     font-family: monospace;
     font-size: 12px;
+    flex: 1;
+    min-width: 200px;
 }
 
-.mad-dbm-countdown {
-    font-weight: 700;
-    color: #2271b1;
-}
+.mad-dbm-countdown { font-weight: 700; color: #2271b1; }
 .mad-dbm-countdown.expired { color: #d63638; }
-.mad-dbm-warning { color: #a84300; font-size: 12px; }
+.mad-dbm-countdown-label { font-size: 12px; color: #a84300; }
 
 /* ── Restore steps ────────────────────────────────────────────── */
-.mad-dbm-restore-step {
-    margin-bottom: 24px;
+.mad-dbm-restore-step { margin-bottom: 24px; }
+.mad-dbm-restore-step h3 { border-bottom: 1px solid #ddd; padding-bottom: 8px; margin-top: 0; }
+
+/* ── Settings ─────────────────────────────────────────────────── */
+.mad-dbm-settings-wrap .form-table th { width: 260px; }
+
+/* ── Toast notifications ──────────────────────────────────────── */
+.mad-dbm-toast {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    z-index: 100000;
+    padding: 12px 18px 12px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 4px 20px rgba(0,0,0,.18);
+    display: none;
+    max-width: 400px;
+    line-height: 1.5;
+    cursor: pointer;
 }
 
-.mad-dbm-restore-step h3 {
-    border-bottom: 1px solid #ddd;
-    padding-bottom: 8px;
-}
+.mad-dbm-toast-success { background: #edfaef; color: #2a6d2e; border-left: 4px solid #46b450; }
+.mad-dbm-toast-error   { background: #fef0f0; color: #8c1c1c; border-left: 4px solid #d63638; }
+.mad-dbm-toast-info    { background: #e8f3fc; color: #2271b1; border-left: 4px solid #2271b1; }
 
 /* ── Spinner ──────────────────────────────────────────────────── */
 .mad-dbm-spinner {
     display: inline-block;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     border: 2px solid #c3c4c7;
     border-top-color: #2271b1;
     border-radius: 50%;
@@ -172,3 +282,13 @@
 }
 
 @keyframes mad-dbm-spin { to { transform: rotate(360deg); } }
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 782px) {
+    .mad-dbm-stat-cards { flex-direction: column; }
+    .mad-dbm-card { flex: none; }
+    .mad-dbm-modal { width: 96vw; }
+    .mad-dbm-modal-inner { padding: 20px 18px; }
+    .mad-dbm-toast { right: 12px; left: 12px; max-width: none; }
+    .mad-dbm-size-bar { display: none; }
+}

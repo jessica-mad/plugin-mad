@@ -3,98 +3,109 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_DBM_Analyzer {
 
+    private array $thresholds;
+
+    public function __construct( array $thresholds = [] ) {
+        $this->thresholds = wp_parse_args( $thresholds, [
+            'size_mb'   => 50,
+            'row_count' => 100000,
+        ] );
+    }
+
     /** Tables that can NEVER be truncated or deleted from this panel */
     private function get_protected_suffixes(): array {
         return [
             'users', 'usermeta', 'options', 'posts', 'postmeta',
             'comments', 'commentmeta', 'terms', 'term_taxonomy',
             'term_relationships', 'termmeta', 'links',
-            // WooCommerce orders (classic + HPOS)
             'woocommerce_order_items', 'woocommerce_order_itemmeta',
             'wc_orders', 'wc_order_addresses', 'wc_order_operational_data',
             'wc_orders_meta',
-            // WooCommerce tax / shipping
             'woocommerce_tax_rates', 'woocommerce_tax_rate_locations',
             'woocommerce_shipping_zones', 'woocommerce_shipping_zone_locations',
             'woocommerce_shipping_zone_methods',
-            // Internal module tables
             'mad_dbm_audit', 'mad_dbm_exports',
         ];
     }
 
     /**
-     * Cleanable table whitelist: key = suffix after prefix, value = config array.
+     * Cleanable table whitelist. key = full table name (with prefix).
      */
     public function get_cleanable_config(): array {
         global $wpdb;
         $p = $wpdb->prefix;
         return [
             $p . 'woocommerce_sessions' => [
-                'label'       => 'WooCommerce Sessions',
-                'description' => 'Sesiones activas de WooCommerce. Las antiguas pueden eliminarse.',
-                'date_column' => 'session_expiry',
-                'date_type'   => 'unix',
-                'actions'     => [ 'clean_old', 'truncate' ],
+                'label'        => 'WooCommerce Sessions',
+                'description'  => 'Sesiones activas de WooCommerce. Las antiguas pueden eliminarse.',
+                'date_column'  => 'session_expiry',
+                'date_type'    => 'unix',
+                'actions'      => [ 'clean_old', 'truncate' ],
                 'default_days' => 30,
+                'action_label' => 'Sesiones antiguas',
             ],
             $p . 'actionscheduler_logs' => [
-                'label'       => 'Action Scheduler Logs',
-                'description' => 'Logs del planificador de tareas. Crecen rápido en tiendas activas.',
-                'date_column' => 'log_date_gmt',
-                'date_type'   => 'datetime',
-                'actions'     => [ 'clean_old', 'truncate' ],
+                'label'        => 'Action Scheduler Logs',
+                'description'  => 'Logs del planificador de tareas.',
+                'date_column'  => 'log_date_gmt',
+                'date_type'    => 'datetime',
+                'actions'      => [ 'clean_old', 'truncate' ],
                 'default_days' => 30,
+                'action_label' => 'Logs antiguos',
             ],
             $p . 'actionscheduler_actions' => [
-                'label'       => 'Action Scheduler Actions',
-                'description' => 'Acciones completadas/fallidas del planificador. Las históricas pueden limpiarse.',
-                'date_column' => 'scheduled_date_gmt',
-                'date_type'   => 'datetime',
-                'actions'     => [ 'clean_old_completed' ],
+                'label'        => 'Action Scheduler Actions',
+                'description'  => 'Solo se eliminan acciones completadas/fallidas/canceladas.',
+                'date_column'  => 'scheduled_date_gmt',
+                'date_type'    => 'datetime',
+                'actions'      => [ 'clean_old_completed' ],
                 'default_days' => 30,
-                'status_filter' => [ 'complete', 'failed', 'canceled' ],
+                'status_filter'=> [ 'complete', 'failed', 'canceled' ],
+                'action_label' => 'Acciones completadas/fallidas',
             ],
             $p . 'wc_log' => [
-                'label'       => 'WooCommerce Log (wc_log)',
-                'description' => 'Registro de eventos de WooCommerce.',
-                'date_column' => 'timestamp',
-                'date_type'   => 'datetime',
-                'actions'     => [ 'clean_old', 'truncate' ],
+                'label'        => 'WooCommerce Log',
+                'description'  => 'Registro de eventos de WooCommerce.',
+                'date_column'  => 'timestamp',
+                'date_type'    => 'datetime',
+                'actions'      => [ 'clean_old', 'truncate' ],
                 'default_days' => 30,
+                'action_label' => 'Logs antiguos',
             ],
             $p . 'woocommerce_log' => [
-                'label'       => 'WooCommerce Log (woocommerce_log)',
-                'description' => 'Registro de eventos de WooCommerce (nombre alternativo).',
-                'date_column' => 'timestamp',
-                'date_type'   => 'datetime',
-                'actions'     => [ 'clean_old', 'truncate' ],
+                'label'        => 'WooCommerce Log (alt)',
+                'description'  => 'Registro de eventos de WooCommerce.',
+                'date_column'  => 'timestamp',
+                'date_type'    => 'datetime',
+                'actions'      => [ 'clean_old', 'truncate' ],
                 'default_days' => 30,
+                'action_label' => 'Logs antiguos',
             ],
             $p . 'cartbounty' => [
-                'label'       => 'CartBounty',
-                'description' => 'Carritos abandonados registrados por CartBounty.',
-                'date_column' => 'time',
-                'date_type'   => 'datetime',
-                'actions'     => [ 'clean_old', 'truncate' ],
+                'label'        => 'CartBounty',
+                'description'  => 'Carritos abandonados registrados por CartBounty.',
+                'date_column'  => 'time',
+                'date_type'    => 'datetime',
+                'actions'      => [ 'clean_old', 'truncate' ],
                 'default_days' => 60,
+                'action_label' => 'Carritos antiguos',
             ],
             $p . 'cartbounty_pro' => [
-                'label'       => 'CartBounty Pro',
-                'description' => 'Carritos abandonados registrados por CartBounty Pro.',
-                'date_column' => 'time',
-                'date_type'   => 'datetime',
-                'actions'     => [ 'clean_old', 'truncate' ],
+                'label'        => 'CartBounty Pro',
+                'description'  => 'Carritos abandonados registrados por CartBounty Pro.',
+                'date_column'  => 'time',
+                'date_type'    => 'datetime',
+                'actions'      => [ 'clean_old', 'truncate' ],
                 'default_days' => 60,
+                'action_label' => 'Carritos antiguos',
             ],
         ];
     }
 
-    /** Returns all existing tables in the database with size/row info */
+    /** Returns all tables sorted by size desc, with computed flags. */
     public function get_all_tables(): array {
         global $wpdb;
 
-        $db_name = DB_NAME;
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         $rows = $wpdb->get_results( $wpdb->prepare(
             "SELECT
                 TABLE_NAME        AS name,
@@ -107,57 +118,64 @@ class MAD_DBM_Analyzer {
              FROM information_schema.TABLES
              WHERE TABLE_SCHEMA = %s
              ORDER BY total_bytes DESC",
-            $db_name
+            DB_NAME
         ), ARRAY_A );
 
         if ( ! $rows ) return [];
 
-        $protected   = $this->get_protected_table_names();
-        $cleanable   = $this->get_cleanable_config();
-        $suspicious  = $this->get_suspicious_patterns();
+        $protected  = $this->get_protected_table_names();
+        $cleanable  = $this->get_cleanable_config();
+        $suspicious = $this->get_suspicious_patterns();
 
         $tables = [];
         foreach ( $rows as $row ) {
-            $name       = $row['name'];
-            $total_mb   = round( $row['total_bytes'] / 1048576, 3 );
-            $data_mb    = round( $row['data_bytes'] / 1048576, 3 );
-            $index_mb   = round( $row['index_bytes'] / 1048576, 3 );
-            $row_count  = (int) $row['rows'];
+            $name      = $row['name'];
+            $total_mb  = round( $row['total_bytes'] / 1048576, 3 );
+            $data_mb   = round( $row['data_bytes'] / 1048576, 3 );
+            $index_mb  = round( $row['index_bytes'] / 1048576, 3 );
+            $row_count = (int) $row['rows'];
 
-            $is_protected  = in_array( $name, $protected, true );
-            $is_cleanable  = isset( $cleanable[ $name ] );
-            $suspect_flags = $this->detect_suspicious( $name, $row_count, $total_mb, $suspicious );
+            $is_protected = in_array( $name, $protected, true );
+            $is_cleanable = isset( $cleanable[ $name ] );
+            $flags        = $this->detect_suspicious( $name, $row_count, $total_mb, $suspicious );
 
             $tables[] = [
-                'name'         => $name,
-                'rows'         => $row_count,
-                'total_mb'     => $total_mb,
-                'data_mb'      => $data_mb,
-                'index_mb'     => $index_mb,
-                'engine'       => $row['engine'],
-                'updated_at'   => $row['updated_at'],
-                'is_protected' => $is_protected,
-                'is_cleanable' => $is_cleanable,
-                'suspect_flags'=> $suspect_flags,
-                'is_suspicious'=> ! empty( $suspect_flags ),
+                'name'          => $name,
+                'rows'          => $row_count,
+                'total_mb'      => $total_mb,
+                'data_mb'       => $data_mb,
+                'index_mb'      => $index_mb,
+                'engine'        => $row['engine'],
+                'updated_at'    => $row['updated_at'],
+                'is_protected'  => $is_protected,
+                'is_cleanable'  => $is_cleanable,
+                'suspect_flags' => $flags,
+                'is_suspicious' => ! empty( $flags ),
             ];
         }
 
         return $tables;
     }
 
-    public function get_database_summary(): array {
-        $tables     = $this->get_all_tables();
+    /**
+     * Calculate summary from an already-loaded tables array (avoids double query).
+     * If $tables is empty, queries fresh data.
+     */
+    public function get_database_summary( array $tables = [] ): array {
+        if ( empty( $tables ) ) {
+            $tables = $this->get_all_tables();
+        }
+
         $total_mb   = array_sum( array_column( $tables, 'total_mb' ) );
         $suspicious = array_filter( $tables, fn( $t ) => $t['is_suspicious'] );
         $heaviest   = $tables[0] ?? null;
 
         return [
-            'table_count'     => count( $tables ),
-            'total_mb'        => round( $total_mb, 2 ),
-            'heaviest_table'  => $heaviest ? $heaviest['name'] : '—',
-            'heaviest_mb'     => $heaviest ? $heaviest['total_mb'] : 0,
-            'suspicious_count'=> count( $suspicious ),
+            'table_count'      => count( $tables ),
+            'total_mb'         => round( $total_mb, 2 ),
+            'heaviest_table'   => $heaviest ? $heaviest['name'] : '—',
+            'heaviest_mb'      => $heaviest ? $heaviest['total_mb'] : 0,
+            'suspicious_count' => count( $suspicious ),
         ];
     }
 
@@ -166,38 +184,33 @@ class MAD_DBM_Analyzer {
     }
 
     public function is_table_cleanable( string $table ): bool {
-        $config = $this->get_cleanable_config();
-        return isset( $config[ $table ] );
+        return isset( $this->get_cleanable_config()[ $table ] );
     }
 
     public function get_cleanable_table_config( string $table ): ?array {
-        $config = $this->get_cleanable_config();
-        return $config[ $table ] ?? null;
+        return $this->get_cleanable_config()[ $table ] ?? null;
     }
 
-    /** Validate table exists in DB (prevent injection via crafted names) */
+    /** Validates table actually exists in DB (prevents injection via crafted names). */
     public function table_exists( string $table ): bool {
         global $wpdb;
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-        $result = $wpdb->get_var( $wpdb->prepare(
+        return (int) $wpdb->get_var( $wpdb->prepare(
             "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s",
             DB_NAME, $table
-        ) );
-        return (int) $result > 0;
+        ) ) > 0;
     }
 
     // ── private helpers ───────────────────────────────────────────────────────
 
     private function get_protected_table_names(): array {
         global $wpdb;
-        $p = $wpdb->prefix;
-        return array_map( fn( $s ) => $p . $s, $this->get_protected_suffixes() );
+        return array_map( fn( $s ) => $wpdb->prefix . $s, $this->get_protected_suffixes() );
     }
 
     private function get_suspicious_patterns(): array {
         return [
-            'size_mb'    => 50,   // tables over 50 MB
-            'row_count'  => 100000, // tables with 100k+ rows
+            'size_mb'       => $this->thresholds['size_mb'],
+            'row_count'     => $this->thresholds['row_count'],
             'name_patterns' => [
                 'actionscheduler_logs', 'actionscheduler_actions',
                 'woocommerce_sessions', 'wc_sessions',
@@ -218,7 +231,7 @@ class MAD_DBM_Analyzer {
         }
         foreach ( $patterns['name_patterns'] as $pat ) {
             if ( str_contains( $name, $pat ) ) {
-                $flags[] = sprintf( 'Nombre sospechoso (%s)', esc_html( $pat ) );
+                $flags[] = sprintf( 'Patrón: %s', esc_html( $pat ) );
                 break;
             }
         }

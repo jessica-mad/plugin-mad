@@ -3,8 +3,6 @@
  * Módulo: DB Monitor
  *
  * Monitor y Limpieza Segura de Base de Datos.
- * Diagnostica tablas, exporta de forma segura, limpia solo tablas permitidas
- * y restaura desde backups generados por el propio plugin.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -14,7 +12,6 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
     private $core;
     private string $slug = 'db-monitor';
 
-    // Lazy-loaded service instances
     private ?MAD_DBM_Analyzer       $analyzer = null;
     private ?MAD_DBM_ExportManager  $exporter = null;
     private ?MAD_DBM_CleanupManager $cleaner  = null;
@@ -28,8 +25,8 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
 
     // ── MAD_Suite_Module interface ────────────────────────────────────────────
 
-    public function slug(): string  { return $this->slug; }
-    public function title(): string { return __( 'Monitor y Limpieza de BD', 'mad-suite' ); }
+    public function slug(): string       { return $this->slug; }
+    public function title(): string      { return __( 'Monitor y Limpieza de BD', 'mad-suite' ); }
     public function menu_label(): string { return __( 'DB Monitor', 'mad-suite' ); }
     public function menu_slug(): string  { return MAD_Suite_Core::MENU_SLUG_ROOT . '-' . $this->slug; }
 
@@ -41,16 +38,18 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         $this->ensure_db_tables();
         $this->register_cron();
 
-        // Download endpoint (public but token-protected)
+        // Token-protected download (accessible without login — token IS the auth)
         add_action( 'admin_post_mad_dbm_download',        [ $this, 'handle_download' ] );
         add_action( 'admin_post_nopriv_mad_dbm_download', [ $this, 'handle_download' ] );
 
-        // Export via form POST (admin only)
-        add_action( 'admin_post_mad_dbm_export_table', [ $this, 'handle_export_post' ] );
+        // Settings save
+        add_action( 'admin_post_mad_dbm_save_settings', [ $this, 'handle_save_settings' ] );
 
-        // AJAX actions
+        // AJAX — admin only (wp_ajax_* requires login)
+        add_action( 'wp_ajax_mad_dbm_export_ajax',      [ $this, 'ajax_export_table' ] );
         add_action( 'wp_ajax_mad_dbm_preview_cleanup',  [ $this, 'ajax_preview_cleanup' ] );
         add_action( 'wp_ajax_mad_dbm_cleanup',          [ $this, 'ajax_cleanup' ] );
+        add_action( 'wp_ajax_mad_dbm_clean_transients', [ $this, 'ajax_clean_transients' ] );
         add_action( 'wp_ajax_mad_dbm_get_token',        [ $this, 'ajax_get_token' ] );
         add_action( 'wp_ajax_mad_dbm_send_email',       [ $this, 'ajax_send_email' ] );
         add_action( 'wp_ajax_mad_dbm_delete_export',    [ $this, 'ajax_delete_export' ] );
@@ -73,23 +72,25 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
             'exports'   => __( 'Exportaciones', 'mad-suite' ),
             'restore'   => __( 'Restaurar', 'mad-suite' ),
             'audit'     => __( 'Auditoría', 'mad-suite' ),
+            'settings'  => __( 'Configuración', 'mad-suite' ),
         ];
 
         $current_tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'dashboard'; // phpcs:ignore WordPress.Security.NonceVerification
         if ( ! array_key_exists( $current_tab, $tabs ) ) $current_tab = 'dashboard';
 
-        // Prepare data for each tab
         $data = [ 'module' => $this, 'tabs' => $tabs, 'current_tab' => $current_tab ];
 
         switch ( $current_tab ) {
             case 'dashboard':
-                $tables = $this->analyzer()->get_all_tables();
-                $data['summary']          = $this->analyzer()->get_database_summary();
-                $data['suspicious_tables'] = array_filter( $tables, fn( $t ) => $t['is_suspicious'] );
+                // Load tables once and share with summary to avoid double query
+                $tables                    = $this->analyzer()->get_all_tables();
+                $data['summary']           = $this->analyzer()->get_database_summary( $tables );
+                $data['suspicious_tables'] = array_values( array_filter( $tables, fn( $t ) => $t['is_suspicious'] ) );
                 break;
 
             case 'tables':
-                $data['tables'] = $this->analyzer()->get_all_tables();
+                $data['tables']           = $this->analyzer()->get_all_tables();
+                $data['cleanable_config'] = $this->analyzer()->get_cleanable_config();
                 break;
 
             case 'exports':
@@ -97,16 +98,19 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
                 break;
 
             case 'restore':
-                // No extra data needed
                 break;
 
             case 'audit':
-                $per_page = 50;
-                $paged    = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1; // phpcs:ignore WordPress.Security.NonceVerification
+                $per_page             = 50;
+                $paged                = isset( $_GET['paged'] ) ? max( 1, (int) $_GET['paged'] ) : 1; // phpcs:ignore WordPress.Security.NonceVerification
                 $data['logs']         = $this->audit()->get_logs( $per_page, $paged );
                 $data['total_logs']   = $this->audit()->get_total();
                 $data['current_page'] = $paged;
                 $data['per_page']     = $per_page;
+                break;
+
+            case 'settings':
+                $data['settings'] = $this->get_settings();
                 break;
         }
 
@@ -120,22 +124,27 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         if ( strpos( $hook, $this->menu_slug() ) === false ) return;
 
         $url = plugin_dir_url( __FILE__ );
-        wp_enqueue_style(
-            'mad-dbm-admin',
-            $url . 'assets/css/admin.css',
-            [],
-            '1.0.0'
-        );
-        wp_enqueue_script(
-            'mad-dbm-admin',
-            $url . 'assets/js/admin.js',
-            [ 'jquery' ],
-            '1.0.0',
-            true
-        );
+        wp_enqueue_style( 'mad-dbm-admin', $url . 'assets/css/admin.css', [], '1.1.0' );
+        wp_enqueue_script( 'mad-dbm-admin', $url . 'assets/js/admin.js', [ 'jquery' ], '1.1.0', true );
         wp_localize_script( 'mad-dbm-admin', 'madDBM', [
-            'ajax_url' => admin_url( 'admin-ajax.php' ),
-            'nonce'    => wp_create_nonce( 'mad_dbm_nonce' ),
+            'ajax_url'    => admin_url( 'admin-ajax.php' ),
+            'nonce'       => wp_create_nonce( 'mad_dbm_nonce' ),
+            'token_ttl'   => 300,
+            'i18n'        => [
+                'exporting'       => __( 'Exportando… esto puede tardar en tablas grandes.', 'mad-suite' ),
+                'export_ok'       => __( 'Exportación completada.', 'mad-suite' ),
+                'export_fail'     => __( 'Error en la exportación.', 'mad-suite' ),
+                'copied'          => __( 'Enlace copiado al portapapeles.', 'mad-suite' ),
+                'email_ok'        => __( 'Email enviado correctamente al administrador.', 'mad-suite' ),
+                'email_fail'      => __( 'No se pudo enviar el email.', 'mad-suite' ),
+                'confirm_delete'  => __( '¿Eliminar este archivo de exportación? No se puede deshacer.', 'mad-suite' ),
+                'confirm_email'   => __( 'Se enviará un enlace temporal (5 min) al email del administrador. ¿Continuar?', 'mad-suite' ),
+                'link_expired'    => __( 'ENLACE EXPIRADO', 'mad-suite' ),
+                'expired_msg'     => __( 'El enlace ha expirado. Genera una nueva exportación o solicita otro enlace.', 'mad-suite' ),
+                'conn_error'      => __( 'Error de conexión.', 'mad-suite' ),
+                'transients_ok'   => __( 'Transients expirados eliminados:', 'mad-suite' ),
+                'searching'       => __( 'Buscar tabla…', 'mad-suite' ),
+            ],
         ] );
     }
 
@@ -149,32 +158,49 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         $this->exporter()->serve_download( $token );
     }
 
-    // ── Export via form POST ──────────────────────────────────────────────────
+    // ── Settings save ─────────────────────────────────────────────────────────
 
-    public function handle_export_post(): void {
+    public function handle_save_settings(): void {
         if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) {
             wp_die( esc_html__( 'No tienes permisos.', 'mad-suite' ) );
         }
+        check_admin_referer( 'mad_dbm_save_settings', 'mad_dbm_settings_nonce' );
 
-        $table = isset( $_POST['mad_table'] ) ? sanitize_text_field( wp_unslash( $_POST['mad_table'] ) ) : '';
-        if ( ! $table ) wp_die( 'Tabla requerida.' );
+        $input = $_POST['mad_dbm_settings'] ?? [];
+        $saved = [
+            'retention_days'        => max( 1, (int) ( $input['retention_days'] ?? 30 ) ),
+            'suspicious_size_mb'    => max( 1, (int) ( $input['suspicious_size_mb'] ?? 50 ) ),
+            'suspicious_row_count'  => max( 1, (int) ( $input['suspicious_row_count'] ?? 100000 ) ),
+        ];
 
-        check_admin_referer( 'mad_dbm_export_' . $table, 'mad_dbm_nonce' );
+        update_option( MAD_Suite_Core::option_key( $this->slug ), $saved );
 
-        if ( ! $this->analyzer()->table_exists( $table ) ) {
-            wp_die( 'La tabla no existe en la base de datos.' );
-        }
+        wp_safe_redirect( add_query_arg( [
+            'page'       => $this->menu_slug(),
+            'tab'        => 'settings',
+            'mad_notice' => 'success',
+            'mad_msg'    => rawurlencode( 'Configuración guardada.' ),
+        ], admin_url( 'admin.php' ) ) );
+        exit;
+    }
 
-        $export = $this->exporter()->export_table( $table, 'manual' );
+    // ── AJAX: export table ────────────────────────────────────────────────────
+
+    public function ajax_export_table(): void {
+        $this->verify_ajax_nonce();
+        $table    = $this->get_validated_table( 'mad_table' );
+        $settings = $this->get_settings();
+
+        $export = $this->exporter()->export_table( $table, 'manual', (int) $settings['retention_days'] );
 
         if ( is_wp_error( $export ) ) {
-            $url = $this->redirect_url( 'tables', 'error', $export->get_error_message() );
-        } else {
-            $url = $this->redirect_url( 'exports', 'success', 'Exportación creada: ' . $export['file_name'] );
+            wp_send_json_error( $export->get_error_message() );
         }
-
-        wp_safe_redirect( $url );
-        exit;
+        wp_send_json_success( [
+            'file_name' => $export['file_name'],
+            'file_size' => $export['file_size'],
+            'export_id' => $export['id'],
+        ] );
     }
 
     // ── AJAX: preview cleanup ─────────────────────────────────────────────────
@@ -193,19 +219,31 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         wp_send_json_success( $result );
     }
 
-    // ── AJAX: execute cleanup (with auto backup) ──────────────────────────────
+    // ── AJAX: execute cleanup ─────────────────────────────────────────────────
 
     public function ajax_cleanup(): void {
         $this->verify_ajax_nonce();
-        $table  = $this->get_validated_table( 'mad_table' );
-        $action = $this->get_clean_action( 'mad_action' );
-        $days   = isset( $_POST['mad_days'] ) ? (int) $_POST['mad_days'] : 30;
+        $table    = $this->get_validated_table( 'mad_table' );
+        $action   = $this->get_clean_action( 'mad_action' );
+        $days     = isset( $_POST['mad_days'] ) ? (int) $_POST['mad_days'] : 30;
+        $settings = $this->get_settings();
 
-        $result = $this->cleaner()->execute_safe_cleanup( $table, $action, [ 'days' => $days ] );
+        $result = $this->cleaner()->execute_safe_cleanup(
+            $table, $action, [ 'days' => $days ], (int) $settings['retention_days']
+        );
 
         if ( is_wp_error( $result ) ) {
             wp_send_json_error( $result->get_error_message() );
         }
+        wp_send_json_success( $result );
+    }
+
+    // ── AJAX: clean expired transients (no backup needed — data is already expired) ──
+
+    public function ajax_clean_transients(): void {
+        $this->verify_ajax_nonce();
+        $result = $this->cleaner()->clean_expired_transients();
+        $this->audit()->log( 'wp_options', 'clean_expired_transients', "Registros eliminados: {$result['deleted']}", 'success' );
         wp_send_json_success( $result );
     }
 
@@ -230,7 +268,7 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         wp_send_json_success( [ 'download_url' => $download_url ] );
     }
 
-    // ── AJAX: send email notification ─────────────────────────────────────────
+    // ── AJAX: send email ──────────────────────────────────────────────────────
 
     public function ajax_send_email(): void {
         $this->verify_ajax_nonce();
@@ -238,11 +276,8 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         if ( ! $export_id ) wp_send_json_error( 'ID de exportación inválido.' );
 
         $sent = $this->exporter()->send_email_notification( $export_id );
-        if ( $sent ) {
-            wp_send_json_success( 'Email enviado.' );
-        } else {
-            wp_send_json_error( 'No se pudo enviar el email.' );
-        }
+        if ( $sent ) wp_send_json_success();
+        else         wp_send_json_error( 'No se pudo enviar el email.' );
     }
 
     // ── AJAX: delete export ───────────────────────────────────────────────────
@@ -281,12 +316,16 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         $table = $meta['table'] ?? '';
         if ( ! $this->restorer()->is_restorable( $table ) ) {
             @unlink( $tmp_path );
-            wp_send_json_error( "La tabla '{$table}' no puede restaurarse desde este panel (protegida o no existe)." );
+            wp_send_json_error( "La tabla '{$table}' no puede restaurarse (protegida o no existe)." );
         }
 
+        // Store the actual path server-side; return only a short-lived token to the client
+        $upload_token = bin2hex( random_bytes( 16 ) );
+        set_transient( 'mad_dbm_upload_' . $upload_token, $tmp_path, 600 ); // 10 min window
+
         wp_send_json_success( [
-            'tmp_path' => $tmp_path,
-            'meta'     => $meta,
+            'upload_token' => $upload_token,
+            'meta'         => $meta,
         ] );
     }
 
@@ -296,16 +335,30 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         $this->verify_ajax_nonce();
         check_ajax_referer( 'mad_dbm_restore_execute', 'mad_dbm_restore_execute_nonce' );
 
-        $tmp_path = isset( $_POST['mad_tmp_path'] ) ? sanitize_text_field( wp_unslash( $_POST['mad_tmp_path'] ) ) : '';
-        $table    = isset( $_POST['mad_table'] ) ? sanitize_text_field( wp_unslash( $_POST['mad_table'] ) ) : '';
+        $upload_token = isset( $_POST['mad_upload_token'] ) ? sanitize_text_field( wp_unslash( $_POST['mad_upload_token'] ) ) : '';
+        $table        = isset( $_POST['mad_table'] ) ? sanitize_text_field( wp_unslash( $_POST['mad_table'] ) ) : '';
 
-        if ( ! $tmp_path || ! $table ) {
+        if ( ! $upload_token || ! $table ) {
             wp_send_json_error( 'Datos incompletos.' );
         }
 
-        // Ensure the path is inside our exports directory
+        // Retrieve path from server-side transient (never trusts client path)
+        $tmp_path = get_transient( 'mad_dbm_upload_' . $upload_token );
+        if ( ! $tmp_path ) {
+            wp_send_json_error( 'La sesión de restauración ha expirado. Sube el archivo de nuevo.' );
+        }
+        delete_transient( 'mad_dbm_upload_' . $upload_token );
+
+        // Validate path is inside the expected directory
         $export_dir = $this->exporter()->get_export_dir();
-        if ( is_wp_error( $export_dir ) || strpos( realpath( dirname( $tmp_path ) ), realpath( $export_dir ) ) !== 0 ) {
+        if ( is_wp_error( $export_dir ) ) {
+            wp_send_json_error( 'Error accediendo al directorio de exportaciones.' );
+        }
+
+        $real_tmp = realpath( $tmp_path );
+        $real_dir = realpath( trailingslashit( $export_dir ) . 'tmp' );
+
+        if ( ! $real_tmp || ! $real_dir || strpos( $real_tmp, $real_dir ) !== 0 ) {
             wp_send_json_error( 'Ruta de archivo no permitida.' );
         }
 
@@ -335,12 +388,23 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
 
     private function ensure_db_tables(): void {
         $version_key = 'mad_dbm_db_version';
-        $current     = '1.0';
+        $current     = '1.1';
         if ( get_option( $version_key ) === $current ) return;
 
         $this->audit()->create_table();
         $this->exporter()->create_table();
         update_option( $version_key, $current );
+    }
+
+    // ── Settings ──────────────────────────────────────────────────────────────
+
+    private function get_settings(): array {
+        $saved = get_option( MAD_Suite_Core::option_key( $this->slug ), [] );
+        return wp_parse_args( $saved, [
+            'retention_days'       => 30,
+            'suspicious_size_mb'   => 50,
+            'suspicious_row_count' => 100000,
+        ] );
     }
 
     // ── Service accessors (lazy init) ─────────────────────────────────────────
@@ -351,7 +415,13 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
     }
 
     private function analyzer(): MAD_DBM_Analyzer {
-        if ( ! $this->analyzer ) $this->analyzer = new MAD_DBM_Analyzer();
+        if ( ! $this->analyzer ) {
+            $s              = $this->get_settings();
+            $this->analyzer = new MAD_DBM_Analyzer( [
+                'size_mb'   => (int) $s['suspicious_size_mb'],
+                'row_count' => (int) $s['suspicious_row_count'],
+            ] );
+        }
         return $this->analyzer;
     }
 
@@ -372,53 +442,38 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
         return $this->restorer;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     private function load_classes(): void {
-        foreach ( [ 'class-audit-logger', 'class-db-analyzer', 'class-export-manager', 'class-cleanup-manager', 'class-restore-manager' ] as $file ) {
-            require_once __DIR__ . '/includes/' . $file . '.php';
+        foreach ( [ 'class-audit-logger', 'class-db-analyzer', 'class-export-manager', 'class-cleanup-manager', 'class-restore-manager' ] as $f ) {
+            require_once __DIR__ . '/includes/' . $f . '.php';
         }
     }
 
-    /** Verify the generic AJAX nonce. Optionally also check a named referer nonce. */
-    private function verify_ajax_nonce( string $nonce_field = 'mad_nonce', string $action = 'mad_dbm_nonce' ): void {
+    /** Checks capability and verifies the generic nonce. Sends JSON error and exits on failure. */
+    private function verify_ajax_nonce( string $field = 'mad_nonce', string $action = 'mad_dbm_nonce' ): void {
         if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) {
             wp_send_json_error( 'Permisos insuficientes.' );
         }
-        $nonce = isset( $_POST[ $nonce_field ] ) ? sanitize_text_field( wp_unslash( $_POST[ $nonce_field ] ) ) : '';
+        $nonce = isset( $_POST[ $field ] ) ? sanitize_text_field( wp_unslash( $_POST[ $field ] ) ) : '';
         if ( ! wp_verify_nonce( $nonce, $action ) ) {
             wp_send_json_error( 'Token de seguridad inválido.' );
         }
     }
 
-    /** Get and validate a table name from POST (must exist in DB). */
+    /** Gets and validates a table name from POST: must exist in DB. */
     private function get_validated_table( string $key ): string {
         $table = isset( $_POST[ $key ] ) ? sanitize_text_field( wp_unslash( $_POST[ $key ] ) ) : '';
-        if ( ! $table ) {
-            wp_send_json_error( 'Nombre de tabla requerido.' );
-        }
-        if ( ! $this->analyzer()->table_exists( $table ) ) {
-            wp_send_json_error( 'La tabla no existe en la base de datos.' );
-        }
+        if ( ! $table ) wp_send_json_error( 'Nombre de tabla requerido.' );
+        if ( ! $this->analyzer()->table_exists( $table ) ) wp_send_json_error( 'La tabla no existe en la base de datos.' );
         return $table;
     }
 
-    /** Sanitize and allow-list the cleanup action name. */
+    /** Allow-lists the cleanup action name. */
     private function get_clean_action( string $key ): string {
         $allowed = [ 'clean_old', 'truncate', 'clean_old_completed', 'clean_expired_transients' ];
         $action  = isset( $_POST[ $key ] ) ? sanitize_key( wp_unslash( $_POST[ $key ] ) ) : 'clean_old';
-        if ( ! in_array( $action, $allowed, true ) ) {
-            wp_send_json_error( 'Acción no permitida.' );
-        }
+        if ( ! in_array( $action, $allowed, true ) ) wp_send_json_error( 'Acción no permitida.' );
         return $action;
-    }
-
-    private function redirect_url( string $tab, string $notice, string $msg ): string {
-        return add_query_arg( [
-            'page'       => $this->menu_slug(),
-            'tab'        => $tab,
-            'mad_notice' => $notice,
-            'mad_msg'    => rawurlencode( $msg ),
-        ], admin_url( 'admin.php' ) );
     }
 };

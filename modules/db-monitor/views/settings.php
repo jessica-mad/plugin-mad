@@ -15,9 +15,20 @@ $base_url = admin_url( 'admin.php?page=' . esc_attr( $module->menu_slug() ) );
     <?php endif; ?>
 
     <nav class="nav-tab-wrapper">
-        <?php foreach ( $tabs as $slug => $label ) : ?>
+        <?php foreach ( $tabs as $slug => $label ) :
+            $icon_map = [
+                'dashboard' => 'dashicons-chart-pie',
+                'tables'    => 'dashicons-database',
+                'exports'   => 'dashicons-download',
+                'restore'   => 'dashicons-upload',
+                'audit'     => 'dashicons-list-view',
+                'settings'  => 'dashicons-admin-settings',
+            ];
+            $icon = $icon_map[ $slug ] ?? '';
+        ?>
             <a href="<?php echo esc_url( add_query_arg( 'tab', $slug, $base_url ) ); ?>"
                class="nav-tab <?php echo $current_tab === $slug ? 'nav-tab-active' : ''; ?>">
+                <?php if ( $icon ) : ?><span class="dashicons <?php echo esc_attr( $icon ); ?>" style="font-size:16px;line-height:1.5;margin-right:4px"></span><?php endif; ?>
                 <?php echo esc_html( $label ); ?>
             </a>
         <?php endforeach; ?>
