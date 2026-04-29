@@ -188,7 +188,12 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
 
     public function ajax_export_table(): void {
         $this->verify_ajax_nonce();
-        $table    = $this->get_validated_table( 'mad_table' );
+        $table = $this->get_validated_table( 'mad_table' );
+
+        if ( ! $this->analyzer()->is_table_exportable( $table ) ) {
+            wp_send_json_error( "La tabla '{$table}' contiene credenciales de usuario y no puede exportarse." );
+        }
+
         $settings = $this->get_settings();
 
         $export = $this->exporter()->export_table( $table, 'manual', (int) $settings['retention_days'] );
@@ -313,10 +318,11 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
             wp_send_json_error( $meta->get_error_message() );
         }
 
-        $table = $meta['table'] ?? '';
-        if ( ! $this->restorer()->is_restorable( $table ) ) {
+        $table      = $meta['table'] ?? '';
+        $restorable = $this->restorer()->is_restorable( $table );
+        if ( is_wp_error( $restorable ) ) {
             @unlink( $tmp_path );
-            wp_send_json_error( "La tabla '{$table}' no puede restaurarse (protegida o no existe)." );
+            wp_send_json_error( $restorable->get_error_message() );
         }
 
         // Store the actual path server-side; return only a short-lived token to the client
@@ -340,6 +346,11 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
 
         if ( ! $upload_token || ! $table ) {
             wp_send_json_error( 'Datos incompletos.' );
+        }
+
+        // Absolute restriction enforced again at execution time — never trust only the upload step.
+        if ( ! $this->analyzer()->is_table_exportable( $table ) ) {
+            wp_send_json_error( "La tabla '{$table}' contiene credenciales de usuario y no puede importarse." );
         }
 
         // Retrieve path from server-side transient (never trusts client path)
@@ -426,7 +437,7 @@ return new class( $core ?? null ) implements MAD_Suite_Module {
     }
 
     private function exporter(): MAD_DBM_ExportManager {
-        if ( ! $this->exporter ) $this->exporter = new MAD_DBM_ExportManager( $this->audit() );
+        if ( ! $this->exporter ) $this->exporter = new MAD_DBM_ExportManager( $this->audit(), $this->analyzer() );
         return $this->exporter;
     }
 

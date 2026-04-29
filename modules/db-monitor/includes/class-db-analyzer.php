@@ -12,6 +12,27 @@ class MAD_DBM_Analyzer {
         ] );
     }
 
+    /**
+     * Tables that can NEVER be exported or imported — contain user credentials and identity data.
+     * This restriction is absolute and cannot be overridden by any admin action.
+     */
+    private function get_never_exportable_suffixes(): array {
+        return [ 'users', 'usermeta' ];
+    }
+
+    /** Full table names that can never be exported or imported (with DB prefix). */
+    public function get_never_exportable_table_names(): array {
+        global $wpdb;
+        return array_map( fn( $s ) => $wpdb->prefix . $s, $this->get_never_exportable_suffixes() );
+    }
+
+    /**
+     * Returns false for tables containing user credentials — these can NEVER be exported or imported.
+     */
+    public function is_table_exportable( string $table ): bool {
+        return ! in_array( $table, $this->get_never_exportable_table_names(), true );
+    }
+
     /** Tables that can NEVER be truncated or deleted from this panel */
     private function get_protected_suffixes(): array {
         return [

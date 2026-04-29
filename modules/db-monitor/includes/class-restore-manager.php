@@ -108,12 +108,30 @@ class MAD_DBM_RestoreManager {
 
     /**
      * Check if the table in the export can be restored.
+     * Returns true on success, WP_Error describing the specific reason on failure.
      */
-    public function is_restorable( string $table ): bool {
-        // Protected tables can never be restored through this UI
-        if ( $this->analyzer->is_table_protected( $table ) ) return false;
-        // Table must exist in DB (we only restore to existing tables to avoid schema injection)
-        if ( ! $this->analyzer->table_exists( $table ) ) return false;
+    public function is_restorable( string $table ) {
+        // Absolute restriction: user credential tables can never be imported.
+        if ( ! $this->analyzer->is_table_exportable( $table ) ) {
+            return new WP_Error(
+                'user_table_restricted',
+                sprintf( "La tabla '%s' contiene credenciales de usuario y nunca puede importarse desde este panel.", $table )
+            );
+        }
+        // Protected core/WooCommerce tables cannot be restored through this UI.
+        if ( $this->analyzer->is_table_protected( $table ) ) {
+            return new WP_Error(
+                'table_protected',
+                sprintf( "La tabla '%s' está protegida y no puede restaurarse desde este panel.", $table )
+            );
+        }
+        // Table must exist in DB (we only restore to existing tables to avoid schema injection).
+        if ( ! $this->analyzer->table_exists( $table ) ) {
+            return new WP_Error(
+                'table_not_found',
+                sprintf( "La tabla '%s' no existe en la base de datos actual.", $table )
+            );
+        }
         return true;
     }
 
@@ -137,9 +155,10 @@ class MAD_DBM_RestoreManager {
             return new WP_Error( 'table_mismatch', "La tabla en el archivo ({$table_in_file}) no coincide con la esperada ({$expected_table})." );
         }
 
-        if ( ! $this->is_restorable( $expected_table ) ) {
+        $restorable = $this->is_restorable( $expected_table );
+        if ( is_wp_error( $restorable ) ) {
             $this->cleanup_temp( $tmp_file );
-            return new WP_Error( 'not_restorable', "La tabla '{$expected_table}' no puede restaurarse desde este panel." );
+            return $restorable;
         }
 
         // Read and decompress

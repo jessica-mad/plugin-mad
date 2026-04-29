@@ -5,12 +5,14 @@ class MAD_DBM_ExportManager {
 
     private string $exports_table;
     private MAD_DBM_AuditLogger $audit;
+    private MAD_DBM_Analyzer $analyzer;
     private const TOKEN_TTL = 300; // 5 minutes
 
-    public function __construct( MAD_DBM_AuditLogger $audit ) {
+    public function __construct( MAD_DBM_AuditLogger $audit, MAD_DBM_Analyzer $analyzer ) {
         global $wpdb;
         $this->exports_table = $wpdb->prefix . 'mad_dbm_exports';
         $this->audit         = $audit;
+        $this->analyzer      = $analyzer;
     }
 
     public function create_table(): void {
@@ -47,6 +49,14 @@ class MAD_DBM_ExportManager {
      * @param int    $retention_days Days to keep the file before cron removes it.
      */
     public function export_table( string $table, string $action_type = 'manual', int $retention_days = 30 ) {
+        // Absolute restriction: user credential tables can never be exported.
+        if ( ! $this->analyzer->is_table_exportable( $table ) ) {
+            return new WP_Error(
+                'user_table_restricted',
+                sprintf( "La tabla '%s' contiene credenciales de usuario y no puede exportarse.", $table )
+            );
+        }
+
         $export_dir = $this->get_export_dir();
         if ( is_wp_error( $export_dir ) ) return $export_dir;
 
