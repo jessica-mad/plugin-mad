@@ -1,0 +1,17 @@
+/**
+ * MAD Quotes – Shop / Mini-cart CSS
+ *
+ * Hides prices in the mini-cart widget and shop/product archive pages
+ * when global quotes are enabled.
+ */
+
+/* Mini-cart subtotal */
+.widget_shopping_cart .cart_list li .amount,
+.woocommerce-mini-cart__total .amount {
+    display: none !important;
+}
+
+/* Shop loop price */
+.woocommerce ul.products li.product .price {
+    visibility: hidden;
+}
