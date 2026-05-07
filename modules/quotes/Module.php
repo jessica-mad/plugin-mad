@@ -175,6 +175,11 @@ return new class( $core ) implements MAD_Suite_Module {
             wp_schedule_event( time(), 'daily', 'mad_quotes_check_expiry' );
         }
         add_action( 'mad_quotes_check_expiry', [ $this, 'expire_old_quotes' ] );
+
+        // ── Personalización de textos para usuarios con rol de cotización ──
+        add_filter( 'gettext',                               [ $this, 'filter_wc_minicart_strings' ], 10, 3 );
+        add_filter( 'woocommerce_add_to_cart_message_html',  [ $this, 'filter_add_to_cart_message' ], 10, 3 );
+        add_action( 'wp_enqueue_scripts',                    [ $this, 'enqueue_frontend_js' ] );
     }
 
     /* ---------------------------------------------------------------- */
@@ -226,6 +231,62 @@ return new class( $core ) implements MAD_Suite_Module {
             $this->menu_slug()
         );
         $this->register_field( 'quote_expiry_days', __( 'Días hasta caducidad', 'mad-suite' ), 'field_number', 'mad_quotes_expiry' );
+
+        // ── Sección: Personalización de textos ─────────────────────────
+        add_settings_section(
+            'mad_quotes_texts',
+            __( 'Personalización de textos', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Textos personalizados para usuarios con rol de cotización. Deja en blanco para usar los textos originales de WooCommerce.', 'mad-suite' ) . '</p>';
+                if ( apply_filters( 'wpml_current_language', null ) !== null ) {
+                    echo '<p class="description" style="background:#fffbe6;border-left:3px solid #f0c040;padding:8px 12px;">'
+                        . esc_html__( 'WPML detectado. Puedes traducir estos textos en WPML > Traducción de cadenas > Grupo "mad-suite".', 'mad-suite' )
+                        . '</p>';
+                }
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'quote_minicart_view_cart_text',
+            __( '"Ver carrito" (mini-cart)', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_texts',
+            __( 'Reemplaza el botón "Ver carrito" en el desplegable del mini-carrito.', 'mad-suite' )
+        );
+        $this->register_field(
+            'quote_minicart_checkout_text',
+            __( '"Finalizar compra" (mini-cart)', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_texts',
+            __( 'Reemplaza el botón "Finalizar compra" en el desplegable del mini-carrito.', 'mad-suite' )
+        );
+        $this->register_field(
+            'quote_atc_notice_text',
+            __( 'Texto del aviso al añadir', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_texts',
+            __( 'Reemplaza "se ha añadido a tu carrito" en el aviso emergente al añadir un producto.', 'mad-suite' )
+        );
+        $this->register_field(
+            'quote_atc_notice_link_text',
+            __( 'Enlace del aviso al añadir', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_texts',
+            __( 'Reemplaza el texto del enlace "Ver carrito" dentro del aviso emergente.', 'mad-suite' )
+        );
+        add_settings_field(
+            'mad_quotes_css_replacements',
+            __( 'Reemplazos por selector CSS', 'mad-suite' ),
+            [ $this, 'field_css_replacements' ],
+            $this->menu_slug(),
+            'mad_quotes_texts'
+        );
+
+        $this->register_wpml_strings();
+        add_action(
+            'update_option_' . MAD_Suite_Core::option_key( $this->slug ),
+            [ $this, 'register_wpml_strings' ]
+        );
 
         // ── AJAX ───────────────────────────────────────────────────────
         add_action( 'wp_ajax_mad_quotes_update_status', [ $this, 'ajax_update_status' ] );
@@ -996,6 +1057,181 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<p class="description">' . esc_html( $args['desc'] ?? '' ) . '</p>';
     }
 
+    /* ================================================================ */
+    /*  Personalización de textos                                        */
+    /* ================================================================ */
+
+    private function get_translated_setting( string $key ): string {
+        $settings = mad_quotes_get_settings();
+        $value    = trim( $settings[ $key ] ?? '' );
+        if ( $value === '' ) return '';
+        $translated = apply_filters( 'wpml_translate_single_string', $value, 'mad-suite', $key );
+        return is_string( $translated ) ? $translated : $value;
+    }
+
+    public function register_wpml_strings(): void {
+        $settings    = mad_quotes_get_settings();
+        $simple_keys = [
+            'quote_minicart_view_cart_text',
+            'quote_minicart_checkout_text',
+            'quote_atc_notice_text',
+            'quote_atc_notice_link_text',
+        ];
+        foreach ( $simple_keys as $key ) {
+            $value = trim( $settings[ $key ] ?? '' );
+            if ( $value !== '' ) {
+                do_action( 'wpml_register_single_string', 'mad-suite', $key, $value );
+            }
+        }
+        foreach ( (array) ( $settings['quote_css_replacements'] ?? [] ) as $i => $pair ) {
+            $text = trim( $pair['text'] ?? '' );
+            if ( $text !== '' ) {
+                do_action( 'wpml_register_single_string', 'mad-suite', 'quote_css_replacement_' . $i . '_text', $text );
+            }
+        }
+    }
+
+    public function filter_wc_minicart_strings( string $translation, string $text, string $domain ): string {
+        if ( $domain !== 'woocommerce' ) return $translation;
+        if ( ! $this->current_user_is_quote_role() ) return $translation;
+
+        if ( $text === 'View cart' ) {
+            $custom = $this->get_translated_setting( 'quote_minicart_view_cart_text' );
+            if ( $custom !== '' ) return $custom;
+        }
+
+        if ( $text === 'Checkout' ) {
+            $custom = $this->get_translated_setting( 'quote_minicart_checkout_text' );
+            if ( $custom !== '' ) return $custom;
+        }
+
+        return $translation;
+    }
+
+    public function filter_add_to_cart_message( string $message, array $products, int $show_qty ): string {
+        if ( ! $this->current_user_is_quote_role() ) return $message;
+
+        $notice_text = $this->get_translated_setting( 'quote_atc_notice_text' );
+        if ( $notice_text !== '' ) {
+            $message = preg_replace(
+                '/\b(has been added to your cart|se ha a[ñn]adido a tu carrito)\b\.?/ui',
+                esc_html( $notice_text ),
+                $message
+            );
+        }
+
+        $link_text = $this->get_translated_setting( 'quote_atc_notice_link_text' );
+        if ( $link_text !== '' ) {
+            $message = preg_replace(
+                '/(<a\s[^>]*class="[^"]*wc-forward[^"]*"[^>]*>)([^<]+)(<\/a>)/i',
+                '$1' . esc_html( $link_text ) . '$3',
+                $message
+            );
+        }
+
+        return $message;
+    }
+
+    public function enqueue_frontend_js(): void {
+        if ( ! $this->current_user_is_quote_role() ) return;
+
+        $settings  = mad_quotes_get_settings();
+        $raw_pairs = (array) ( $settings['quote_css_replacements'] ?? [] );
+
+        $replacements = [];
+        foreach ( $raw_pairs as $i => $pair ) {
+            $selector = trim( $pair['selector'] ?? '' );
+            $text     = trim( $pair['text'] ?? '' );
+            if ( $selector === '' || $text === '' ) continue;
+
+            $translated = apply_filters(
+                'wpml_translate_single_string',
+                $text,
+                'mad-suite',
+                'quote_css_replacement_' . $i . '_text'
+            );
+
+            $replacements[] = [
+                'selector' => $selector,
+                'text'     => is_string( $translated ) ? $translated : $text,
+            ];
+        }
+
+        if ( empty( $replacements ) ) return;
+
+        wp_enqueue_script(
+            'mad-quotes-frontend',
+            MAD_QUOTES_URL . 'assets/js/frontend.js',
+            [ 'jquery' ],
+            '1.0',
+            true
+        );
+        wp_localize_script( 'mad-quotes-frontend', 'mad_quotes_front', [
+            'replacements' => $replacements,
+        ] );
+    }
+
+    public function field_css_replacements(): void {
+        $settings = mad_quotes_get_settings();
+        $rows     = (array) ( $settings['quote_css_replacements'] ?? [] );
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+
+        if ( empty( $rows ) ) {
+            $rows = [ [ 'selector' => '', 'text' => '' ] ];
+        }
+        ?>
+        <div id="mad-quotes-css-replacements">
+            <?php foreach ( $rows as $i => $row ) : ?>
+            <div class="mad-quotes-css-row" style="display:flex;gap:8px;margin-bottom:6px;align-items:center;">
+                <input type="text"
+                       name="<?php echo esc_attr( $opt_key ); ?>[quote_css_replacements][<?php echo (int) $i; ?>][selector]"
+                       value="<?php echo esc_attr( $row['selector'] ?? '' ); ?>"
+                       placeholder=".button.wc-forward"
+                       class="regular-text"
+                       style="flex:1;">
+                <span style="padding:0 6px;">&rarr;</span>
+                <input type="text"
+                       name="<?php echo esc_attr( $opt_key ); ?>[quote_css_replacements][<?php echo (int) $i; ?>][text]"
+                       value="<?php echo esc_attr( $row['text'] ?? '' ); ?>"
+                       placeholder="<?php esc_attr_e( 'Texto de reemplazo', 'mad-suite' ); ?>"
+                       class="regular-text"
+                       style="flex:1;">
+                <button type="button" class="button mad-quotes-remove-row">&times;</button>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <button type="button" id="mad-quotes-add-row" class="button">
+            <?php esc_html_e( '+ Añadir selector', 'mad-suite' ); ?>
+        </button>
+        <p class="description">
+            <?php esc_html_e( 'Define pares selector CSS → texto. Se aplican en el frontend vía JS para todos los usuarios con rol de cotización. Ej: selector ".woocommerce-mini-cart__buttons .button", texto "Ver lista de cotización".', 'mad-suite' ); ?>
+        </p>
+        <script>
+        (function ($) {
+            var $wrap   = $('#mad-quotes-css-replacements');
+            var optKey  = <?php echo wp_json_encode( $opt_key ); ?>;
+            var placeholder = <?php echo wp_json_encode( __( 'Texto de reemplazo', 'mad-suite' ) ); ?>;
+
+            $('#mad-quotes-add-row').on('click', function () {
+                var idx = $wrap.find('.mad-quotes-css-row').length;
+                $wrap.append(
+                    '<div class="mad-quotes-css-row" style="display:flex;gap:8px;margin-bottom:6px;align-items:center;">' +
+                    '<input type="text" name="' + optKey + '[quote_css_replacements][' + idx + '][selector]" placeholder=".button.wc-forward" class="regular-text" style="flex:1;">' +
+                    '<span style="padding:0 6px;">&rarr;</span>' +
+                    '<input type="text" name="' + optKey + '[quote_css_replacements][' + idx + '][text]" placeholder="' + $('<span>').text(placeholder).html() + '" class="regular-text" style="flex:1;">' +
+                    '<button type="button" class="button mad-quotes-remove-row">&times;</button>' +
+                    '</div>'
+                );
+            });
+
+            $wrap.on('click', '.mad-quotes-remove-row', function () {
+                $(this).closest('.mad-quotes-css-row').remove();
+            });
+        }(jQuery));
+        </script>
+        <?php
+    }
+
     public function sanitize_settings( $input ) {
         $clean = [];
 
@@ -1006,6 +1242,24 @@ return new class( $core ) implements MAD_Suite_Module {
         $clean['quote_expiry_days'] = absint( $input['quote_expiry_days'] ?? 0 );
 
         $clean['quote_button_text'] = sanitize_text_field( $input['quote_button_text'] ?? '' );
+
+        foreach ( [
+            'quote_minicart_view_cart_text',
+            'quote_minicart_checkout_text',
+            'quote_atc_notice_text',
+            'quote_atc_notice_link_text',
+        ] as $key ) {
+            $clean[ $key ] = sanitize_text_field( $input[ $key ] ?? '' );
+        }
+
+        $clean['quote_css_replacements'] = [];
+        foreach ( (array) ( $input['quote_css_replacements'] ?? [] ) as $pair ) {
+            $selector = sanitize_text_field( $pair['selector'] ?? '' );
+            $text     = sanitize_text_field( $pair['text'] ?? '' );
+            if ( $selector !== '' && $text !== '' ) {
+                $clean['quote_css_replacements'][] = [ 'selector' => $selector, 'text' => $text ];
+            }
+        }
 
         return $clean;
     }

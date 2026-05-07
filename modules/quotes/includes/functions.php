@@ -108,9 +108,14 @@ function mad_quotes_get_settings() {
     $opts       = get_option( $option_key, [] );
 
     $defaults = [
-        'quote_roles'       => [],
-        'quote_expiry_days' => 0,
-        'quote_button_text' => '',
+        'quote_roles'                   => [],
+        'quote_expiry_days'             => 0,
+        'quote_button_text'             => '',
+        'quote_minicart_view_cart_text' => '',
+        'quote_minicart_checkout_text'  => '',
+        'quote_atc_notice_text'         => '',
+        'quote_atc_notice_link_text'    => '',
+        'quote_css_replacements'        => [],
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );
