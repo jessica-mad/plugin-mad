@@ -150,15 +150,19 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_cart_item_subtotal', [ $this, 'hide_cart_item_subtotal' ], 10, 3 );
         add_filter( 'woocommerce_checkout_show_payment', [ $this, 'hide_checkout_payment' ] );
         // Ocultar los totales del footer (subtotal, total) vía PHP para el checkout clásico
-        add_filter( 'woocommerce_cart_subtotal',                 [ $this, 'hide_cart_totals_html' ], 10, 3 );
-        add_filter( 'woocommerce_cart_totals_order_total_html',  [ $this, 'hide_cart_totals_html_single' ] );
-        // CSS inline justo antes de la tabla de revisión (timing garantizado; el carrito ya está cargado)
-        add_action( 'woocommerce_checkout_before_order_review_heading', [ $this, 'inject_checkout_css' ] );
-        // CSS en wp_head como capa temprana (evita flash; puede fallar si el carrito no está listo aún)
+        add_filter( 'woocommerce_cart_subtotal',                [ $this, 'hide_cart_totals_html' ], 10, 3 );
+        add_filter( 'woocommerce_cart_totals_order_total_html', [ $this, 'hide_cart_totals_html_single' ] );
+        // CSS temprano (wp_head): evita flash si el carrito ya está disponible
         add_action( 'wp_head', [ $this, 'inject_checkout_css' ] );
+        // CSS inline antes de la tabla de revisión: timing garantizado dentro del template
+        add_action( 'woocommerce_checkout_before_order_review_heading', [ $this, 'inject_checkout_css' ] );
+        // CSS de seguridad DESPUÉS de la tabla: dispara con el carrito definitivamente renderizado;
+        // usa current_user_is_quote_role() sin depender del estado del carrito.
+        add_action( 'woocommerce_checkout_after_order_review', [ $this, 'inject_checkout_css_after_review' ] );
 
         // ── Checkout: simplificar campos y deshabilitar envío ─────────
-        add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], 9999 );
+        // PHP_INT_MAX garantiza que nuestro filtro sea el último en ejecutarse
+        add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], PHP_INT_MAX );
         add_filter( 'woocommerce_cart_needs_shipping', [ $this, 'no_shipping_for_quotes' ] );
 
         // ── Ciclo de vida del pedido ───────────────────────────────────
@@ -424,20 +428,7 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $this->cart_is_quote_experience() ) return;
 
         $this->checkout_css_injected = true;
-        echo '<style>
-            /* Checkout clásico: columna "Total/Subtotal" en cabecera, cuerpo y pie */
-            .woocommerce-checkout-review-order-table .product-total,
-            .woocommerce-checkout-review-order-table tfoot,
-            .woocommerce-checkout-review-order-table tfoot tr,
-            .woocommerce-checkout-review-order-table .cart-subtotal,
-            .woocommerce-checkout-review-order-table .order-total { display: none !important; }
-            /* Checkout en bloques (WooCommerce Blocks) */
-            .wc-block-components-order-summary-item__individual-prices,
-            .wc-block-components-order-summary-item__total-price,
-            .wc-block-components-totals-item,
-            .wc-block-components-totals-footer-item,
-            .wc-block-order-summary-item__price { display: none !important; }
-        </style>';
+        $this->output_checkout_hide_css();
     }
 
     /** Elimina el precio unitario de los ítems en carrito/checkout para usuarios de presupuesto. */
@@ -476,19 +467,56 @@ return new class( $core ) implements MAD_Suite_Module {
         return $show;
     }
 
+    /**
+     * Inyección de CSS de seguridad DESPUÉS de la tabla de revisión del pedido.
+     * Dispara con el carrito definitivamente renderizado; no usa cart_is_quote_experience()
+     * para evitar problemas de timing. Solo comprueba el rol y excluye order-pay.
+     */
+    public function inject_checkout_css_after_review() {
+        if ( is_order_received_page() ) return;
+        if ( get_query_var( 'order-pay' ) ) return;
+        if ( ! $this->current_user_is_quote_role() ) return;
+        if ( $this->checkout_css_injected ) return;
+
+        $this->checkout_css_injected = true;
+        $this->output_checkout_hide_css();
+    }
+
+    /** Emite el bloque <style> que oculta precios en el checkout. Reutilizado por ambos métodos. */
+    private function output_checkout_hide_css() {
+        echo '<style>
+            /* Checkout clásico: columna "Total/Subtotal" en cabecera, cuerpo y pie */
+            .woocommerce-checkout-review-order-table .product-total,
+            .woocommerce-checkout-review-order-table tfoot,
+            .woocommerce-checkout-review-order-table tfoot tr,
+            .woocommerce-checkout-review-order-table .cart-subtotal,
+            .woocommerce-checkout-review-order-table .order-total { display: none !important; }
+            /* Checkout en bloques (WooCommerce Blocks) */
+            .wc-block-components-order-summary-item__individual-prices,
+            .wc-block-components-order-summary-item__total-price,
+            .wc-block-components-totals-item,
+            .wc-block-components-totals-footer-item,
+            .wc-block-order-summary-item__price { display: none !important; }
+        </style>';
+    }
+
     /* ================================================================ */
     /*  Checkout: simplificar campos                                     */
     /* ================================================================ */
 
     /**
-     * En experiencia de presupuesto solo pedimos el email.
-     * El cliente completará el resto de sus datos cuando pague el presupuesto aprobado
-     * (en la página order-pay, donde cart_is_quote_experience() devuelve false).
+     * Simplifica el checkout a nombre, apellido, email y notas.
+     * Usa current_user_is_quote_role() (sin verificar carrito) para mayor robustez:
+     * evita falsos negativos de cart_is_quote_experience() por timing en AJAX o sesión.
+     * - Excluye la página order-pay: ahí el cliente completa todos sus datos antes de pagar.
+     * - Excluye la página de confirmación (order-received).
      */
     public function simplify_quote_checkout_fields( $fields ) {
-        if ( ! $this->cart_is_quote_experience() ) return $fields;
+        if ( is_order_received_page() )       return $fields;
+        if ( get_query_var( 'order-pay' ) )   return $fields;
+        if ( ! $this->current_user_is_quote_role() ) return $fields;
 
-        $keep = [ 'billing_email' ];
+        $keep = [ 'billing_first_name', 'billing_last_name', 'billing_email' ];
 
         foreach ( array_keys( $fields['billing'] ?? [] ) as $key ) {
             if ( ! in_array( $key, $keep, true ) ) {
@@ -498,7 +526,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $fields['shipping'] = [];
 
-        // Mantener solo las notas del pedido (útiles para que el cliente explique su solicitud)
+        // Mantener el campo de notas: el cliente puede explicar su solicitud
         if ( isset( $fields['order'] ) ) {
             foreach ( array_keys( $fields['order'] ) as $key ) {
                 if ( $key !== 'order_comments' ) {
@@ -511,8 +539,9 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     public function no_shipping_for_quotes( $needs_shipping ) {
-        if ( $this->cart_is_quote_experience() ) return false;
-        return $needs_shipping;
+        if ( get_query_var( 'order-pay' ) )   return $needs_shipping;
+        if ( ! $this->current_user_is_quote_role() ) return $needs_shipping;
+        return false;
     }
 
     /* ================================================================ */
