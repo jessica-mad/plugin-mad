@@ -146,10 +146,15 @@ return new class( $core ) implements MAD_Suite_Module {
 
         // ── Checkout: ocultar precios y pagos para experiencia de presupuesto ─
         // PHP hooks: actúan en el origen, sin depender de selectores CSS del tema
-        add_filter( 'woocommerce_cart_item_price',       [ $this, 'hide_cart_item_price' ],    10, 3 );
-        add_filter( 'woocommerce_cart_item_subtotal',    [ $this, 'hide_cart_item_subtotal' ], 10, 3 );
+        add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ],    10, 3 );
+        add_filter( 'woocommerce_cart_item_subtotal', [ $this, 'hide_cart_item_subtotal' ], 10, 3 );
         add_filter( 'woocommerce_checkout_show_payment', [ $this, 'hide_checkout_payment' ] );
-        // CSS mínimo solo para columna "Total" y tfoot de la tabla de revisión (sin PHP hook equivalente)
+        // Ocultar los totales del footer (subtotal, total) vía PHP para el checkout clásico
+        add_filter( 'woocommerce_cart_subtotal',                 [ $this, 'hide_cart_totals_html' ], 10, 3 );
+        add_filter( 'woocommerce_cart_totals_order_total_html',  [ $this, 'hide_cart_totals_html_single' ] );
+        // CSS inline justo antes de la tabla de revisión (timing garantizado; el carrito ya está cargado)
+        add_action( 'woocommerce_checkout_before_order_review_heading', [ $this, 'inject_checkout_css' ] );
+        // CSS en wp_head como capa temprana (evita flash; puede fallar si el carrito no está listo aún)
         add_action( 'wp_head', [ $this, 'inject_checkout_css' ] );
 
         // ── Checkout: simplificar campos y deshabilitar envío ─────────
@@ -404,19 +409,34 @@ return new class( $core ) implements MAD_Suite_Module {
         return $gateways;
     }
 
+    /** @var bool Evita doble inyección de CSS si wp_head y el hook de revisión coinciden. */
+    private $checkout_css_injected = false;
+
     /**
-     * Inyecta CSS mínimo en el checkout de presupuesto para ocultar la columna
-     * "Total" y el tfoot de la tabla de revisión — elementos estructurales de WC
-     * clásico para los que no existe un filtro PHP equivalente.
-     * Los precios de línea y el bloque de pago se eliminan vía PHP hooks.
+     * Inyecta CSS en el checkout de presupuesto para ocultar precios y totales.
+     * Se dispara tanto en wp_head (carga rápida) como en
+     * woocommerce_checkout_before_order_review_heading (carrito garantizado disponible).
+     * El flag $checkout_css_injected evita salida duplicada.
      */
     public function inject_checkout_css() {
         if ( ! is_checkout() || is_order_received_page() ) return;
+        if ( $this->checkout_css_injected ) return;
         if ( ! $this->cart_is_quote_experience() ) return;
 
+        $this->checkout_css_injected = true;
         echo '<style>
+            /* Checkout clásico: columna "Total/Subtotal" en cabecera, cuerpo y pie */
+            .woocommerce-checkout-review-order-table .product-total,
             .woocommerce-checkout-review-order-table tfoot,
-            .woocommerce-checkout-review-order-table .product-total { display: none !important; }
+            .woocommerce-checkout-review-order-table tfoot tr,
+            .woocommerce-checkout-review-order-table .cart-subtotal,
+            .woocommerce-checkout-review-order-table .order-total { display: none !important; }
+            /* Checkout en bloques (WooCommerce Blocks) */
+            .wc-block-components-order-summary-item__individual-prices,
+            .wc-block-components-order-summary-item__total-price,
+            .wc-block-components-totals-item,
+            .wc-block-components-totals-footer-item,
+            .wc-block-order-summary-item__price { display: none !important; }
         </style>';
     }
 
@@ -430,6 +450,24 @@ return new class( $core ) implements MAD_Suite_Module {
     public function hide_cart_item_subtotal( $subtotal, $cart_item, $cart_item_key ) {
         if ( $this->cart_is_quote_experience() ) return '';
         return $subtotal;
+    }
+
+    /**
+     * Oculta vía PHP el subtotal del carrito en la tabla de revisión del checkout clásico.
+     * Firma compatible con woocommerce_cart_subtotal ($subtotal, $compound, $cart).
+     */
+    public function hide_cart_totals_html( $subtotal, $compound = false, $cart = null ) {
+        if ( $this->cart_is_quote_experience() ) return '';
+        return $subtotal;
+    }
+
+    /**
+     * Oculta vía PHP el total del pedido en la tabla de revisión del checkout clásico.
+     * Firma compatible con woocommerce_cart_totals_order_total_html ($value).
+     */
+    public function hide_cart_totals_html_single( $value ) {
+        if ( $this->cart_is_quote_experience() ) return '';
+        return $value;
     }
 
     /** Elimina el bloque de métodos de pago del checkout para usuarios de presupuesto. */
