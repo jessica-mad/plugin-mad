@@ -117,27 +117,32 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_get_price_html',      [ $this, 'cache_original_price' ], 1, 2 );
         add_filter( 'woocommerce_variable_price_html', [ $this, 'cache_original_price' ], 1, 2 );
 
+        // ── Rol: ocultar precio para usuarios de presupuesto independientemente de la config por producto ──
+        add_filter( 'woocommerce_get_price_html',      [ $this, 'hide_price_for_quote_role' ], 50, 2 );
+        add_filter( 'woocommerce_variable_price_html', [ $this, 'hide_price_for_quote_role' ], 50, 2 );
+
         // ── Rol: restaurar precio/botón para roles no habilitados (prioridad 999 para sobreescribir al plugin original) ──
         add_filter( 'woocommerce_get_price_html',                  [ $this, 'maybe_restore_price' ],  999, 2 );
         add_filter( 'woocommerce_variable_price_html',             [ $this, 'maybe_restore_price' ],  999, 2 );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
 
-        // ── Rol: filtros nativos del plugin original (si los expone) ─────────────
-        add_filter( 'qwc_hide_price_html',     [ $this, 'filter_by_role' ] );
-        add_filter( 'qwc_disable_add_to_cart', [ $this, 'filter_by_role' ] );
+        // ── Rol: filtro de ocultación de precio de QWC (hook real del plugin original) ──
+        add_filter( 'qwc_hide_prices', [ $this, 'filter_by_role' ], 10, 2 );
 
         // ── Gateways: capturar los originales antes de que el plugin de presupuestos los filtre ──
         add_filter( 'woocommerce_available_payment_gateways', [ $this, 'capture_original_gateways' ], 1 );
-        // Para usuarios con rol de presupuesto: dejar experiencia de presupuesto.
-        // Para el resto: restaurar gateways originales y quitar quotes-wc.
+        // Asegurar que quotes-gateway esté disponible para usuarios de presupuesto aunque QWC no lo inyecte ──
+        add_filter( 'woocommerce_available_payment_gateways', [ $this, 'inject_quotes_gateway_for_role' ], 5 );
+        // Para usuarios con rol de presupuesto: solo quotes-gateway.
+        // Para el resto (profesionales / order-pay): restaurar gateways originales y quitar quotes-gateway.
         add_filter( 'woocommerce_available_payment_gateways', [ $this, 'filter_quote_gateway' ], 999 );
 
         // ── Checkout presupuesto: cambiar texto del botón "Realizar pedido" ──────
         add_filter( 'woocommerce_order_button_text', [ $this, 'quote_checkout_button_text' ] );
 
-        // ── Carrito: plantilla propia para la experiencia de presupuesto ─
-        add_filter( 'template_include', [ $this, 'quote_cart_template_override' ], 100 );
+        // ── Carrito: redirigir directamente al checkout para usuarios de presupuesto ─
+        add_action( 'template_redirect', [ $this, 'redirect_quote_cart_to_checkout' ] );
 
         // ── Checkout: ocultar precios y pagos para experiencia de presupuesto ─
         // PHP hooks: actúan en el origen, sin depender de selectores CSS del tema
@@ -333,7 +338,7 @@ return new class( $core ) implements MAD_Suite_Module {
         return $custom_text !== '' ? $custom_text : $text;
     }
 
-    public function filter_by_role( $value ) {
+    public function filter_by_role( $value, $product_id = null ) {
         if ( ! $this->current_user_is_quote_role() ) {
             return false;
         }
@@ -345,39 +350,58 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     /**
-     * Devuelve true si el carrito contiene artículos del plugin original de presupuestos.
-     * El plugin "Quotes for WooCommerce" usa el meta 'qwc_quote_status' = 'on' en el producto.
-     */
-    private function cart_contains_quote_items(): bool {
-        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return false;
-
-        foreach ( WC()->cart->get_cart() as $item ) {
-            if ( get_post_meta( $item['product_id'], 'qwc_quote_status', true ) === 'on' ) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * True si el usuario tiene rol de presupuesto Y el carrito tiene artículos de presupuesto.
+     * True si el usuario tiene rol de presupuesto y tiene productos en el carrito.
+     * No depende de la configuración por producto de QWC; cualquier producto en el carrito
+     * de un usuario de presupuesto activa la experiencia de solicitud.
      */
     private function cart_is_quote_experience(): bool {
-        return $this->current_user_is_quote_role() && $this->cart_contains_quote_items();
+        if ( ! $this->current_user_is_quote_role() ) return false;
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return false;
+        return ! WC()->cart->is_empty();
     }
 
     /**
-     * Reemplaza la plantilla de carrito de WooCommerce con la plantilla propia
-     * de presupuesto para usuarios con rol habilitado.
-     * Los usuarios normales siguen viendo el carrito estándar de WooCommerce.
+     * Redirige la página de carrito directamente al checkout para usuarios de presupuesto.
+     * Esto omite la pantalla del carrito: el usuario pasa directamente a solicitar presupuesto.
+     * Los profesionales (rol no habilitado) siguen viendo el carrito normal de WooCommerce.
      */
-    public function quote_cart_template_override( $template ) {
-        if ( ! is_cart() ) return $template;
-        if ( ! $this->cart_is_quote_experience() ) return $template;
+    public function redirect_quote_cart_to_checkout() {
+        if ( ! is_cart() ) return;
+        if ( ! $this->current_user_is_quote_role() ) return;
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) || WC()->cart->is_empty() ) return;
 
-        $custom = MAD_QUOTES_TEMPLATE_PATH . 'quote-cart.php';
-        return file_exists( $custom ) ? $custom : $template;
+        wp_safe_redirect( wc_get_checkout_url() );
+        exit;
+    }
+
+    /**
+     * Oculta el precio HTML para todos los usuarios con rol de presupuesto,
+     * independientemente de la configuración por producto del plugin QWC.
+     * Se ejecuta en prioridad 50: después de que QWC oculta precios (10)
+     * y antes de que maybe_restore_price los restaure para profesionales (999).
+     */
+    public function hide_price_for_quote_role( $price, $product ) {
+        if ( $this->current_user_is_quote_role() ) {
+            return '';
+        }
+        return $price;
+    }
+
+    /**
+     * Inyecta quotes-gateway en los gateways disponibles para usuarios de presupuesto
+     * antes de que QWC pueda haberlo eliminado (prioridad 5).
+     * Garantiza que el gateway esté disponible aunque el carrito no tenga productos
+     * marcados individualmente como "quote" en la configuración de QWC.
+     */
+    public function inject_quotes_gateway_for_role( $gateways ) {
+        if ( ! $this->current_user_is_quote_role() ) return $gateways;
+        if ( isset( $gateways['quotes-gateway'] ) ) return $gateways;
+
+        $all = WC()->payment_gateways()->payment_gateways();
+        if ( isset( $all['quotes-gateway'] ) ) {
+            $gateways['quotes-gateway'] = $all['quotes-gateway'];
+        }
+        return $gateways;
     }
 
     /**
@@ -419,12 +443,14 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     /**
-     * En experiencia de presupuesto solo pedimos nombre, apellido y email.
+     * En experiencia de presupuesto solo pedimos el email.
+     * El cliente completará el resto de sus datos cuando pague el presupuesto aprobado
+     * (en la página order-pay, donde cart_is_quote_experience() devuelve false).
      */
     public function simplify_quote_checkout_fields( $fields ) {
         if ( ! $this->cart_is_quote_experience() ) return $fields;
 
-        $keep = [ 'billing_first_name', 'billing_last_name', 'billing_email' ];
+        $keep = [ 'billing_email' ];
 
         foreach ( array_keys( $fields['billing'] ?? [] ) as $key ) {
             if ( ! in_array( $key, $keep, true ) ) {
@@ -458,12 +484,12 @@ return new class( $core ) implements MAD_Suite_Module {
     /**
      * Fuerza el estado "Presupuesto pendiente" después de que el gateway haya procesado el pago.
      * Se ejecuta con prioridad 999 en woocommerce_checkout_order_processed para sobreescribir
-     * cualquier cambio de estado que el gateway quotes-wc haga en process_payment().
+     * cualquier cambio de estado que el gateway quotes-gateway haga en process_payment().
      */
     public function finalize_quote_order_status( $order_id ) {
         $order = wc_get_order( $order_id );
         if ( ! $order ) return;
-        if ( $order->get_payment_method() !== 'quotes-wc'
+        if ( $order->get_payment_method() !== 'quotes-gateway'
             && '1' !== $order->get_meta( '_mad_qwc_quote' )
         ) {
             return;
@@ -478,7 +504,7 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function prevent_stock_reduction( $can_reduce, $order ) {
         // Comprobación primaria: payment method disponible sin depender del cache de metas.
-        if ( $order->get_payment_method() === 'quotes-wc' ) {
+        if ( $order->get_payment_method() === 'quotes-gateway' ) {
             return false;
         }
         // Comprobación secundaria: estado o meta explícita (pedidos ya procesados).
@@ -500,19 +526,27 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Para usuarios con rol de presupuesto: carrito normal.
-     * Para el resto: restaura los gateways originales (WC estándar) y quita quotes-wc.
+     * Controla qué gateways de pago se muestran según el contexto:
      *
-     * El plugin "Quotes for WooCommerce" elimina todos los gateways normales cuando hay
-     * productos de presupuesto en el carrito. Aquí revertimos eso para roles no habilitados.
+     * - Página order-pay (cliente paga presupuesto aprobado): gateways reales, sin quotes-gateway.
+     * - Usuario con rol de presupuesto en checkout normal: solo quotes-gateway.
+     * - Profesionales / sin rol de presupuesto: gateways reales, sin quotes-gateway.
      */
     public function filter_quote_gateway( $gateways ) {
-        if ( $this->current_user_is_quote_role() ) {
-            return $gateways; // Experiencia de presupuesto: dejar que el plugin original gestione
+        $cart_has_items = isset( WC()->cart ) && ! is_null( WC()->cart ) && ! WC()->cart->is_empty();
+
+        if ( $this->current_user_is_quote_role() && $cart_has_items ) {
+            // Flujo de solicitud de presupuesto: solo mostrar quotes-gateway
+            if ( isset( $gateways['quotes-gateway'] ) ) {
+                return [ 'quotes-gateway' => $gateways['quotes-gateway'] ];
+            }
+            // Si por alguna razón no está disponible, devolver la lista tal cual
+            return $gateways;
         }
-        // Experiencia normal: restaurar gateways originales y eliminar quotes-wc
+
+        // Profesionales o página order-pay (carrito vacío): gateways reales sin quotes-gateway
         $restored = ! empty( $this->original_gateways ) ? $this->original_gateways : $gateways;
-        unset( $restored['quotes-wc'] );
+        unset( $restored['quotes-gateway'] );
         return $restored;
     }
 
@@ -563,7 +597,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $status = $order->get_status();
         if ( in_array( $status, [ 'quote-pending', 'quote-sent' ], true )
             || '1' === $order->get_meta( '_mad_qwc_quote' )
-            || $order->get_payment_method() === 'quotes-wc'
+            || $order->get_payment_method() === 'quotes-gateway'
         ) {
             return false;
         }
@@ -574,7 +608,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $order = wc_get_order( $order_id );
         if ( ! $order ) return;
 
-        if ( $order->get_payment_method() !== 'quotes-wc' ) return;
+        if ( $order->get_payment_method() !== 'quotes-gateway' ) return;
 
         // Marcar como pedido de presupuesto MAD
         $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
@@ -617,7 +651,7 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function add_order_buttons( $order ) {
-        if ( $order->get_payment_method() !== 'quotes-wc' && ! $order->get_meta( '_mad_qwc_quote' ) ) {
+        if ( $order->get_payment_method() !== 'quotes-gateway' && ! $order->get_meta( '_mad_qwc_quote' ) ) {
             return;
         }
 
