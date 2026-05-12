@@ -12,36 +12,35 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $this->core       = $core;
         $this->option_key = MAD_Suite_Core::option_key( $this->slug() );
         global $wpdb;
-        $this->table = $wpdb->prefix . 'ga4_gclid_log';
+        $this->table = $wpdb->prefix . 'mad_ads_clicks';
     }
 
     public function slug()       { return 'ga4-server'; }
-    public function title()      { return __('GA4 Server (Measurement Protocol)','mad-suite'); }
-    public function menu_label() { return __('GA4 Server','mad-suite'); }
+    public function title()      { return __('Conversiones de Ads (Google + Meta)','mad-suite'); }
+    public function menu_label() { return __('Ads Conversiones','mad-suite'); }
     public function menu_slug()  { return 'mad-'.$this->slug(); }
 
-    /* ==== Hooks ==== */
+    /* =========================================================
+     * HOOKS
+     * ======================================================= */
     public function init(){
         $this->logger = wc_get_logger();
         $this->maybe_create_table();
 
-        // Capturar gclid cuando el usuario llega desde un anuncio
-        add_action('wp', [$this, 'capture_gclid_visit']);
-
-        // Guardar gclid + client_id real en el pedido al hacer checkout
-        add_action('woocommerce_checkout_update_order_meta', [$this, 'save_tracking_to_order']);
-
-        // Enviar evento purchase a GA4 cuando cambia el estado del pedido
-        add_action('woocommerce_order_status_changed', [$this, 'maybe_send_purchase_on_status'], 10, 4);
+        add_action('wp',                                    [$this, 'capture_click_visit']);
+        add_action('woocommerce_checkout_update_order_meta',[$this, 'save_tracking_to_order']);
+        add_action('woocommerce_order_status_changed',      [$this, 'maybe_send_purchase_events'], 10, 4);
     }
 
-    /* ==== Tabla DB ==== */
+    /* =========================================================
+     * BASE DE DATOS
+     * ======================================================= */
     private function maybe_create_table(){
-        if (get_transient('ga4_gclid_table_ok')) return;
+        if (get_transient('mad_ads_clicks_table_ok')) return;
 
         global $wpdb;
         if ($wpdb->get_var("SHOW TABLES LIKE '{$this->table}'") === $this->table) {
-            set_transient('ga4_gclid_table_ok', 1, DAY_IN_SECONDS);
+            set_transient('mad_ads_clicks_table_ok', 1, DAY_IN_SECONDS);
             return;
         }
 
@@ -49,8 +48,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $charset = $wpdb->get_charset_collate();
         dbDelta("CREATE TABLE {$this->table} (
             id           bigint(20)    NOT NULL AUTO_INCREMENT,
-            gclid        varchar(255)  NOT NULL,
-            ga_client_id varchar(100)  DEFAULT '',
+            platform     varchar(20)   NOT NULL,
+            click_id     varchar(255)  NOT NULL,
+            browser_id   varchar(100)  DEFAULT '',
             utm_campaign varchar(255)  DEFAULT '',
             utm_source   varchar(100)  DEFAULT '',
             utm_medium   varchar(100)  DEFAULT '',
@@ -61,97 +61,146 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             currency     varchar(10)   DEFAULT '',
             converted_at datetime      DEFAULT NULL,
             PRIMARY KEY  (id),
-            UNIQUE KEY   gclid (gclid(191)),
+            UNIQUE KEY   platform_click (platform(10), click_id(191)),
+            KEY          platform (platform),
             KEY          order_id (order_id)
         ) $charset;");
 
-        set_transient('ga4_gclid_table_ok', 1, DAY_IN_SECONDS);
+        set_transient('mad_ads_clicks_table_ok', 1, DAY_IN_SECONDS);
     }
 
-    /* ==== Capturar gclid en visita de landing ==== */
-    public function capture_gclid_visit(){
-        // Usar GET param en la landing; fallback a cookie en páginas siguientes
+    /* =========================================================
+     * CAPTURA DE CLICS EN LANDING
+     * ======================================================= */
+    public function capture_click_visit(){
+        // Google Ads: gclid en URL (landing) o en cookie _gcl_aw (páginas siguientes)
         $gclid = $this->extract_gclid_from_request();
-        if (!$gclid) return;
+        if ($gclid) {
+            $this->save_click_to_db('google', $gclid, $this->get_ga_client_id(), 'google', 'cpc');
+        }
 
+        // Meta Ads: fbclid en URL (landing) o extraído de cookie _fbc
+        $fbclid = $this->extract_fbclid_from_request();
+        if ($fbclid) {
+            $this->save_click_to_db('meta', $fbclid, $this->get_fbp(), 'facebook', 'cpc');
+        }
+    }
+
+    private function save_click_to_db($platform, $click_id, $browser_id, $default_source, $default_medium){
         global $wpdb;
 
-        // Cada clic en un anuncio genera un gclid único — no duplicar
+        // Cada clic de anuncio genera un ID único — no duplicar
         if ($wpdb->get_var($wpdb->prepare(
-            "SELECT id FROM {$this->table} WHERE gclid = %s", $gclid
+            "SELECT id FROM {$this->table} WHERE platform = %s AND click_id = %s",
+            $platform, $click_id
         ))) return;
 
         $wpdb->insert($this->table, [
-            'gclid'        => $gclid,
-            'ga_client_id' => $this->get_ga_client_id() ?: '',
+            'platform'     => $platform,
+            'click_id'     => $click_id,
+            'browser_id'   => $browser_id ?: '',
             'utm_campaign' => isset($_GET['utm_campaign']) ? sanitize_text_field($_GET['utm_campaign']) : '',
-            'utm_source'   => isset($_GET['utm_source'])   ? sanitize_text_field($_GET['utm_source'])   : 'google',
-            'utm_medium'   => isset($_GET['utm_medium'])   ? sanitize_text_field($_GET['utm_medium'])   : 'cpc',
+            'utm_source'   => isset($_GET['utm_source'])   ? sanitize_text_field($_GET['utm_source'])   : $default_source,
+            'utm_medium'   => isset($_GET['utm_medium'])   ? sanitize_text_field($_GET['utm_medium'])   : $default_medium,
             'landing_url'  => $this->get_current_url(),
             'captured_at'  => current_time('mysql'),
-        ], ['%s','%s','%s','%s','%s','%s','%s']);
+        ], ['%s','%s','%s','%s','%s','%s','%s','%s']);
     }
 
-    /* ==== Guardar tracking en el pedido (solo cookies — el gclid no está en GET en checkout) ==== */
+    /* =========================================================
+     * GUARDAR TRACKING EN EL PEDIDO (solo cookies — gclid/fbclid
+     * no están en la URL en la página de checkout)
+     * ======================================================= */
     public function save_tracking_to_order($order_id){
         $order = wc_get_order($order_id);
         if (!$order) return;
 
+        // Google
         $gclid        = $this->extract_gclid_from_cookie();
         $ga_client_id = $this->get_ga_client_id();
-
         if ($gclid)        $order->update_meta_data('_gclid',        $gclid);
         if ($ga_client_id) $order->update_meta_data('_ga_client_id', $ga_client_id);
+
+        // Meta
+        $fbc = $this->get_fbc();
+        $fbp = $this->get_fbp();
+        if ($fbc) $order->update_meta_data('_fbc', $fbc);
+        if ($fbp) $order->update_meta_data('_fbp', $fbp);
+
         $order->save();
 
-        // Vincular el registro de gclid en DB con este pedido
-        if ($gclid) {
-            global $wpdb;
-            $wpdb->update(
-                $this->table,
-                [
-                    'order_id'     => $order_id,
-                    'order_total'  => (float) $order->get_total(),
-                    'currency'     => $order->get_currency(),
-                    'converted_at' => current_time('mysql'),
-                    'ga_client_id' => $ga_client_id ?: '',
-                ],
-                ['gclid' => $gclid],
-                ['%d','%f','%s','%s','%s'],
-                ['%s']
-            );
-        }
+        // Vincular registros en DB con este pedido
+        if ($gclid) $this->link_order_to_click($order, 'google', $gclid, $ga_client_id);
+
+        $fbclid = $this->extract_fbclid_from_cookie(); // extraído de _fbc
+        if ($fbclid) $this->link_order_to_click($order, 'meta', $fbclid, $fbp);
     }
 
-    /* ==== Enviar evento purchase al cambiar estado del pedido ==== */
-    public function maybe_send_purchase_on_status($order_id, $from_status, $to_status, $order){
+    private function link_order_to_click(WC_Order $order, $platform, $click_id, $browser_id){
+        global $wpdb;
+        $wpdb->update(
+            $this->table,
+            [
+                'order_id'     => $order->get_id(),
+                'order_total'  => (float) $order->get_total(),
+                'currency'     => $order->get_currency(),
+                'converted_at' => current_time('mysql'),
+                'browser_id'   => $browser_id ?: '',
+            ],
+            ['platform' => $platform, 'click_id' => $click_id],
+            ['%d','%f','%s','%s','%s'],
+            ['%s','%s']
+        );
+    }
+
+    /* =========================================================
+     * ENVÍO DE EVENTOS AL CAMBIAR ESTADO DEL PEDIDO
+     * ======================================================= */
+    public function maybe_send_purchase_events($order_id, $from_status, $to_status, $order){
         if (!$order instanceof WC_Order) {
             $order = wc_get_order($order_id);
             if (!$order) return;
         }
 
-        // Anti-duplicado: solo disparar una vez por pedido
-        if ($order->get_meta('_ga4_purchase_sent')) return;
-
         $settings = $this->get_settings();
-        $targets  = array_map('strval', $settings['fire_statuses']);
         $to_short = (strpos($to_status,'wc-') === 0) ? substr($to_status, 3) : $to_status;
 
-        if (!in_array($to_short, $targets, true)) return;
-
-        $mid = trim($settings['measurement_id']);
-        $sec = trim($settings['api_secret']);
-        if ($mid === '' || $sec === '') {
-            $this->debug_log('error', 'Falta measurement_id o api_secret. No se envió el evento.');
-            return;
+        // — Google GA4 —
+        if (!empty($settings['google_enabled'])) {
+            $targets = array_map('strval', $settings['google_statuses']);
+            if (in_array($to_short, $targets, true) && !$order->get_meta('_ga4_purchase_sent')) {
+                $mid = trim($settings['measurement_id']);
+                $sec = trim($settings['api_secret']);
+                if ($mid && $sec) {
+                    $this->send_ga4_purchase($order, $mid, $sec, $settings);
+                    $order->update_meta_data('_ga4_purchase_sent', 1);
+                    $order->save();
+                } else {
+                    $this->debug_log('error', 'Google: falta measurement_id o api_secret.');
+                }
+            }
         }
 
-        $this->send_ga4_purchase($order, $mid, $sec, $settings);
-
-        $order->update_meta_data('_ga4_purchase_sent', 1);
-        $order->save();
+        // — Meta CAPI —
+        if (!empty($settings['meta_enabled'])) {
+            $targets = array_map('strval', $settings['meta_statuses']);
+            if (in_array($to_short, $targets, true) && !$order->get_meta('_meta_capi_purchase_sent')) {
+                $pixel = trim($settings['pixel_id']);
+                $token = trim($settings['access_token']);
+                if ($pixel && $token) {
+                    $this->send_meta_purchase($order, $pixel, $token, $settings);
+                    $order->update_meta_data('_meta_capi_purchase_sent', 1);
+                    $order->save();
+                } else {
+                    $this->debug_log('error', 'Meta: falta pixel_id o access_token.');
+                }
+            }
+        }
     }
 
+    /* =========================================================
+     * GOOGLE GA4 — MEASUREMENT PROTOCOL
+     * ======================================================= */
     private function send_ga4_purchase(WC_Order $order, $measurement_id, $api_secret, array $settings){
         $items = [];
         foreach ($order->get_items() as $item_id => $item){
@@ -168,18 +217,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             ];
         }
 
-        // Usar el client_id real del navegador (_ga cookie), no un UUID aleatorio
-        $client_id = $order->get_meta('_ga_client_id') ?: wp_generate_uuid4();
-        $user_id   = $order->get_user_id() ? (string) $order->get_user_id() : null;
-        $gclid     = $order->get_meta('_gclid');
-
-        $order_total = (float) $order->get_total();
-        $test_coupon = trim($settings['test_coupon']);
-        if ($test_coupon !== '' && $order->get_coupon_codes()) {
-            if (in_array(strtolower($test_coupon), array_map('strtolower', $order->get_coupon_codes()), true)) {
-                $order_total = max(0.01, $order_total);
-            }
-        }
+        // Usar el client_id real del navegador; UUID como fallback
+        $client_id   = $order->get_meta('_ga_client_id') ?: wp_generate_uuid4();
+        $user_id     = $order->get_user_id() ? (string) $order->get_user_id() : null;
+        $gclid       = $order->get_meta('_gclid');
+        $order_total = $this->apply_test_coupon($order, (float) $order->get_total(), $settings);
 
         $params = [
             'transaction_id' => (string) $order->get_id(),
@@ -199,69 +241,169 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ];
         if ($user_id) $payload['user_id'] = $user_id;
 
-        $this->debug_log('info', sprintf(
-            'Enviando purchase pedido #%d | client_id: %s | gclid: %s',
+        $this->debug_log('info', sprintf('Google GA4: enviando purchase pedido #%d | client_id: %s | gclid: %s',
+            $order->get_id(), $client_id, $gclid ?: 'sin gclid'));
+
+        $response = wp_remote_post(
+            add_query_arg(['measurement_id' => $measurement_id, 'api_secret' => $api_secret],
+                'https://www.google-analytics.com/mp/collect'),
+            ['method' => 'POST', 'headers' => ['Content-Type' => 'application/json'],
+             'body' => wp_json_encode($payload), 'timeout' => 20]
+        );
+
+        $this->log_api_response('Google GA4', $response);
+    }
+
+    /* =========================================================
+     * META — CONVERSIONS API
+     * ======================================================= */
+    private function send_meta_purchase(WC_Order $order, $pixel_id, $access_token, array $settings){
+        $fbc = $order->get_meta('_fbc') ?: '';
+        $fbp = $order->get_meta('_fbp') ?: '';
+
+        // Datos del usuario (siempre enviamos fbp/fbc; PII solo si está activado)
+        $user_data = [];
+        if ($fbp) $user_data['fbp'] = $fbp;
+        if ($fbc) $user_data['fbc'] = $fbc;
+
+        if (!empty($settings['send_customer_data'])) {
+            $email = $order->get_billing_email();
+            $phone = $order->get_billing_phone();
+            $fname = strtolower(trim($order->get_billing_first_name()));
+            $lname = strtolower(trim($order->get_billing_last_name()));
+            $city  = strtolower(trim($order->get_billing_city()));
+            $cntry = strtolower(trim($order->get_billing_country()));
+            $zip   = preg_replace('/[^0-9a-z]/', '', strtolower(trim($order->get_billing_postcode())));
+
+            if ($email)  $user_data['em']      = [hash('sha256', strtolower(trim($email)))];
+            if ($phone){
+                $clean = preg_replace('/[^0-9]/', '', $phone);
+                if ($clean) $user_data['ph']   = [hash('sha256', $clean)];
+            }
+            if ($fname)  $user_data['fn']      = [hash('sha256', $fname)];
+            if ($lname)  $user_data['ln']      = [hash('sha256', $lname)];
+            if ($city)   $user_data['ct']      = [hash('sha256', $city)];
+            if ($cntry)  $user_data['country'] = [hash('sha256', $cntry)];
+            if ($zip)    $user_data['zp']      = [hash('sha256', $zip)];
+        }
+
+        $contents = [];
+        foreach ($order->get_items() as $item_id => $item){
+            if (!$item instanceof WC_Order_Item_Product) continue;
+            $product = $item->get_product();
+            $contents[] = [
+                'id'         => $product ? (string) $product->get_id() : (string) $item_id,
+                'quantity'   => (int) $item->get_quantity(),
+                'item_price' => (float) wc_format_decimal($item->get_total() / max(1, $item->get_quantity()), 2),
+            ];
+        }
+
+        $order_total = $this->apply_test_coupon($order, (float) $order->get_total(), $settings);
+
+        $event = [
+            'event_name'       => 'Purchase',
+            'event_time'       => time(),
+            'event_source_url' => home_url('/'),
+            'action_source'    => 'website',
+            'event_id'         => 'wc_order_' . $order->get_id(), // clave de deduplicación
+            'user_data'        => $user_data,
+            'custom_data'      => [
+                'value'        => $order_total,
+                'currency'     => $order->get_currency(),
+                'contents'     => $contents,
+                'content_type' => 'product',
+                'order_id'     => (string) $order->get_id(),
+                'num_items'    => count($contents),
+            ],
+        ];
+
+        $payload = ['data' => [$event]];
+        if (!empty($settings['meta_test_code'])) {
+            $payload['test_event_code'] = sanitize_text_field($settings['meta_test_code']);
+        }
+
+        $this->debug_log('info', sprintf('Meta CAPI: enviando Purchase pedido #%d | fbp: %s | fbc: %s',
             $order->get_id(),
-            $client_id,
-            $gclid ?: 'sin gclid'
+            $fbp ? substr($fbp, 0, 20) . '…' : 'sin fbp',
+            $fbc ? substr($fbc, 0, 20) . '…' : 'sin fbc'
         ));
 
         $response = wp_remote_post(
-            add_query_arg(
-                ['measurement_id' => $measurement_id, 'api_secret' => $api_secret],
-                'https://www.google-analytics.com/mp/collect'
-            ),
-            [
-                'method'  => 'POST',
-                'headers' => ['Content-Type' => 'application/json'],
-                'body'    => wp_json_encode($payload),
-                'timeout' => 20,
-            ]
+            add_query_arg(['access_token' => $access_token],
+                sprintf('https://graph.facebook.com/v21.0/%s/events', rawurlencode($pixel_id))),
+            ['method' => 'POST', 'headers' => ['Content-Type' => 'application/json'],
+             'body' => wp_json_encode($payload), 'timeout' => 20]
         );
 
-        if (is_wp_error($response)){
-            $this->debug_log('error', 'Error HTTP: ' . implode(', ', $response->get_error_messages()));
-            return;
-        }
-
-        $code = wp_remote_retrieve_response_code($response);
-        if ($code >= 200 && $code < 300) {
-            $this->debug_log('info', sprintf('Evento enviado correctamente (HTTP %d)', $code));
-        } else {
-            $this->debug_log('error', sprintf('GA4 respondió HTTP %d: %s', $code, wp_remote_retrieve_body($response)));
-        }
+        $this->log_api_response('Meta CAPI', $response);
     }
 
-    /* ==== Helpers de extracción ==== */
+    /* =========================================================
+     * HELPERS — EXTRACCIÓN DE IDs Y COOKIES
+     * ======================================================= */
 
-    // Para captura en landing: GET param (si llega del clic) o cookie
+    // — Google —
     private function extract_gclid_from_request(){
-        if (!empty($_GET['gclid'])) {
-            return sanitize_text_field($_GET['gclid']);
-        }
+        if (!empty($_GET['gclid'])) return sanitize_text_field($_GET['gclid']);
         return $this->extract_gclid_from_cookie();
     }
-
-    // Para checkout: solo cookie (el gclid no estará en la URL de checkout)
     private function extract_gclid_from_cookie(){
         if (!isset($_COOKIE['_gcl_aw'])) return null;
-        $cookie = sanitize_text_field($_COOKIE['_gcl_aw']);
-        if (preg_match('/GCL\.\d+\.(.+)/', $cookie, $matches)) {
-            return $matches[1];
-        }
-        return null;
+        $c = sanitize_text_field($_COOKIE['_gcl_aw']);
+        return preg_match('/GCL\.\d+\.(.+)/', $c, $m) ? $m[1] : null;
     }
-
-    // client_id real de GA4 desde la cookie _ga (formato: GA1.1.XXXXXXXX.XXXXXXXX)
     private function get_ga_client_id(){
         if (!isset($_COOKIE['_ga'])) return null;
         $parts = explode('.', sanitize_text_field($_COOKIE['_ga']));
         return count($parts) >= 4 ? $parts[2] . '.' . $parts[3] : null;
     }
 
+    // — Meta —
+    private function extract_fbclid_from_request(){
+        if (!empty($_GET['fbclid'])) return sanitize_text_field($_GET['fbclid']);
+        return $this->extract_fbclid_from_cookie();
+    }
+    private function extract_fbclid_from_cookie(){
+        $fbc = $this->get_fbc();
+        if (!$fbc) return null;
+        // _fbc formato: fb.1.{timestamp}.{fbclid}
+        $parts = explode('.', $fbc, 4);
+        return isset($parts[3]) && $parts[3] !== '' ? $parts[3] : null;
+    }
+    private function get_fbc(){
+        if (!isset($_COOKIE['_fbc'])) return null;
+        return sanitize_text_field($_COOKIE['_fbc']);
+    }
+    private function get_fbp(){
+        if (!isset($_COOKIE['_fbp'])) return null;
+        return sanitize_text_field($_COOKIE['_fbp']);
+    }
+
+    // — Compartidos —
+    private function apply_test_coupon(WC_Order $order, float $total, array $settings): float {
+        $test_coupon = trim($settings['test_coupon']);
+        if ($test_coupon === '' || !$order->get_coupon_codes()) return $total;
+        if (in_array(strtolower($test_coupon), array_map('strtolower', $order->get_coupon_codes()), true)) {
+            return max(0.01, $total);
+        }
+        return $total;
+    }
+
+    private function log_api_response($label, $response){
+        if (is_wp_error($response)) {
+            $this->debug_log('error', $label . ' error: ' . implode(', ', $response->get_error_messages()));
+            return;
+        }
+        $code = wp_remote_retrieve_response_code($response);
+        if ($code >= 200 && $code < 300) {
+            $this->debug_log('info', sprintf('%s respondió correctamente (HTTP %d)', $label, $code));
+        } else {
+            $this->debug_log('error', sprintf('%s HTTP %d: %s', $label, $code, wp_remote_retrieve_body($response)));
+        }
+    }
+
     private function get_current_url(){
-        $url = home_url(add_query_arg([]));
-        return substr($url, 0, 500);
+        return substr(home_url(add_query_arg([])), 0, 500);
     }
 
     private function get_order_edit_url($order_id){
@@ -277,11 +419,12 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private function debug_log($level, $message){
         if (empty($this->get_settings()['debug'])) return;
         if (!$this->logger) $this->logger = wc_get_logger();
-        // Nunca registrar el api_secret en los logs
-        $this->logger->log($level, $message, ['source' => 'ga4-mad-suite']);
+        $this->logger->log($level, $message, ['source' => 'mad-ads-conversions']);
     }
 
-    /* ==== Settings API ==== */
+    /* =========================================================
+     * SETTINGS API
+     * ======================================================= */
     public function admin_init(){
         register_setting($this->option_group(), $this->option_key, [
             'type'              => 'array',
@@ -289,28 +432,53 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'default'           => $this->defaults(),
         ]);
 
-        add_settings_section(
-            $this->section_id(),
-            __('Ajustes de GA4 Measurement Protocol','mad-suite'),
-            fn() => print('<p>' . esc_html__('Envía eventos de compra a GA4 directamente desde el servidor, sin depender de la página de gracias.','mad-suite') . '</p>'),
+        // — Sección Google —
+        add_settings_section('google_section',
+            __('Google Ads (GA4 Measurement Protocol)','mad-suite'),
+            fn() => print('<p>' . esc_html__('Envía eventos de compra a GA4 desde el servidor, sin depender de la página de gracias.','mad-suite') . '</p>'),
             $this->menu_slug()
         );
-
         foreach ([
-            ['measurement_id', __('ID de medición (G-XXXXXXX)','mad-suite'), 'field_measurement_id'],
-            ['api_secret',     __('Secreto de API','mad-suite'),              'field_api_secret'],
-            ['fire_statuses',  __('Estados que disparan purchase','mad-suite'),'field_fire_statuses'],
-            ['test_coupon',    __('Cupón de prueba','mad-suite'),              'field_test_coupon'],
-            ['debug',          __('Modo depuración','mad-suite'),              'field_debug'],
+            ['google_enabled', __('Activar','mad-suite'),                           'field_google_enabled'],
+            ['measurement_id', __('ID de medición (G-XXXXXXX)','mad-suite'),        'field_measurement_id'],
+            ['api_secret',     __('Secreto de API','mad-suite'),                    'field_api_secret'],
+            ['google_statuses',__('Estados que disparan purchase','mad-suite'),     'field_google_statuses'],
         ] as [$id, $label, $cb]){
-            add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), $this->section_id());
+            add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'google_section');
+        }
+
+        // — Sección Meta —
+        add_settings_section('meta_section',
+            __('Meta Ads (Conversions API)','mad-suite'),
+            fn() => print('<p>' . esc_html__('Envía eventos de compra a Meta desde el servidor con datos de cliente hasheados para mejorar el match rate.','mad-suite') . '</p>'),
+            $this->menu_slug()
+        );
+        foreach ([
+            ['meta_enabled',       __('Activar','mad-suite'),                           'field_meta_enabled'],
+            ['pixel_id',           __('Pixel ID','mad-suite'),                          'field_pixel_id'],
+            ['access_token',       __('Access Token','mad-suite'),                      'field_access_token'],
+            ['meta_statuses',      __('Estados que disparan Purchase','mad-suite'),     'field_meta_statuses'],
+            ['meta_test_code',     __('Código de prueba (opcional)','mad-suite'),       'field_meta_test_code'],
+            ['send_customer_data', __('Datos del cliente hasheados','mad-suite'),       'field_send_customer_data'],
+        ] as [$id, $label, $cb]){
+            add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'meta_section');
+        }
+
+        // — Sección General —
+        add_settings_section('general_section', __('General','mad-suite'), '__return_false', $this->menu_slug());
+        foreach ([
+            ['test_coupon', __('Cupón de prueba','mad-suite'), 'field_test_coupon'],
+            ['debug',       __('Modo depuración','mad-suite'), 'field_debug'],
+        ] as [$id, $label, $cb]){
+            add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'general_section');
         }
     }
 
-    /* ==== Página principal con pestañas ==== */
+    /* =========================================================
+     * PÁGINA PRINCIPAL CON PESTAÑAS
+     * ======================================================= */
     public function render_settings_page(){
         if (!current_user_can(MAD_Suite_Core::CAPABILITY)) return;
-
         $tab      = isset($_GET['tab']) ? sanitize_key($_GET['tab']) : 'dashboard';
         $base_url = admin_url('admin.php?page=' . $this->menu_slug());
         ?>
@@ -337,11 +505,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     ?>
                 </form>
                 <hr />
-                <p>
-                    <a href="<?php echo esc_url(admin_url('admin.php?page=wc-status&tab=logs')); ?>" class="button">
-                        <?php esc_html_e('Ver logs de WooCommerce','mad-suite'); ?>
-                    </a>
-                </p>
+                <p><a href="<?php echo esc_url(admin_url('admin.php?page=wc-status&tab=logs')); ?>" class="button">
+                    <?php esc_html_e('Ver logs de WooCommerce','mad-suite'); ?>
+                </a></p>
             <?php else: ?>
                 <?php $this->render_dashboard(); ?>
             <?php endif; ?>
@@ -349,26 +515,46 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <?php
     }
 
-    /* ==== Dashboard de conversiones ==== */
+    /* =========================================================
+     * DASHBOARD DE CONVERSIONES
+     * ======================================================= */
     private function render_dashboard(){
         global $wpdb;
 
         $page     = max(1, intval($_GET['paged'] ?? 1));
         $per_page = 30;
         $offset   = ($page - 1) * $per_page;
-        $filter   = isset($_GET['filter']) ? sanitize_key($_GET['filter']) : 'all';
 
-        $where = match($filter) {
-            'converted' => 'WHERE order_id IS NOT NULL',
-            'pending'   => 'WHERE order_id IS NULL',
-            default     => '',
-        };
+        $pf_filter   = isset($_GET['platform']) ? sanitize_key($_GET['platform']) : 'all';
+        $conv_filter = isset($_GET['filter'])   ? sanitize_key($_GET['filter'])   : 'all';
 
-        $total_all       = (int)   $wpdb->get_var("SELECT COUNT(*) FROM {$this->table}");
-        $total_converted = (int)   $wpdb->get_var("SELECT COUNT(*) FROM {$this->table} WHERE order_id IS NOT NULL");
-        $total_pending   = $total_all - $total_converted;
-        $total_revenue   = (float) $wpdb->get_var("SELECT SUM(order_total) FROM {$this->table} WHERE order_id IS NOT NULL");
-        $conv_rate       = $total_all > 0 ? round(($total_converted / $total_all) * 100, 1) : 0;
+        $wheres = [];
+        if (in_array($pf_filter, ['google','meta'], true)) {
+            $wheres[] = $wpdb->prepare('platform = %s', $pf_filter);
+        }
+        if ($conv_filter === 'converted') $wheres[] = 'order_id IS NOT NULL';
+        if ($conv_filter === 'pending')   $wheres[] = 'order_id IS NULL';
+        $where = $wheres ? 'WHERE ' . implode(' AND ', $wheres) : '';
+
+        // Stats globales por plataforma
+        $stats_rows = $wpdb->get_results(
+            "SELECT platform,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) as converted,
+                    SUM(CASE WHEN order_id IS NOT NULL THEN order_total ELSE 0 END) as revenue
+             FROM {$this->table}
+             GROUP BY platform"
+        );
+        $by_pf = [];
+        $combined = ['total' => 0, 'converted' => 0, 'revenue' => 0.0];
+        foreach ($stats_rows as $s) {
+            $by_pf[$s->platform] = $s;
+            $combined['total']     += $s->total;
+            $combined['converted'] += $s->converted;
+            $combined['revenue']   += $s->revenue;
+        }
+        $combined['rate'] = $combined['total'] > 0
+            ? round(($combined['converted'] / $combined['total']) * 100, 1) : 0;
 
         $total_filtered = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$this->table} $where");
         $rows           = $wpdb->get_results($wpdb->prepare(
@@ -377,95 +563,122 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ));
         $total_pages = (int) ceil($total_filtered / $per_page);
 
-        $settings = $this->get_settings();
-        $base_url = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=dashboard');
+        $settings  = $this->get_settings();
+        $base_url  = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=dashboard');
+        $google_ok = !empty($settings['google_enabled']) && !empty($settings['measurement_id']) && !empty($settings['api_secret']);
+        $meta_ok   = !empty($settings['meta_enabled'])   && !empty($settings['pixel_id'])       && !empty($settings['access_token']);
         ?>
         <style>
-        .ga4-stats{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}
-        .ga4-stat{background:#fff;border:1px solid #c3c4c7;border-radius:6px;padding:16px 24px;min-width:130px;text-align:center;box-shadow:0 1px 2px rgba(0,0,0,.05)}
-        .ga4-stat .val{font-size:2em;font-weight:700;color:#1d2327;display:block;line-height:1.2}
-        .ga4-stat .lbl{font-size:.8em;color:#646970;margin-top:4px;display:block}
-        .ga4-stat.green .val{color:#00a32a}
-        .ga4-stat.blue  .val{color:#2271b1}
-        .ga4-stat.red   .val{color:#d63638}
-        .ga4-tbl{width:100%;border-collapse:collapse;background:#fff;border:1px solid #c3c4c7;border-radius:4px;margin-top:0}
-        .ga4-tbl th{background:#f6f7f7;padding:9px 12px;text-align:left;font-size:.82em;border-bottom:1px solid #c3c4c7;white-space:nowrap}
-        .ga4-tbl td{padding:9px 12px;border-bottom:1px solid #f0f0f1;font-size:.82em;vertical-align:middle}
-        .ga4-tbl tr:last-child td{border-bottom:none}
-        .ga4-tbl tbody tr:hover td{background:#f9f9f9}
-        .ga4-badge{display:inline-block;padding:2px 9px;border-radius:10px;font-weight:600;font-size:.78em}
-        .ga4-badge.ok{background:#edfaef;color:#00a32a}
-        .ga4-badge.no{background:#f0f0f1;color:#646970}
-        .ga4-mono{font-family:monospace;font-size:.78em;color:#8c8f94}
-        .ga4-filters{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
-        .ga4-filters a{text-decoration:none;padding:5px 12px;border-radius:3px;border:1px solid #c3c4c7;font-size:.85em;background:#fff;color:#1d2327}
-        .ga4-filters a.active{background:#2271b1;color:#fff;border-color:#2271b1}
-        .ga4-info{background:#f0f6fc;border-left:4px solid #2271b1;padding:10px 14px;margin-bottom:20px;font-size:.88em;line-height:1.5}
+        .ads-cards{display:flex;gap:16px;margin-bottom:24px;flex-wrap:wrap}
+        .ads-card{background:#fff;border:1px solid #c3c4c7;border-radius:8px;padding:16px 20px;flex:1;min-width:210px}
+        .ads-card h3{margin:0 0 12px;font-size:.93em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+        .ads-card .stats{display:flex;gap:16px;flex-wrap:wrap}
+        .ads-card.combined{background:#f6f7f7}
+        .mini .val{font-size:1.55em;font-weight:700;display:block;line-height:1.1}
+        .mini .lbl{font-size:.78em;color:#646970}
+        .mini.green .val{color:#00a32a}
+        .mini.blue  .val{color:#2271b1}
+        .bg-google{background:#e8f0fe;color:#1a73e8;padding:2px 8px;border-radius:10px;font-size:.78em;font-weight:600}
+        .bg-meta  {background:#e7f3ff;color:#0866ff;padding:2px 8px;border-radius:10px;font-size:.78em;font-weight:600}
+        .ads-warn{display:inline-flex;align-items:center;gap:4px;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:3px 8px;font-size:.76em}
+        .ads-tbl{width:100%;border-collapse:collapse;background:#fff;border:1px solid #c3c4c7;border-radius:4px}
+        .ads-tbl th{background:#f6f7f7;padding:9px 12px;text-align:left;font-size:.82em;border-bottom:1px solid #c3c4c7;white-space:nowrap}
+        .ads-tbl td{padding:9px 12px;border-bottom:1px solid #f0f0f1;font-size:.82em;vertical-align:middle}
+        .ads-tbl tr:last-child td{border-bottom:none}
+        .ads-tbl tbody tr:hover td{background:#f9f9f9}
+        .badge-ok{display:inline-block;padding:2px 9px;border-radius:10px;font-weight:600;font-size:.78em;background:#edfaef;color:#00a32a}
+        .badge-no{display:inline-block;padding:2px 9px;border-radius:10px;font-size:.78em;background:#f0f0f1;color:#646970}
+        .ads-mono{font-family:monospace;font-size:.78em;color:#8c8f94}
+        .ads-filters{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+        .ads-filters a{text-decoration:none;padding:5px 12px;border-radius:3px;border:1px solid #c3c4c7;font-size:.82em;background:#fff;color:#1d2327}
+        .ads-filters a.active{background:#2271b1;color:#fff;border-color:#2271b1}
+        .ads-sep{color:#c3c4c7;margin:0 4px}
         </style>
 
-        <?php if (empty($settings['measurement_id']) || empty($settings['api_secret'])): ?>
+        <?php if (!$google_ok && !$meta_ok): ?>
         <div class="notice notice-warning inline" style="margin-bottom:20px">
             <p><?php printf(
-                esc_html__('Configura el ID de medición y el Secreto de API en %s para activar el envío de eventos.','mad-suite'),
-                '<a href="' . esc_url(admin_url('admin.php?page=' . $this->menu_slug() . '&tab=settings')) . '">' . esc_html__('Ajustes','mad-suite') . '</a>'
+                esc_html__('Configura al menos una plataforma en %s para empezar a registrar conversiones.','mad-suite'),
+                '<a href="' . esc_url(admin_url('admin.php?page='.$this->menu_slug().'&tab=settings')) . '">' . esc_html__('Ajustes','mad-suite') . '</a>'
             ); ?></p>
         </div>
         <?php endif; ?>
 
-        <div class="ga4-info">
-            <?php esc_html_e('Cada clic en un anuncio de Google Ads genera un gclid único. Se registra cuando el usuario llega a la web y se marca como convertido si realiza una compra.','mad-suite'); ?>
-            <strong><?php esc_html_e('Tip:','mad-suite'); ?></strong>
-            <?php esc_html_e('Para ver el nombre de campaña activa los parámetros UTM en tus anuncios (utm_campaign, utm_source, utm_medium) — Google Ads los puede añadir automáticamente con el etiquetado automático + UTM manual.','mad-suite'); ?>
+        <!-- Tarjetas de stats por plataforma -->
+        <div class="ads-cards">
+
+            <div class="ads-card combined">
+                <h3><?php esc_html_e('Total combinado','mad-suite'); ?></h3>
+                <div class="stats">
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format($combined['total'])); ?></span><span class="lbl"><?php esc_html_e('Clics','mad-suite'); ?></span></div>
+                    <div class="mini green"><span class="val"><?php echo esc_html(number_format($combined['converted'])); ?></span><span class="lbl"><?php esc_html_e('Conversiones','mad-suite'); ?></span></div>
+                    <div class="mini blue"><span class="val"><?php echo esc_html($combined['rate']); ?>%</span><span class="lbl"><?php esc_html_e('Tasa','mad-suite'); ?></span></div>
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format($combined['revenue'], 2)); ?></span><span class="lbl"><?php esc_html_e('Ingresos','mad-suite'); ?></span></div>
+                </div>
+            </div>
+
+            <div class="ads-card">
+                <h3>
+                    <span class="bg-google">Google Ads</span>
+                    <?php if (!$google_ok): ?><span class="ads-warn">⚠ <?php esc_html_e('Sin configurar','mad-suite'); ?></span><?php endif; ?>
+                </h3>
+                <?php $g = $by_pf['google'] ?? null; ?>
+                <div class="stats">
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format((int)($g->total ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Clics','mad-suite'); ?></span></div>
+                    <div class="mini green"><span class="val"><?php echo esc_html(number_format((int)($g->converted ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Conversiones','mad-suite'); ?></span></div>
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format((float)($g->revenue ?? 0), 2)); ?></span><span class="lbl"><?php esc_html_e('Ingresos','mad-suite'); ?></span></div>
+                </div>
+            </div>
+
+            <div class="ads-card">
+                <h3>
+                    <span class="bg-meta">Meta Ads</span>
+                    <?php if (!$meta_ok): ?><span class="ads-warn">⚠ <?php esc_html_e('Sin configurar','mad-suite'); ?></span><?php endif; ?>
+                </h3>
+                <?php $m = $by_pf['meta'] ?? null; ?>
+                <div class="stats">
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format((int)($m->total ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Clics','mad-suite'); ?></span></div>
+                    <div class="mini green"><span class="val"><?php echo esc_html(number_format((int)($m->converted ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Conversiones','mad-suite'); ?></span></div>
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format((float)($m->revenue ?? 0), 2)); ?></span><span class="lbl"><?php esc_html_e('Ingresos','mad-suite'); ?></span></div>
+                </div>
+            </div>
+
         </div>
 
-        <div class="ga4-stats">
-            <div class="ga4-stat">
-                <span class="val"><?php echo esc_html(number_format($total_all)); ?></span>
-                <span class="lbl"><?php esc_html_e('Clics de Ads','mad-suite'); ?></span>
-            </div>
-            <div class="ga4-stat green">
-                <span class="val"><?php echo esc_html(number_format($total_converted)); ?></span>
-                <span class="lbl"><?php esc_html_e('Conversiones','mad-suite'); ?></span>
-            </div>
-            <div class="ga4-stat blue">
-                <span class="val"><?php echo esc_html($conv_rate); ?>%</span>
-                <span class="lbl"><?php esc_html_e('Tasa de conversión','mad-suite'); ?></span>
-            </div>
-            <div class="ga4-stat">
-                <span class="val"><?php echo esc_html(number_format($total_revenue, 2)); ?></span>
-                <span class="lbl"><?php esc_html_e('Ingresos desde Ads','mad-suite'); ?></span>
-            </div>
-            <div class="ga4-stat red">
-                <span class="val"><?php echo esc_html(number_format($total_pending)); ?></span>
-                <span class="lbl"><?php esc_html_e('Sin compra','mad-suite'); ?></span>
-            </div>
-        </div>
+        <!-- Filtros -->
+        <div class="ads-filters">
+            <strong><?php esc_html_e('Plataforma:','mad-suite'); ?></strong>
+            <?php foreach (['all' => __('Todas','mad-suite'), 'google' => 'Google Ads', 'meta' => 'Meta Ads'] as $val => $label): ?>
+            <a href="<?php echo esc_url(add_query_arg(['platform' => $val, 'filter' => $conv_filter, 'paged' => 1], $base_url)); ?>"
+               class="<?php echo $pf_filter === $val ? 'active' : ''; ?>">
+                <?php echo esc_html($label); ?>
+            </a>
+            <?php endforeach; ?>
 
-        <div class="ga4-filters">
-            <strong><?php esc_html_e('Filtrar:','mad-suite'); ?></strong>
-            <a href="<?php echo esc_url($base_url); ?>"
-               class="<?php echo $filter === 'all' ? 'active' : ''; ?>">
-                <?php esc_html_e('Todos','mad-suite'); ?> (<?php echo esc_html($total_all); ?>)
+            <span class="ads-sep">|</span>
+            <strong><?php esc_html_e('Estado:','mad-suite'); ?></strong>
+            <?php foreach ([
+                'all'       => __('Todos','mad-suite'),
+                'converted' => __('Convertidos','mad-suite'),
+                'pending'   => __('Sin compra','mad-suite'),
+            ] as $val => $label): ?>
+            <a href="<?php echo esc_url(add_query_arg(['platform' => $pf_filter, 'filter' => $val, 'paged' => 1], $base_url)); ?>"
+               class="<?php echo $conv_filter === $val ? 'active' : ''; ?>">
+                <?php echo esc_html($label); ?>
             </a>
-            <a href="<?php echo esc_url($base_url . '&filter=converted'); ?>"
-               class="<?php echo $filter === 'converted' ? 'active' : ''; ?>">
-                <?php esc_html_e('Convertidos','mad-suite'); ?> (<?php echo esc_html($total_converted); ?>)
-            </a>
-            <a href="<?php echo esc_url($base_url . '&filter=pending'); ?>"
-               class="<?php echo $filter === 'pending' ? 'active' : ''; ?>">
-                <?php esc_html_e('Sin compra','mad-suite'); ?> (<?php echo esc_html($total_pending); ?>)
-            </a>
+            <?php endforeach; ?>
         </div>
 
         <?php if (empty($rows)): ?>
-            <p style="color:#646970"><?php esc_html_e('No hay datos todavía. Los clics desde Google Ads aparecerán aquí automáticamente en cuanto un usuario llegue desde un anuncio.','mad-suite'); ?></p>
+            <p style="color:#646970"><?php esc_html_e('No hay datos todavía. Los clics desde anuncios de Google o Meta aparecerán aquí automáticamente.','mad-suite'); ?></p>
         <?php else: ?>
 
-        <table class="ga4-tbl">
+        <table class="ads-tbl">
             <thead>
                 <tr>
+                    <th><?php esc_html_e('Plataforma','mad-suite'); ?></th>
                     <th><?php esc_html_e('Fecha clic','mad-suite'); ?></th>
-                    <th><?php esc_html_e('GCLID','mad-suite'); ?></th>
+                    <th><?php esc_html_e('Click ID','mad-suite'); ?></th>
                     <th><?php esc_html_e('Campaña / UTM','mad-suite'); ?></th>
                     <th><?php esc_html_e('Landing','mad-suite'); ?></th>
                     <th><?php esc_html_e('Pedido','mad-suite'); ?></th>
@@ -477,12 +690,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             <tbody>
             <?php foreach ($rows as $row): ?>
                 <tr>
-                    <td><?php echo esc_html(wp_date('d/m/Y H:i', strtotime($row->captured_at))); ?></td>
                     <td>
-                        <span class="ga4-mono" title="<?php echo esc_attr($row->gclid); ?>">
-                            <?php echo esc_html(substr($row->gclid, 0, 18)); ?>…
-                        </span>
+                        <?php if ($row->platform === 'google'): ?>
+                            <span class="bg-google">Google</span>
+                        <?php else: ?>
+                            <span class="bg-meta">Meta</span>
+                        <?php endif; ?>
                     </td>
+                    <td><?php echo esc_html(wp_date('d/m/Y H:i', strtotime($row->captured_at))); ?></td>
+                    <td><span class="ads-mono" title="<?php echo esc_attr($row->click_id); ?>"><?php echo esc_html(substr($row->click_id, 0, 18)); ?>…</span></td>
                     <td>
                         <?php if ($row->utm_campaign): ?>
                             <strong><?php echo esc_html($row->utm_campaign); ?></strong><br>
@@ -492,37 +708,28 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                         <?php endif; ?>
                     </td>
                     <td>
-                        <?php if ($row->landing_url): ?>
+                        <?php if ($row->landing_url):
+                            $path = wp_parse_url($row->landing_url, PHP_URL_PATH) ?: '/'; ?>
                             <a href="<?php echo esc_url($row->landing_url); ?>" target="_blank"
-                               title="<?php echo esc_attr($row->landing_url); ?>"
-                               style="font-size:.78em">
-                                <?php
-                                $path = wp_parse_url($row->landing_url, PHP_URL_PATH) ?: '/';
-                                echo esc_html(strlen($path) > 30 ? substr($path, 0, 30) . '…' : $path);
-                                ?>
+                               title="<?php echo esc_attr($row->landing_url); ?>" style="font-size:.78em">
+                                <?php echo esc_html(strlen($path) > 28 ? substr($path, 0, 28) . '…' : $path); ?>
                             </a>
-                        <?php else: ?>
-                            <span style="color:#c3c4c7">—</span>
-                        <?php endif; ?>
+                        <?php else: ?><span style="color:#c3c4c7">—</span><?php endif; ?>
                     </td>
                     <td>
                         <?php if ($row->order_id): ?>
-                            <a href="<?php echo esc_url($this->get_order_edit_url($row->order_id)); ?>">
-                                #<?php echo esc_html($row->order_id); ?>
-                            </a>
+                            <a href="<?php echo esc_url($this->get_order_edit_url($row->order_id)); ?>">#<?php echo esc_html($row->order_id); ?></a>
                         <?php else: ?>—<?php endif; ?>
                     </td>
                     <td>
-                        <?php if ($row->order_total !== null): ?>
-                            <?php echo esc_html(number_format((float) $row->order_total, 2) . ' ' . $row->currency); ?>
-                        <?php else: ?>—<?php endif; ?>
+                        <?php echo $row->order_total !== null
+                            ? esc_html(number_format((float)$row->order_total, 2) . ' ' . $row->currency)
+                            : '—'; ?>
                     </td>
                     <td>
-                        <?php if ($row->order_id): ?>
-                            <span class="ga4-badge ok"><?php esc_html_e('Convertido','mad-suite'); ?></span>
-                        <?php else: ?>
-                            <span class="ga4-badge no"><?php esc_html_e('Sin compra','mad-suite'); ?></span>
-                        <?php endif; ?>
+                        <?php echo $row->order_id
+                            ? '<span class="badge-ok">' . esc_html__('Convertido','mad-suite') . '</span>'
+                            : '<span class="badge-no">' . esc_html__('Sin compra','mad-suite') . '</span>'; ?>
                     </td>
                     <td>
                         <?php echo $row->converted_at
@@ -537,7 +744,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <?php if ($total_pages > 1): ?>
         <div style="margin-top:16px;">
             <?php echo paginate_links([
-                'base'    => $base_url . '&paged=%#%',
+                'base'    => add_query_arg(['platform' => $pf_filter, 'filter' => $conv_filter, 'paged' => '%#%'], $base_url),
                 'format'  => '',
                 'current' => $page,
                 'total'   => $total_pages,
@@ -549,14 +756,23 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <?php
     }
 
-    /* ==== Settings helpers ==== */
+    /* =========================================================
+     * SETTINGS HELPERS
+     * ======================================================= */
     private function defaults(){
         return [
-            'measurement_id' => '',
-            'api_secret'     => '',
-            'fire_statuses'  => ['processing'],
-            'debug'          => 0,
-            'test_coupon'    => '',
+            'google_enabled'     => 1,
+            'measurement_id'     => '',
+            'api_secret'         => '',
+            'google_statuses'    => ['processing'],
+            'meta_enabled'       => 0,
+            'pixel_id'           => '',
+            'access_token'       => '',
+            'meta_statuses'      => ['processing'],
+            'meta_test_code'     => '',
+            'send_customer_data' => 1,
+            'test_coupon'        => '',
+            'debug'              => 0,
         ];
     }
 
@@ -566,72 +782,119 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     private function option_group(){ return 'group_'.$this->slug(); }
-    private function section_id() { return 'section_'.$this->slug(); }
 
     public function sanitize_settings($input){
         $out = [];
-        $out['measurement_id'] = isset($input['measurement_id']) ? sanitize_text_field($input['measurement_id']) : '';
-        $out['api_secret']     = isset($input['api_secret'])     ? sanitize_text_field($input['api_secret'])     : '';
-        $out['debug']          = !empty($input['debug']) ? 1 : 0;
-        $out['test_coupon']    = isset($input['test_coupon'])    ? sanitize_text_field($input['test_coupon'])    : '';
-
-        $all_statuses = array_keys(wc_get_order_statuses());
-        $clean        = [];
-        if (isset($input['fire_statuses']) && is_array($input['fire_statuses'])){
-            foreach ($input['fire_statuses'] as $st){
-                $st = sanitize_text_field($st);
-                if (in_array('wc-'.$st, $all_statuses, true)) {
-                    $clean[] = $st;
-                } elseif (strpos($st,'wc-') === 0 && in_array($st, $all_statuses, true)) {
-                    $clean[] = substr($st, 3);
-                }
-            }
-        }
-        $out['fire_statuses'] = array_values(array_unique($clean));
+        $out['google_enabled']     = !empty($input['google_enabled'])     ? 1 : 0;
+        $out['measurement_id']     = sanitize_text_field($input['measurement_id']     ?? '');
+        $out['api_secret']         = sanitize_text_field($input['api_secret']         ?? '');
+        $out['google_statuses']    = $this->sanitize_statuses($input['google_statuses']    ?? []);
+        $out['meta_enabled']       = !empty($input['meta_enabled'])       ? 1 : 0;
+        $out['pixel_id']           = sanitize_text_field($input['pixel_id']           ?? '');
+        $out['access_token']       = sanitize_text_field($input['access_token']       ?? '');
+        $out['meta_statuses']      = $this->sanitize_statuses($input['meta_statuses']      ?? []);
+        $out['meta_test_code']     = sanitize_text_field($input['meta_test_code']     ?? '');
+        $out['send_customer_data'] = !empty($input['send_customer_data']) ? 1 : 0;
+        $out['test_coupon']        = sanitize_text_field($input['test_coupon']        ?? '');
+        $out['debug']              = !empty($input['debug'])              ? 1 : 0;
         return $out;
     }
 
-    /* ==== Field renderers ==== */
+    private function sanitize_statuses($raw){
+        if (!is_array($raw)) return [];
+        $all = array_keys(wc_get_order_statuses());
+        $clean = [];
+        foreach ($raw as $st){
+            $st = sanitize_text_field($st);
+            if (in_array('wc-'.$st, $all, true)) $clean[] = $st;
+            elseif (strpos($st,'wc-') === 0 && in_array($st, $all, true)) $clean[] = substr($st, 3);
+        }
+        return array_values(array_unique($clean));
+    }
+
+    /* =========================================================
+     * FIELD RENDERERS
+     * ======================================================= */
+    public function field_google_enabled(){
+        $v = (int) $this->get_settings()['google_enabled'];
+        printf('<label><input type="checkbox" name="%s[google_enabled]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Enviar eventos de compra a GA4','mad-suite'));
+    }
     public function field_measurement_id(){
         $v = $this->get_settings()['measurement_id'];
         printf('<input type="text" class="regular-text" name="%s[measurement_id]" value="%s" placeholder="G-XXXXXXXX" />',
             esc_attr($this->option_key), esc_attr($v));
     }
-
     public function field_api_secret(){
         $v = $this->get_settings()['api_secret'];
         printf('<input type="password" class="regular-text" name="%s[api_secret]" value="%s" autocomplete="new-password" />',
             esc_attr($this->option_key), esc_attr($v));
-        echo '<p class="description">'.esc_html__('GA4 → Administrador → Flujo de datos (Web) → Protocolo de medición → Secretos de API.','mad-suite').'</p>';
+        echo '<p class="description">'.esc_html__('GA4 → Administrador → Flujo de datos → Protocolo de medición → Secretos de API.','mad-suite').'</p>';
+    }
+    public function field_google_statuses(){
+        $this->render_statuses_checkboxes('google_statuses');
     }
 
-    public function field_fire_statuses(){
-        $selected = $this->get_settings()['fire_statuses'];
+    public function field_meta_enabled(){
+        $v = (int) $this->get_settings()['meta_enabled'];
+        printf('<label><input type="checkbox" name="%s[meta_enabled]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Enviar eventos de compra a Meta CAPI','mad-suite'));
+    }
+    public function field_pixel_id(){
+        $v = $this->get_settings()['pixel_id'];
+        printf('<input type="text" class="regular-text" name="%s[pixel_id]" value="%s" placeholder="123456789012345" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">'.esc_html__('Meta Business Manager → Administrador de eventos → tu Pixel → Configuración.','mad-suite').'</p>';
+    }
+    public function field_access_token(){
+        $v = $this->get_settings()['access_token'];
+        printf('<input type="password" class="regular-text" name="%s[access_token]" value="%s" autocomplete="new-password" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">'.esc_html__('Meta Business Manager → Administrador de eventos → Configuración → Conversions API → Generar token de acceso.','mad-suite').'</p>';
+    }
+    public function field_meta_statuses(){
+        $this->render_statuses_checkboxes('meta_statuses');
+    }
+    public function field_meta_test_code(){
+        $v = $this->get_settings()['meta_test_code'];
+        printf('<input type="text" class="regular-text" name="%s[meta_test_code]" value="%s" placeholder="TEST12345" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">'.esc_html__('Meta → Administrador de eventos → Herramienta de prueba. Dejar vacío en producción.','mad-suite').'</p>';
+    }
+    public function field_send_customer_data(){
+        $v = (int) $this->get_settings()['send_customer_data'];
+        printf('<label><input type="checkbox" name="%s[send_customer_data]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Enviar email, teléfono y dirección hasheados con SHA-256 (mejora el match rate)','mad-suite'));
+        echo '<p class="description">'.esc_html__('Los datos se hashean antes de enviarse — Meta nunca recibe datos en texto plano.','mad-suite').'</p>';
+    }
+    public function field_test_coupon(){
+        $v = $this->get_settings()['test_coupon'];
+        printf('<input type="text" class="regular-text" name="%s[test_coupon]" value="%s" placeholder="TEST-ADS" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">'.esc_html__('Pedidos con este cupón se envían con value=0.01 en ambas plataformas (solo para pruebas).','mad-suite').'</p>';
+    }
+    public function field_debug(){
+        $v = (int) $this->get_settings()['debug'];
+        printf('<label><input type="checkbox" name="%s[debug]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Registrar actividad en WC Logger (no registra credenciales)','mad-suite'));
+    }
+
+    private function render_statuses_checkboxes($key){
+        $selected = $this->get_settings()[$key];
         $all      = wc_get_order_statuses();
         echo '<fieldset>';
-        foreach ($all as $key => $label){
-            $short = (strpos($key,'wc-') === 0) ? substr($key, 3) : $key;
-            printf('<label><input type="checkbox" name="%s[fire_statuses][]" value="%s" %s /> %s</label><br>',
-                esc_attr($this->option_key), esc_attr($short),
+        foreach ($all as $wc_key => $label){
+            $short = (strpos($wc_key,'wc-') === 0) ? substr($wc_key, 3) : $wc_key;
+            printf('<label><input type="checkbox" name="%s[%s][]" value="%s" %s /> %s</label><br>',
+                esc_attr($this->option_key), esc_attr($key), esc_attr($short),
                 checked(in_array($short, $selected, true), true, false),
                 esc_html($label));
         }
         echo '</fieldset>';
-        echo '<p class="description">'.esc_html__('Recomendado: solo "En curso" (processing) para evitar envíos duplicados.','mad-suite').'</p>';
-    }
-
-    public function field_test_coupon(){
-        $v = $this->get_settings()['test_coupon'];
-        printf('<input type="text" class="regular-text" name="%s[test_coupon]" value="%s" placeholder="TEST-GA4" />',
-            esc_attr($this->option_key), esc_attr($v));
-        echo '<p class="description">'.esc_html__('Pedidos con este cupón se envían con value=0.01 (solo para pruebas en GA4).','mad-suite').'</p>';
-    }
-
-    public function field_debug(){
-        $v = (int) $this->get_settings()['debug'];
-        printf('<label><input type="checkbox" name="%s[debug]" value="1" %s /> %s</label>',
-            esc_attr($this->option_key),
-            checked(1, $v, false),
-            esc_html__('Registrar actividad en WC Logger (no registra credenciales)','mad-suite'));
+        echo '<p class="description">'.esc_html__('Recomendado: solo "En curso" (processing).','mad-suite').'</p>';
     }
 };
