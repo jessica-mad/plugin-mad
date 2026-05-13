@@ -1169,9 +1169,12 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         /* ---- Filter HAVING ---- */
         $extra = '';
         if ($jf === 'overlap') {
-            $extra = "AND (SUM(CASE WHEN platform='google'    AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0)
+            // Each (SUM > 0) yields 0 or 1; sum of those >= 2 means 2+ platforms converted
+            $extra = "AND (
+                          (SUM(CASE WHEN platform='google'    AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0)
                         + (SUM(CASE WHEN platform='meta'      AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0)
-                        + (SUM(CASE WHEN platform='pinterest' AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0) >= 2";
+                        + (SUM(CASE WHEN platform='pinterest' AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0)
+                      ) >= 2";
         } elseif ($jf === 'suspicious') {
             $extra = 'AND COUNT(*) >= 3';
         } elseif ($jf === 'converted') {
@@ -1204,7 +1207,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
              WHERE visitor_ip != ''
              GROUP BY visitor_ip
              $having
-             ORDER BY ((google_conv > 0) + (meta_conv > 0) + (pint_conv > 0) >= 2) DESC, conversions DESC, sessions DESC
+             ORDER BY conversions DESC, sessions DESC
              LIMIT %d OFFSET %d",
             $per_page, $offset
         ));
