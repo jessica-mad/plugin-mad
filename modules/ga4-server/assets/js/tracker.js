@@ -1,6 +1,6 @@
 /**
  * MAD Ads Tracker — frontend funnel event capture
- * Detects gclid/fbclid click sessions and tracks view_content,
+ * Detects gclid/fbclid/epik click sessions and tracks view_content,
  * add_to_cart and begin_checkout events back to the server.
  */
 (function () {
@@ -59,11 +59,15 @@
         var fbclid = getUrlParam('fbclid');
         if (fbclid) return { click_id: fbclid, platform: 'meta' };
 
+        // Pinterest: epik in URL (landing page hit)
+        var epik = getUrlParam('epik');
+        if (epik) return { click_id: epik, platform: 'pinterest' };
+
         // Google: extract from _gcl_aw cookie on subsequent pages
         var gclidCookie = cookieMatch(/_gcl_aw=GCL\.\d+\.([^;]+)/);
         if (gclidCookie) return { click_id: gclidCookie, platform: 'google' };
 
-        // Meta: extract fbclid from _fbc cookie  (format: fb.1.{ts}.{fbclid})
+        // Meta: extract fbclid from _fbc cookie (format: fb.1.{ts}.{fbclid})
         var fbc = cookieMatch(/_fbc=([^;]+)/);
         if (fbc) {
             var parts = fbc.split('.');
@@ -71,6 +75,10 @@
                 return { click_id: parts[3], platform: 'meta' };
             }
         }
+
+        // Pinterest: _epik cookie
+        var epicookie = cookieMatch(/_epik=([^;]+)/);
+        if (epicookie) return { click_id: epicookie, platform: 'pinterest' };
 
         return null;
     }

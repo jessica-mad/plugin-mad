@@ -125,7 +125,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $platform = isset($_POST['platform']) ? sanitize_key($_POST['platform'])         : '';
         $event    = isset($_POST['event'])    ? sanitize_key($_POST['event'])             : '';
 
-        if (!$click_id || !in_array($platform, ['google','meta'], true)) {
+        if (!$click_id || !in_array($platform, ['google','meta','pinterest'], true)) {
             wp_send_json_error('invalid_params');
         }
 
@@ -173,6 +173,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         if ($fbclid) {
             $this->save_click_to_db('meta', $fbclid, $this->get_fbp(), 'facebook', 'cpc');
         }
+
+        $epik = $this->extract_epik_from_request();
+        if ($epik) {
+            $this->save_click_to_db('pinterest', $epik, '', 'pinterest', 'cpc');
+        }
     }
 
     private function save_click_to_db($platform, $click_id, $browser_id, $default_source, $default_medium){
@@ -213,11 +218,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         if ($fbc) $order->update_meta_data('_fbc', $fbc);
         if ($fbp) $order->update_meta_data('_fbp', $fbp);
 
+        $epik = $this->extract_epik_from_cookie();
+        if ($epik) $order->update_meta_data('_epik', $epik);
+
         $order->save();
 
-        if ($gclid)  $this->link_order_to_click($order, 'google', $gclid,  $ga_client_id);
+        if ($gclid)  $this->link_order_to_click($order, 'google',    $gclid,  $ga_client_id);
         $fbclid = $this->extract_fbclid_from_cookie();
-        if ($fbclid) $this->link_order_to_click($order, 'meta',   $fbclid, $fbp);
+        if ($fbclid) $this->link_order_to_click($order, 'meta',      $fbclid, $fbp);
+        if ($epik)   $this->link_order_to_click($order, 'pinterest',  $epik,   '');
     }
 
     private function link_order_to_click(WC_Order $order, $platform, $click_id, $browser_id){
@@ -279,6 +288,19 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 if ($pixel && $token) {
                     $this->send_meta_purchase($order, $pixel, $token, $settings);
                     $order->update_meta_data('_meta_capi_purchase_sent', 1);
+                    $order->save();
+                }
+            }
+        }
+
+        if (!empty($settings['pinterest_enabled'])) {
+            $targets = array_map('strval', $settings['pinterest_statuses']);
+            if (in_array($to_short, $targets, true) && !$order->get_meta('_pinterest_capi_purchase_sent')) {
+                $ad_account = trim($settings['pinterest_ad_account']);
+                $token      = trim($settings['pinterest_access_token']);
+                if ($ad_account && $token) {
+                    $this->send_pinterest_purchase($order, $ad_account, $token, $settings);
+                    $order->update_meta_data('_pinterest_capi_purchase_sent', 1);
                     $order->save();
                 }
             }
@@ -421,6 +443,89 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     /* =========================================================
+     * PINTEREST — CONVERSIONS API
+     * ======================================================= */
+    private function send_pinterest_purchase(WC_Order $order, $ad_account_id, $access_token, array $settings){
+        $epik = $order->get_meta('_epik') ?: '';
+
+        $user_data = [
+            'client_ip_address' => $order->get_customer_ip_address(),
+            'client_user_agent' => sanitize_text_field($_SERVER['HTTP_USER_AGENT'] ?? ''),
+        ];
+
+        if (!empty($settings['send_customer_data'])) {
+            $email = $order->get_billing_email();
+            $phone = $order->get_billing_phone();
+            $fname = strtolower(trim($order->get_billing_first_name()));
+            $lname = strtolower(trim($order->get_billing_last_name()));
+
+            if ($email) $user_data['em'] = [hash('sha256', strtolower(trim($email)))];
+            if ($phone) {
+                $clean = preg_replace('/[^0-9]/', '', $phone);
+                if ($clean) $user_data['ph'] = [hash('sha256', $clean)];
+            }
+            if ($fname) $user_data['fn'] = [hash('sha256', $fname)];
+            if ($lname) $user_data['ln'] = [hash('sha256', $lname)];
+        }
+
+        $contents = [];
+        foreach ($order->get_items() as $item_id => $item) {
+            if (!$item instanceof WC_Order_Item_Product) continue;
+            $product    = $item->get_product();
+            $contents[] = [
+                'item_id'    => $product ? (string) $product->get_id() : (string) $item_id,
+                'item_name'  => $item->get_name(),
+                'item_price' => (string) wc_format_decimal($item->get_total() / max(1, $item->get_quantity()), 2),
+                'quantity'   => (int) $item->get_quantity(),
+            ];
+        }
+
+        $order_total = $this->apply_test_coupon($order, (float) $order->get_total(), $settings);
+
+        $event = [
+            'event_name'       => 'checkout',
+            'action_source'    => 'web',
+            'event_time'       => time(),
+            'event_id'         => 'wc_order_' . $order->get_id(),
+            'event_source_url' => home_url('/'),
+            'user_data'        => $user_data,
+            'custom_data'      => [
+                'currency'  => $order->get_currency(),
+                'value'     => (string) $order_total,
+                'order_id'  => (string) $order->get_id(),
+                'num_items' => count($contents),
+                'contents'  => $contents,
+            ],
+        ];
+        if ($epik) $event['user_data']['epik'] = $epik;
+
+        $payload = ['data' => [$event]];
+        if (!empty($settings['pinterest_test_code'])) {
+            $payload['test'] = sanitize_text_field($settings['pinterest_test_code']);
+        }
+
+        $this->debug_log('info', sprintf('Pinterest CAPI: checkout pedido #%d | epik: %s',
+            $order->get_id(),
+            $epik ? substr($epik, 0, 20) . '…' : 'sin epik'
+        ));
+
+        $response = wp_remote_post(
+            sprintf('https://api.pinterest.com/v5/ad_accounts/%s/events', rawurlencode($ad_account_id)),
+            [
+                'method'  => 'POST',
+                'headers' => [
+                    'Content-Type'  => 'application/json',
+                    'Authorization' => 'Bearer ' . $access_token,
+                ],
+                'body'    => wp_json_encode($payload),
+                'timeout' => 20,
+            ]
+        );
+
+        $this->log_api_response('Pinterest CAPI', $response);
+    }
+
+    /* =========================================================
      * HELPERS
      * ======================================================= */
     private function extract_gclid_from_request(){
@@ -455,6 +560,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private function get_fbp(){
         if (!isset($_COOKIE['_fbp'])) return null;
         return sanitize_text_field($_COOKIE['_fbp']);
+    }
+
+    private function extract_epik_from_request(){
+        if (!empty($_GET['epik'])) return sanitize_text_field($_GET['epik']);
+        return $this->extract_epik_from_cookie();
+    }
+    private function extract_epik_from_cookie(){
+        if (!isset($_COOKIE['_epik'])) return null;
+        return sanitize_text_field($_COOKIE['_epik']);
     }
 
     private function apply_test_coupon(WC_Order $order, float $total, array $settings): float {
@@ -554,6 +668,21 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'meta_section');
         }
 
+        add_settings_section('pinterest_section',
+            __('Pinterest Ads (Conversions API)','mad-suite'),
+            fn() => print('<p>' . esc_html__('Envía eventos de compra a Pinterest desde el servidor. Requiere acceso a la Conversions API en tu cuenta de Pinterest Business.','mad-suite') . '</p>'),
+            $this->menu_slug()
+        );
+        foreach ([
+            ['pinterest_enabled',      __('Activar','mad-suite'),                         'field_pinterest_enabled'],
+            ['pinterest_ad_account',   __('Ad Account ID','mad-suite'),                   'field_pinterest_ad_account'],
+            ['pinterest_access_token', __('Access Token (pina_…)','mad-suite'),           'field_pinterest_access_token'],
+            ['pinterest_statuses',     __('Estados que disparan checkout','mad-suite'),   'field_pinterest_statuses'],
+            ['pinterest_test_code',    __('Código de prueba (opcional)','mad-suite'),     'field_pinterest_test_code'],
+        ] as [$id, $label, $cb]){
+            add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'pinterest_section');
+        }
+
         add_settings_section('general_section', __('General','mad-suite'), '__return_false', $this->menu_slug());
         foreach ([
             ['require_payment', __('Requerir pago confirmado','mad-suite'), 'field_require_payment'],
@@ -623,13 +752,13 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $conv_filter = isset($_GET['filter'])   ? sanitize_key($_GET['filter'])   : 'all';
 
         // Platform filter for funnel (all conversions, not just a subset)
-        $pf_where = in_array($pf_filter, ['google','meta'], true)
+        $pf_where = in_array($pf_filter, ['google','meta','pinterest'], true)
             ? $wpdb->prepare('WHERE platform = %s', $pf_filter)
             : '';
 
         // Combined where for the table
         $wheres = [];
-        if (in_array($pf_filter, ['google','meta'], true)) $wheres[] = $wpdb->prepare('platform = %s', $pf_filter);
+        if (in_array($pf_filter, ['google','meta','pinterest'], true)) $wheres[] = $wpdb->prepare('platform = %s', $pf_filter);
         if ($conv_filter === 'converted') $wheres[] = 'order_id IS NOT NULL';
         if ($conv_filter === 'pending')   $wheres[] = 'order_id IS NULL';
         $where = $wheres ? 'WHERE ' . implode(' AND ', $wheres) : '';
@@ -685,10 +814,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             $suspicious_ips[$r->visitor_ip] = (int) $r->cnt;
         }
 
-        $settings  = $this->get_settings();
-        $base_url  = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=dashboard');
-        $google_ok = !empty($settings['google_enabled']) && !empty($settings['measurement_id']) && !empty($settings['api_secret']);
-        $meta_ok   = !empty($settings['meta_enabled'])   && !empty($settings['pixel_id'])       && !empty($settings['access_token']);
+        $settings      = $this->get_settings();
+        $base_url      = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=dashboard');
+        $google_ok     = !empty($settings['google_enabled'])    && !empty($settings['measurement_id'])       && !empty($settings['api_secret']);
+        $meta_ok       = !empty($settings['meta_enabled'])      && !empty($settings['pixel_id'])             && !empty($settings['access_token']);
+        $pinterest_ok  = !empty($settings['pinterest_enabled']) && !empty($settings['pinterest_ad_account']) && !empty($settings['pinterest_access_token']);
         ?>
         <style>
         .ads-cards{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap}
@@ -702,6 +832,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         .mini.blue  .val{color:#2271b1}
         .bg-google{background:#e8f0fe;color:#1a73e8;padding:2px 8px;border-radius:10px;font-size:.78em;font-weight:600}
         .bg-meta  {background:#e7f3ff;color:#0866ff;padding:2px 8px;border-radius:10px;font-size:.78em;font-weight:600}
+        .bg-pint  {background:#fdeaea;color:#e60023;padding:2px 8px;border-radius:10px;font-size:.78em;font-weight:600}
         .ads-warn{display:inline-flex;align-items:center;gap:4px;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:3px 8px;font-size:.76em}
 
         /* Funnel */
@@ -743,7 +874,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         .ip-ok{font-family:monospace;font-size:.76em;color:#8c8f94}
         </style>
 
-        <?php if (!$google_ok && !$meta_ok): ?>
+        <?php if (!$google_ok && !$meta_ok && !$pinterest_ok): ?>
         <div class="notice notice-warning inline" style="margin-bottom:16px">
             <p><?php printf(
                 esc_html__('Configura al menos una plataforma en %s.','mad-suite'),
@@ -779,6 +910,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <div class="mini"><span class="val"><?php echo esc_html(number_format((int)($m->total ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Clics','mad-suite'); ?></span></div>
                     <div class="mini green"><span class="val"><?php echo esc_html(number_format((int)($m->converted ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Compras','mad-suite'); ?></span></div>
                     <div class="mini"><span class="val"><?php echo esc_html(number_format((float)($m->revenue ?? 0), 2)); ?></span><span class="lbl"><?php esc_html_e('Ingresos','mad-suite'); ?></span></div>
+                </div>
+            </div>
+            <div class="ads-card">
+                <h3><span class="bg-pint">Pinterest Ads</span><?php if (!$pinterest_ok): ?><span class="ads-warn">&#9888; <?php esc_html_e('Sin configurar','mad-suite'); ?></span><?php endif; ?></h3>
+                <?php $p = $by_pf['pinterest'] ?? null; ?>
+                <div class="stats">
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format((int)($p->total ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Clics','mad-suite'); ?></span></div>
+                    <div class="mini green"><span class="val"><?php echo esc_html(number_format((int)($p->converted ?? 0))); ?></span><span class="lbl"><?php esc_html_e('Compras','mad-suite'); ?></span></div>
+                    <div class="mini"><span class="val"><?php echo esc_html(number_format((float)($p->revenue ?? 0), 2)); ?></span><span class="lbl"><?php esc_html_e('Ingresos','mad-suite'); ?></span></div>
                 </div>
             </div>
         </div>
@@ -842,7 +982,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <!-- Filtros -->
         <div class="ads-filters">
             <strong><?php esc_html_e('Plataforma:','mad-suite'); ?></strong>
-            <?php foreach (['all' => __('Todas','mad-suite'), 'google' => 'Google Ads', 'meta' => 'Meta Ads'] as $val => $label): ?>
+            <?php foreach (['all' => __('Todas','mad-suite'), 'google' => 'Google Ads', 'meta' => 'Meta Ads', 'pinterest' => 'Pinterest Ads'] as $val => $label): ?>
             <a href="<?php echo esc_url(add_query_arg(['platform' => $val, 'filter' => $conv_filter, 'paged' => 1], $base_url)); ?>"
                class="<?php echo $pf_filter === $val ? 'active' : ''; ?>">
                 <?php echo esc_html($label); ?>
@@ -898,8 +1038,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <td>
                         <?php if ($row->platform === 'google'): ?>
                             <span class="bg-google">G</span>
-                        <?php else: ?>
+                        <?php elseif ($row->platform === 'meta'): ?>
                             <span class="bg-meta">M</span>
+                        <?php else: ?>
+                            <span class="bg-pint">P</span>
                         <?php endif; ?>
                     </td>
                     <td style="white-space:nowrap"><?php echo esc_html(wp_date('d/m/Y H:i', strtotime($row->captured_at))); ?></td>
@@ -1009,13 +1151,14 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $summary = $wpdb->get_row(
             "SELECT
                 COUNT(*) as total_multi,
-                SUM(CASE WHEN google_conv > 0 AND meta_conv > 0 THEN 1 ELSE 0 END) as overlaps,
+                SUM(CASE WHEN (google_conv > 0) + (meta_conv > 0) + (pint_conv > 0) >= 2 THEN 1 ELSE 0 END) as overlaps,
                 SUM(CASE WHEN sessions >= 3 THEN 1 ELSE 0 END) as suspicious
              FROM (
                  SELECT visitor_ip,
                         COUNT(*) as sessions,
-                        SUM(CASE WHEN platform='google' AND order_id IS NOT NULL THEN 1 ELSE 0 END) as google_conv,
-                        SUM(CASE WHEN platform='meta'   AND order_id IS NOT NULL THEN 1 ELSE 0 END) as meta_conv
+                        SUM(CASE WHEN platform='google'    AND order_id IS NOT NULL THEN 1 ELSE 0 END) as google_conv,
+                        SUM(CASE WHEN platform='meta'      AND order_id IS NOT NULL THEN 1 ELSE 0 END) as meta_conv,
+                        SUM(CASE WHEN platform='pinterest' AND order_id IS NOT NULL THEN 1 ELSE 0 END) as pint_conv
                  FROM {$this->table}
                  WHERE visitor_ip != ''
                  GROUP BY visitor_ip
@@ -1026,8 +1169,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         /* ---- Filter HAVING ---- */
         $extra = '';
         if ($jf === 'overlap') {
-            $extra = "AND SUM(CASE WHEN platform='google' AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0
-                      AND SUM(CASE WHEN platform='meta'   AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0";
+            $extra = "AND (SUM(CASE WHEN platform='google'    AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0)
+                        + (SUM(CASE WHEN platform='meta'      AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0)
+                        + (SUM(CASE WHEN platform='pinterest' AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0) >= 2";
         } elseif ($jf === 'suspicious') {
             $extra = 'AND COUNT(*) >= 3';
         } elseif ($jf === 'converted') {
@@ -1048,17 +1192,19 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                  COUNT(DISTINCT NULLIF(utm_campaign,'')) as num_campaigns,
                  SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) as conversions,
                  SUM(CASE WHEN order_id IS NOT NULL THEN order_total ELSE 0 END) as revenue,
-                 SUM(CASE WHEN platform='google' THEN 1 ELSE 0 END) as google_sessions,
-                 SUM(CASE WHEN platform='meta'   THEN 1 ELSE 0 END) as meta_sessions,
-                 SUM(CASE WHEN platform='google' AND order_id IS NOT NULL THEN 1 ELSE 0 END) as google_conv,
-                 SUM(CASE WHEN platform='meta'   AND order_id IS NOT NULL THEN 1 ELSE 0 END) as meta_conv,
+                 SUM(CASE WHEN platform='google'    THEN 1 ELSE 0 END) as google_sessions,
+                 SUM(CASE WHEN platform='meta'      THEN 1 ELSE 0 END) as meta_sessions,
+                 SUM(CASE WHEN platform='pinterest' THEN 1 ELSE 0 END) as pint_sessions,
+                 SUM(CASE WHEN platform='google'    AND order_id IS NOT NULL THEN 1 ELSE 0 END) as google_conv,
+                 SUM(CASE WHEN platform='meta'      AND order_id IS NOT NULL THEN 1 ELSE 0 END) as meta_conv,
+                 SUM(CASE WHEN platform='pinterest' AND order_id IS NOT NULL THEN 1 ELSE 0 END) as pint_conv,
                  MIN(captured_at) as first_seen,
                  MAX(captured_at) as last_seen
              FROM {$this->table}
              WHERE visitor_ip != ''
              GROUP BY visitor_ip
              $having
-             ORDER BY (google_conv > 0 AND meta_conv > 0) DESC, conversions DESC, sessions DESC
+             ORDER BY ((google_conv > 0) + (meta_conv > 0) + (pint_conv > 0) >= 2) DESC, conversions DESC, sessions DESC
              LIMIT %d OFFSET %d",
             $per_page, $offset
         ));
@@ -1108,6 +1254,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         .badge-bot    {background:#fff3cd;color:#856404;border:1px solid #f0ad4e;border-radius:4px;padding:2px 8px;font-size:.74em;font-weight:700}
         .badge-g{background:#e8f0fe;color:#1a73e8;padding:2px 7px;border-radius:10px;font-size:.74em;font-weight:600}
         .badge-m{background:#e7f3ff;color:#0866ff;padding:2px 7px;border-radius:10px;font-size:.74em;font-weight:600}
+        .badge-p{background:#fdeaea;color:#e60023;padding:2px 7px;border-radius:10px;font-size:.74em;font-weight:600}
         .jrn-stats{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap;font-size:.8em;color:#646970}
         .jrn-stats strong{color:#1d2327}
         .jrn-conv-g{color:#1a73e8;font-weight:700}
@@ -1146,7 +1293,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <div class="notice notice-warning inline" style="margin-bottom:16px">
             <p><strong><?php esc_html_e('Conversiones solapadas detectadas:','mad-suite'); ?></strong>
             <?php printf(
-                esc_html__('%d IP(s) tienen compras atribuidas tanto a Google como a Meta. Esto puede inflar las conversiones reportadas en ambas plataformas para los mismos pedidos.','mad-suite'),
+                esc_html__('%d IP(s) tienen compras atribuidas a más de una plataforma. Esto puede inflar las conversiones reportadas en cada plataforma para los mismos pedidos.','mad-suite'),
                 (int)($summary->overlaps ?? 0)
             ); ?></p>
         </div>
@@ -1175,7 +1322,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <?php else: ?>
 
         <?php foreach ($ip_rows as $r):
-            $is_overlap = (int)$r->google_conv > 0 && (int)$r->meta_conv > 0;
+            $conv_platforms = ((int)$r->google_conv > 0) + ((int)$r->meta_conv > 0) + ((int)$r->pint_conv > 0);
+            $is_overlap = $conv_platforms >= 2;
             $is_bot     = (int)$r->sessions >= 3;
             $sessions   = $by_ip[$r->visitor_ip] ?? [];
         ?>
@@ -1195,6 +1343,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <?php if ((int)$r->meta_sessions > 0): ?>
                         <span class="badge-m">Meta ×<?php echo esc_html($r->meta_sessions); ?></span>
                     <?php endif; ?>
+                    <?php if ((int)$r->pint_sessions > 0): ?>
+                        <span class="badge-p">Pinterest ×<?php echo esc_html($r->pint_sessions); ?></span>
+                    <?php endif; ?>
                 </span>
                 <span class="jrn-stats">
                     <span><?php printf(esc_html__('%s sesiones','mad-suite'), '<strong>'.esc_html($r->sessions).'</strong>'); ?></span>
@@ -1205,6 +1356,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <span>
                         <?php if ((int)$r->google_conv > 0): ?><span class="jrn-conv-g">G:<?php echo esc_html($r->google_conv); ?></span>&nbsp;<?php endif; ?>
                         <?php if ((int)$r->meta_conv   > 0): ?><span class="jrn-conv-m">M:<?php echo esc_html($r->meta_conv); ?></span>&nbsp;<?php endif; ?>
+                        <?php if ((int)$r->pint_conv   > 0): ?><span style="color:#e60023;font-weight:700">P:<?php echo esc_html($r->pint_conv); ?></span>&nbsp;<?php endif; ?>
                         <?php echo esc_html(number_format((float)$r->revenue, 2) . ' — ' . (int)$r->conversions . ' ' . _n('compra','compras',(int)$r->conversions,'mad-suite')); ?>
                     </span>
                     <?php endif; ?>
@@ -1234,8 +1386,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                             <td>
                                 <?php if ($s->platform === 'google'): ?>
                                     <span class="badge-g">G</span>
-                                <?php else: ?>
+                                <?php elseif ($s->platform === 'meta'): ?>
                                     <span class="badge-m">M</span>
+                                <?php else: ?>
+                                    <span class="badge-p">P</span>
                                 <?php endif; ?>
                             </td>
                             <td>
@@ -1295,19 +1449,24 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
      * ======================================================= */
     private function defaults(){
         return [
-            'google_enabled'     => 1,
-            'measurement_id'     => '',
-            'api_secret'         => '',
-            'google_statuses'    => ['processing'],
-            'meta_enabled'       => 0,
-            'pixel_id'           => '',
-            'access_token'       => '',
-            'meta_statuses'      => ['processing'],
-            'meta_test_code'     => '',
-            'send_customer_data' => 1,
-            'require_payment'    => 1,
-            'test_coupon'        => '',
-            'debug'              => 0,
+            'google_enabled'          => 1,
+            'measurement_id'          => '',
+            'api_secret'              => '',
+            'google_statuses'         => ['processing'],
+            'meta_enabled'            => 0,
+            'pixel_id'                => '',
+            'access_token'            => '',
+            'meta_statuses'           => ['processing'],
+            'meta_test_code'          => '',
+            'pinterest_enabled'       => 0,
+            'pinterest_ad_account'    => '',
+            'pinterest_access_token'  => '',
+            'pinterest_statuses'      => ['processing'],
+            'pinterest_test_code'     => '',
+            'send_customer_data'      => 1,
+            'require_payment'         => 1,
+            'test_coupon'             => '',
+            'debug'                   => 0,
         ];
     }
 
@@ -1324,12 +1483,17 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $out['measurement_id']     = sanitize_text_field($input['measurement_id']     ?? '');
         $out['api_secret']         = sanitize_text_field($input['api_secret']         ?? '');
         $out['google_statuses']    = $this->sanitize_statuses($input['google_statuses']    ?? []);
-        $out['meta_enabled']       = !empty($input['meta_enabled'])       ? 1 : 0;
-        $out['pixel_id']           = sanitize_text_field($input['pixel_id']           ?? '');
-        $out['access_token']       = sanitize_text_field($input['access_token']       ?? '');
-        $out['meta_statuses']      = $this->sanitize_statuses($input['meta_statuses']      ?? []);
-        $out['meta_test_code']     = sanitize_text_field($input['meta_test_code']     ?? '');
-        $out['send_customer_data'] = !empty($input['send_customer_data']) ? 1 : 0;
+        $out['meta_enabled']             = !empty($input['meta_enabled'])             ? 1 : 0;
+        $out['pixel_id']                 = sanitize_text_field($input['pixel_id']                 ?? '');
+        $out['access_token']             = sanitize_text_field($input['access_token']             ?? '');
+        $out['meta_statuses']            = $this->sanitize_statuses($input['meta_statuses']            ?? []);
+        $out['meta_test_code']           = sanitize_text_field($input['meta_test_code']           ?? '');
+        $out['pinterest_enabled']        = !empty($input['pinterest_enabled'])        ? 1 : 0;
+        $out['pinterest_ad_account']     = sanitize_text_field($input['pinterest_ad_account']     ?? '');
+        $out['pinterest_access_token']   = sanitize_text_field($input['pinterest_access_token']   ?? '');
+        $out['pinterest_statuses']       = $this->sanitize_statuses($input['pinterest_statuses']       ?? []);
+        $out['pinterest_test_code']      = sanitize_text_field($input['pinterest_test_code']      ?? '');
+        $out['send_customer_data']       = !empty($input['send_customer_data'])       ? 1 : 0;
         $out['require_payment']    = !empty($input['require_payment'])    ? 1 : 0;
         $out['test_coupon']        = sanitize_text_field($input['test_coupon']        ?? '');
         $out['debug']              = !empty($input['debug'])              ? 1 : 0;
@@ -1400,6 +1564,31 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             esc_html__('Enviar email, teléfono y dirección hasheados con SHA-256 (mejora el match rate)','mad-suite'));
         echo '<p class="description">'.esc_html__('Los datos se hashean antes de enviarse — Meta nunca recibe datos en texto plano.','mad-suite').'</p>';
     }
+    public function field_pinterest_enabled(){
+        $v = (int) $this->get_settings()['pinterest_enabled'];
+        printf('<label><input type="checkbox" name="%s[pinterest_enabled]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false), esc_html__('Enviar eventos de compra a Pinterest CAPI','mad-suite'));
+    }
+    public function field_pinterest_ad_account(){
+        $v = $this->get_settings()['pinterest_ad_account'];
+        printf('<input type="text" class="regular-text" name="%s[pinterest_ad_account]" value="%s" placeholder="549755813099" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">'.esc_html__('Pinterest Ads Manager → Cuenta publicitaria → ID de cuenta (número).','mad-suite').'</p>';
+    }
+    public function field_pinterest_access_token(){
+        $v = $this->get_settings()['pinterest_access_token'];
+        printf('<input type="password" class="regular-text" name="%s[pinterest_access_token]" value="%s" autocomplete="new-password" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">'.esc_html__('Pinterest Ads Manager → Conversions API → Generar token de acceso. Empieza por pina_.','mad-suite').'</p>';
+    }
+    public function field_pinterest_statuses(){ $this->render_statuses_checkboxes('pinterest_statuses'); }
+    public function field_pinterest_test_code(){
+        $v = $this->get_settings()['pinterest_test_code'];
+        printf('<input type="text" class="regular-text" name="%s[pinterest_test_code]" value="%s" placeholder="" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">'.esc_html__('Pinterest Ads Manager → Conversions API → Código de evento de prueba. Dejar vacío en producción.','mad-suite').'</p>';
+    }
+
     public function field_require_payment(){
         $v = (int) $this->get_settings()['require_payment'];
         printf('<label><input type="checkbox" name="%s[require_payment]" value="1" %s /> %s</label>',
