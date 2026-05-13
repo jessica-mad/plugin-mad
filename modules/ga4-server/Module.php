@@ -9,7 +9,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private $table;
 
     // Bump to trigger dbDelta when schema changes
-    private const TABLE_VERSION = '1.3';
+    private const TABLE_VERSION = '1.4';
 
     public function __construct($core){
         $this->core       = $core;
@@ -43,7 +43,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
      * BASE DE DATOS — versioned so dbDelta adds new columns
      * ======================================================= */
     private function maybe_create_table(){
-        if (get_option('mad_ads_table_version') === self::TABLE_VERSION) return;
+        $current = get_option('mad_ads_table_version', '');
+        if ($current === self::TABLE_VERSION) return;
 
         // Drop legacy transients from previous schema versions
         delete_transient('mad_ads_clicks_table_ok');
@@ -52,6 +53,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         $charset = $GLOBALS['wpdb']->get_charset_collate();
 
+        // dbDelta adds missing columns automatically — never removes data
         dbDelta("CREATE TABLE {$this->table} (
             id                    bigint(20)     NOT NULL AUTO_INCREMENT,
             platform              varchar(20)    NOT NULL,
@@ -66,6 +68,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             funnel_view_content   smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
             funnel_add_to_cart    smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
             funnel_begin_checkout smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
+            visitor_ip            varchar(45)    DEFAULT '',
             order_id              bigint(20)     DEFAULT NULL,
             order_total           decimal(10,2)  DEFAULT NULL,
             currency              varchar(10)    DEFAULT '',
@@ -76,7 +79,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             KEY          order_id (order_id)
         ) $charset;");
 
-        // Migrate tinyint → smallint counters from v1.2
+        // Migrate tinyint → smallint counters (v1.2 installs only)
         if ($current === '1.2') {
             $GLOBALS['wpdb']->query(
                 "ALTER TABLE {$this->table}
@@ -189,7 +192,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'utm_medium'   => isset($_GET['utm_medium'])   ? sanitize_text_field($_GET['utm_medium'])   : $default_medium,
             'landing_url'  => $this->get_current_url(),
             'captured_at'  => current_time('mysql'),
-        ], ['%s','%s','%s','%s','%s','%s','%s','%s']);
+            'visitor_ip'   => $this->get_visitor_ip(),
+        ], ['%s','%s','%s','%s','%s','%s','%s','%s','%s']);
     }
 
     /* =========================================================
@@ -244,6 +248,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         $settings = $this->get_settings();
         $to_short = (strpos($to_status,'wc-') === 0) ? substr($to_status, 3) : $to_status;
+
+        // Skip if payment is not confirmed (guards against processing→cancelled on gateway failures)
+        if (!empty($settings['require_payment']) && !$order->get_date_paid()) {
+            $this->debug_log('info', sprintf(
+                'Pedido #%d: conversión omitida — pago no confirmado (get_date_paid vacío)',
+                $order_id
+            ));
+            return;
+        }
 
         if (!empty($settings['google_enabled'])) {
             $targets = array_map('strval', $settings['google_statuses']);
@@ -466,6 +479,21 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         }
     }
 
+    private function get_visitor_ip(){
+        // Prefer Cloudflare header, then standard proxy headers, then direct connection
+        foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP'] as $header) {
+            if (!empty($_SERVER[$header])) {
+                return sanitize_text_field(trim($_SERVER[$header]));
+            }
+        }
+        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+            // Take only the first (client) IP from the chain
+            $ip = trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0]);
+            return sanitize_text_field($ip);
+        }
+        return sanitize_text_field($_SERVER['REMOTE_ADDR'] ?? '');
+    }
+
     private function get_current_url(){
         return substr(home_url(add_query_arg([])), 0, 500);
     }
@@ -528,8 +556,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         add_settings_section('general_section', __('General','mad-suite'), '__return_false', $this->menu_slug());
         foreach ([
-            ['test_coupon', __('Cupón de prueba','mad-suite'), 'field_test_coupon'],
-            ['debug',       __('Modo depuración','mad-suite'), 'field_debug'],
+            ['require_payment', __('Requerir pago confirmado','mad-suite'), 'field_require_payment'],
+            ['test_coupon',     __('Cupón de prueba','mad-suite'),           'field_test_coupon'],
+            ['debug',           __('Modo depuración','mad-suite'),           'field_debug'],
         ] as [$id, $label, $cb]){
             add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'general_section');
         }
@@ -640,6 +669,16 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ));
         $total_pages = (int) ceil($total_filtered / $per_page);
 
+        // IPs with 3+ sessions (suspicious bot/click-farm activity)
+        $suspicious_ips = [];
+        $ip_counts = $wpdb->get_results(
+            "SELECT visitor_ip, COUNT(*) as cnt FROM {$this->table}
+             WHERE visitor_ip != '' GROUP BY visitor_ip HAVING cnt >= 3"
+        );
+        foreach ($ip_counts as $r) {
+            $suspicious_ips[$r->visitor_ip] = (int) $r->cnt;
+        }
+
         $settings  = $this->get_settings();
         $base_url  = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=dashboard');
         $google_ok = !empty($settings['google_enabled']) && !empty($settings['measurement_id']) && !empty($settings['api_secret']);
@@ -694,6 +733,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         .ads-sep{color:#c3c4c7;margin:0 2px}
         .ads-th-funnel{text-align:center!important}
         .ads-td-funnel{text-align:center}
+        .ip-bot{display:inline-flex;align-items:center;gap:3px;background:#ffeeba;border:1px solid #f0ad4e;border-radius:3px;padding:1px 5px;font-size:.72em;font-weight:600;color:#856404;cursor:help}
+        .ip-ok{font-family:monospace;font-size:.76em;color:#8c8f94}
         </style>
 
         <?php if (!$google_ok && !$meta_ok): ?>
@@ -832,6 +873,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <th class="ads-th-funnel" title="<?php esc_attr_e('Vista de producto','mad-suite'); ?>"><?php esc_html_e('Producto','mad-suite'); ?></th>
                     <th class="ads-th-funnel" title="<?php esc_attr_e('Añadido al carrito','mad-suite'); ?>"><?php esc_html_e('Carrito','mad-suite'); ?></th>
                     <th class="ads-th-funnel" title="<?php esc_attr_e('Inicio de checkout','mad-suite'); ?>"><?php esc_html_e('Checkout','mad-suite'); ?></th>
+                    <th><?php esc_html_e('IP','mad-suite'); ?></th>
                     <th><?php esc_html_e('Pedido','mad-suite'); ?></th>
                     <th><?php esc_html_e('Importe','mad-suite'); ?></th>
                     <th><?php esc_html_e('Estado','mad-suite'); ?></th>
@@ -839,10 +881,12 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             </thead>
             <tbody>
             <?php foreach ($rows as $row):
-                $vc = (int) $row->funnel_view_content;
-                $ac = (int) $row->funnel_add_to_cart;
-                $bc = (int) $row->funnel_begin_checkout;
-                $pv = (int) $row->pages_viewed;
+                $vc    = (int) $row->funnel_view_content;
+                $ac    = (int) $row->funnel_add_to_cart;
+                $bc    = (int) $row->funnel_begin_checkout;
+                $pv    = (int) $row->pages_viewed;
+                $ip    = $row->visitor_ip ?? '';
+                $is_bot = $ip && isset($suspicious_ips[$ip]);
             ?>
                 <tr>
                     <td>
@@ -898,6 +942,17 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                         <?php endif; ?>
                     </td>
                     <td>
+                        <?php if ($ip): ?>
+                            <?php if ($is_bot): ?>
+                                <span class="ip-bot" title="<?php printf(esc_attr__('%d sesiones desde esta IP','mad-suite'), $suspicious_ips[$ip]); ?>">
+                                    &#9888; <?php echo esc_html($ip); ?>
+                                </span>
+                            <?php else: ?>
+                                <span class="ip-ok"><?php echo esc_html($ip); ?></span>
+                            <?php endif; ?>
+                        <?php else: ?><span style="color:#c3c4c7">—</span><?php endif; ?>
+                    </td>
+                    <td>
                         <?php if ($row->order_id): ?>
                             <a href="<?php echo esc_url($this->get_order_edit_url($row->order_id)); ?>">#<?php echo esc_html($row->order_id); ?></a>
                         <?php else: ?>—<?php endif; ?>
@@ -947,6 +1002,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'meta_statuses'      => ['processing'],
             'meta_test_code'     => '',
             'send_customer_data' => 1,
+            'require_payment'    => 1,
             'test_coupon'        => '',
             'debug'              => 0,
         ];
@@ -971,6 +1027,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $out['meta_statuses']      = $this->sanitize_statuses($input['meta_statuses']      ?? []);
         $out['meta_test_code']     = sanitize_text_field($input['meta_test_code']     ?? '');
         $out['send_customer_data'] = !empty($input['send_customer_data']) ? 1 : 0;
+        $out['require_payment']    = !empty($input['require_payment'])    ? 1 : 0;
         $out['test_coupon']        = sanitize_text_field($input['test_coupon']        ?? '');
         $out['debug']              = !empty($input['debug'])              ? 1 : 0;
         return $out;
@@ -1039,6 +1096,13 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             esc_attr($this->option_key), checked(1, $v, false),
             esc_html__('Enviar email, teléfono y dirección hasheados con SHA-256 (mejora el match rate)','mad-suite'));
         echo '<p class="description">'.esc_html__('Los datos se hashean antes de enviarse — Meta nunca recibe datos en texto plano.','mad-suite').'</p>';
+    }
+    public function field_require_payment(){
+        $v = (int) $this->get_settings()['require_payment'];
+        printf('<label><input type="checkbox" name="%s[require_payment]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Solo enviar conversión si el pago fue confirmado (fecha de pago registrada)','mad-suite'));
+        echo '<p class="description">'.esc_html__('Evita que pedidos que pasan a "En curso" y luego se cancelan por error del medio de pago cuenten como conversión. Recomendado activado.','mad-suite').'</p>';
     }
     public function field_test_coupon(){
         $v = $this->get_settings()['test_coupon'];
