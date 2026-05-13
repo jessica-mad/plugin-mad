@@ -9,7 +9,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private $table;
 
     // Bump to trigger dbDelta when schema changes
-    private const TABLE_VERSION = '1.2';
+    private const TABLE_VERSION = '1.3';
 
     public function __construct($core){
         $this->core       = $core;
@@ -63,9 +63,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             landing_url           varchar(500)   DEFAULT '',
             captured_at           datetime       NOT NULL,
             pages_viewed          smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
-            funnel_view_content   tinyint(1)     NOT NULL DEFAULT 0,
-            funnel_add_to_cart    tinyint(1)     NOT NULL DEFAULT 0,
-            funnel_begin_checkout tinyint(1)     NOT NULL DEFAULT 0,
+            funnel_view_content   smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
+            funnel_add_to_cart    smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
+            funnel_begin_checkout smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
             order_id              bigint(20)     DEFAULT NULL,
             order_total           decimal(10,2)  DEFAULT NULL,
             currency              varchar(10)    DEFAULT '',
@@ -75,6 +75,16 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             KEY          platform (platform),
             KEY          order_id (order_id)
         ) $charset;");
+
+        // Migrate tinyint → smallint counters from v1.2
+        if ($current === '1.2') {
+            $GLOBALS['wpdb']->query(
+                "ALTER TABLE {$this->table}
+                 MODIFY funnel_view_content   smallint(5) UNSIGNED NOT NULL DEFAULT 0,
+                 MODIFY funnel_add_to_cart    smallint(5) UNSIGNED NOT NULL DEFAULT 0,
+                 MODIFY funnel_begin_checkout smallint(5) UNSIGNED NOT NULL DEFAULT 0"
+            );
+        }
 
         update_option('mad_ads_table_version', self::TABLE_VERSION);
     }
@@ -130,9 +140,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         if ($event !== 'add_to_cart') {
             $set_parts[] = 'pages_viewed = pages_viewed + 1';
         }
-        if ($event === 'view_content')   $set_parts[] = 'funnel_view_content = 1';
-        if ($event === 'add_to_cart')    $set_parts[] = 'funnel_add_to_cart = 1';
-        if ($event === 'begin_checkout') $set_parts[] = 'funnel_begin_checkout = 1';
+        if ($event === 'view_content')   $set_parts[] = 'funnel_view_content = funnel_view_content + 1';
+        if ($event === 'add_to_cart')    $set_parts[] = 'funnel_add_to_cart = funnel_add_to_cart + 1';
+        if ($event === 'begin_checkout') $set_parts[] = 'funnel_begin_checkout = funnel_begin_checkout + 1';
 
         if (empty($set_parts)) {
             wp_send_json_success();
@@ -612,11 +622,14 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $funnel = $wpdb->get_row(
             "SELECT
                 COUNT(*) as clicks,
-                SUM(funnel_view_content)   as view_content,
-                SUM(funnel_add_to_cart)    as add_to_cart,
-                SUM(funnel_begin_checkout) as begin_checkout,
-                SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) as purchase,
-                ROUND(AVG(NULLIF(pages_viewed, 0)), 1) as avg_pages
+                SUM(funnel_view_content)                                        as total_view_content,
+                SUM(funnel_add_to_cart)                                         as total_add_to_cart,
+                SUM(funnel_begin_checkout)                                      as total_begin_checkout,
+                SUM(CASE WHEN funnel_view_content   > 0 THEN 1 ELSE 0 END)     as sessions_view_content,
+                SUM(CASE WHEN funnel_add_to_cart    > 0 THEN 1 ELSE 0 END)     as sessions_add_to_cart,
+                SUM(CASE WHEN funnel_begin_checkout > 0 THEN 1 ELSE 0 END)     as sessions_begin_checkout,
+                SUM(CASE WHEN order_id IS NOT NULL  THEN 1 ELSE 0 END)         as purchase,
+                ROUND(AVG(NULLIF(pages_viewed, 0)), 1)                          as avg_pages
              FROM {$this->table} $pf_where"
         );
 
@@ -725,20 +738,25 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         <!-- Embudo de conversión -->
         <?php
-        $f_clicks = (int) ($funnel->clicks        ?? 0);
-        $f_view   = (int) ($funnel->view_content  ?? 0);
-        $f_cart   = (int) ($funnel->add_to_cart   ?? 0);
-        $f_check  = (int) ($funnel->begin_checkout ?? 0);
-        $f_buy    = (int) ($funnel->purchase       ?? 0);
-        $f_pages  = (float) ($funnel->avg_pages    ?? 0);
-        $bar_max  = max($f_clicks, 1);
+        $f_clicks      = (int)   ($funnel->clicks                ?? 0);
+        $f_view_s      = (int)   ($funnel->sessions_view_content  ?? 0); // sesiones únicas
+        $f_cart_s      = (int)   ($funnel->sessions_add_to_cart   ?? 0);
+        $f_check_s     = (int)   ($funnel->sessions_begin_checkout ?? 0);
+        $f_buy         = (int)   ($funnel->purchase               ?? 0);
+        $f_view_total  = (int)   ($funnel->total_view_content     ?? 0); // total eventos
+        $f_cart_total  = (int)   ($funnel->total_add_to_cart      ?? 0);
+        $f_check_total = (int)   ($funnel->total_begin_checkout   ?? 0);
+        $f_pages       = (float) ($funnel->avg_pages              ?? 0);
+        $bar_max       = max($f_clicks, 1);
 
+        // Bars use unique sessions (how many clicks reached each step)
+        // Labels show total events in parentheses when > sessions
         $funnel_steps = [
-            ['s-click', $f_clicks, $f_clicks,                  __('Clics','mad-suite')],
-            ['s-view',  $f_view,   $f_view,                    __('Vieron producto','mad-suite')],
-            ['s-cart',  $f_cart,   $f_cart,                    __('Al carrito','mad-suite')],
-            ['s-check', $f_check,  $f_check,                   __('Inicio checkout','mad-suite')],
-            ['s-buy',   $f_buy,    $f_buy,                     __('Compra','mad-suite')],
+            ['s-click', $f_clicks, $f_clicks, __('Clics','mad-suite'),           null],
+            ['s-view',  $f_view_s, $f_view_s, __('Vieron producto','mad-suite'),  $f_view_total],
+            ['s-cart',  $f_cart_s, $f_cart_s, __('Al carrito','mad-suite'),       $f_cart_total],
+            ['s-check', $f_check_s,$f_check_s,__('Inicio checkout','mad-suite'),  $f_check_total],
+            ['s-buy',   $f_buy,    $f_buy,    __('Compra','mad-suite'),           null],
         ];
         ?>
         <div class="ads-funnel">
@@ -746,15 +764,20 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 if ($pf_filter !== 'all') echo ' — ' . ($pf_filter === 'google' ? 'Google Ads' : 'Meta Ads');
             ?></h3>
             <div class="funnel-steps">
-                <?php foreach ($funnel_steps as [$cls, $val, $raw, $label]):
-                    $pct = $f_clicks > 0 ? round(($raw / $f_clicks) * 100) : 0;
-                    $bar_h = $bar_max > 0 ? max(4, round(($raw / $bar_max) * 80)) : 4;
+                <?php foreach ($funnel_steps as [$cls, $val, $raw, $label, $total_events]):
+                    $pct   = $f_clicks > 0 ? round(($raw / $f_clicks) * 100) : 0;
+                    $bar_h = $bar_max  > 0 ? max(4, round(($raw / $bar_max) * 80)) : 4;
                     ?>
                     <div class="funnel-step <?php echo esc_attr($cls); ?>">
                         <div class="funnel-bar" style="height:<?php echo esc_attr($bar_h); ?>px"></div>
                         <span class="funnel-val"><?php echo esc_html(number_format($val)); ?></span>
-                        <span class="funnel-pct"><?php echo $pct; ?>%</span>
+                        <span class="funnel-pct"><?php echo esc_html($pct); ?>%</span>
                         <span class="funnel-lbl"><?php echo esc_html($label); ?></span>
+                        <?php if ($total_events !== null && $total_events > $val): ?>
+                        <span class="funnel-pct" title="<?php esc_attr_e('Total de eventos (una sesión puede tener varios)','mad-suite'); ?>">
+                            <?php printf(esc_html__('%s eventos','mad-suite'), number_format($total_events)); ?>
+                        </span>
+                        <?php endif; ?>
                     </div>
                 <?php endforeach; ?>
             </div>
@@ -854,22 +877,22 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                         <?php endif; ?>
                     </td>
                     <td class="ads-td-funnel">
-                        <?php if ($vc): ?>
-                            <span class="funnel-check">&#10003;</span>
+                        <?php if ($vc > 0): ?>
+                            <strong><?php echo esc_html($vc); ?></strong>
                         <?php else: ?>
                             <span class="funnel-dash">—</span>
                         <?php endif; ?>
                     </td>
                     <td class="ads-td-funnel">
-                        <?php if ($ac): ?>
-                            <span class="funnel-check">&#10003;</span>
+                        <?php if ($ac > 0): ?>
+                            <strong><?php echo esc_html($ac); ?></strong>
                         <?php else: ?>
                             <span class="funnel-dash">—</span>
                         <?php endif; ?>
                     </td>
                     <td class="ads-td-funnel">
-                        <?php if ($bc): ?>
-                            <span class="funnel-check">&#10003;</span>
+                        <?php if ($bc > 0): ?>
+                            <strong><?php echo esc_html($bc); ?></strong>
                         <?php else: ?>
                             <span class="funnel-dash">—</span>
                         <?php endif; ?>
