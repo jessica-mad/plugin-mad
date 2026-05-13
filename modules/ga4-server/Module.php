@@ -579,6 +579,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                    class="nav-tab <?php echo $tab === 'dashboard' ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e('Conversiones','mad-suite'); ?>
                 </a>
+                <a href="<?php echo esc_url($base_url . '&tab=journeys'); ?>"
+                   class="nav-tab <?php echo $tab === 'journeys' ? 'nav-tab-active' : ''; ?>">
+                    <?php esc_html_e('Trayectorias IP','mad-suite'); ?>
+                </a>
                 <a href="<?php echo esc_url($base_url . '&tab=settings'); ?>"
                    class="nav-tab <?php echo $tab === 'settings' ? 'nav-tab-active' : ''; ?>">
                     <?php esc_html_e('Ajustes','mad-suite'); ?>
@@ -596,6 +600,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 <p><a href="<?php echo esc_url(admin_url('admin.php?page=wc-status&tab=logs')); ?>" class="button">
                     <?php esc_html_e('Ver logs de WooCommerce','mad-suite'); ?>
                 </a></p>
+            <?php elseif ($tab === 'journeys'): ?>
+                <?php $this->render_journeys(); ?>
             <?php else: ?>
                 <?php $this->render_dashboard(); ?>
             <?php endif; ?>
@@ -977,6 +983,303 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         <div style="margin-top:14px;">
             <?php echo paginate_links([
                 'base'    => add_query_arg(['platform' => $pf_filter, 'filter' => $conv_filter, 'paged' => '%#%'], $base_url),
+                'format'  => '',
+                'current' => $page,
+                'total'   => $total_pages,
+            ]); ?>
+        </div>
+        <?php endif; ?>
+        <?php endif; ?>
+        <?php
+    }
+
+    /* =========================================================
+     * TRAYECTORIAS IP
+     * ======================================================= */
+    private function render_journeys(){
+        global $wpdb;
+
+        $page     = max(1, intval($_GET['jpage'] ?? 1));
+        $per_page = 20;
+        $offset   = ($page - 1) * $per_page;
+        $jf       = isset($_GET['jfilter']) ? sanitize_key($_GET['jfilter']) : 'all';
+        $base_url = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=journeys');
+
+        /* ---- Global summary (for cards) ---- */
+        $summary = $wpdb->get_row(
+            "SELECT
+                COUNT(*) as total_multi,
+                SUM(CASE WHEN google_conv > 0 AND meta_conv > 0 THEN 1 ELSE 0 END) as overlaps,
+                SUM(CASE WHEN sessions >= 3 THEN 1 ELSE 0 END) as suspicious
+             FROM (
+                 SELECT visitor_ip,
+                        COUNT(*) as sessions,
+                        SUM(CASE WHEN platform='google' AND order_id IS NOT NULL THEN 1 ELSE 0 END) as google_conv,
+                        SUM(CASE WHEN platform='meta'   AND order_id IS NOT NULL THEN 1 ELSE 0 END) as meta_conv
+                 FROM {$this->table}
+                 WHERE visitor_ip != ''
+                 GROUP BY visitor_ip
+                 HAVING COUNT(*) > 1
+             ) as t"
+        );
+
+        /* ---- Filter HAVING ---- */
+        $extra = '';
+        if ($jf === 'overlap') {
+            $extra = "AND SUM(CASE WHEN platform='google' AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0
+                      AND SUM(CASE WHEN platform='meta'   AND order_id IS NOT NULL THEN 1 ELSE 0 END) > 0";
+        } elseif ($jf === 'suspicious') {
+            $extra = 'AND COUNT(*) >= 3';
+        } elseif ($jf === 'converted') {
+            $extra = 'AND SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) > 0';
+        }
+        $having = "HAVING COUNT(*) > 1 $extra";
+
+        /* ---- Pagination total ---- */
+        $total_ips   = (int) $wpdb->get_var("SELECT COUNT(*) FROM (SELECT visitor_ip FROM {$this->table} WHERE visitor_ip != '' GROUP BY visitor_ip $having) as t");
+        $total_pages = (int) ceil($total_ips / $per_page);
+
+        /* ---- IP summary rows ---- */
+        $ip_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT
+                 visitor_ip,
+                 COUNT(*) as sessions,
+                 COUNT(DISTINCT platform) as num_platforms,
+                 COUNT(DISTINCT NULLIF(utm_campaign,'')) as num_campaigns,
+                 SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) as conversions,
+                 SUM(CASE WHEN order_id IS NOT NULL THEN order_total ELSE 0 END) as revenue,
+                 SUM(CASE WHEN platform='google' THEN 1 ELSE 0 END) as google_sessions,
+                 SUM(CASE WHEN platform='meta'   THEN 1 ELSE 0 END) as meta_sessions,
+                 SUM(CASE WHEN platform='google' AND order_id IS NOT NULL THEN 1 ELSE 0 END) as google_conv,
+                 SUM(CASE WHEN platform='meta'   AND order_id IS NOT NULL THEN 1 ELSE 0 END) as meta_conv,
+                 MIN(captured_at) as first_seen,
+                 MAX(captured_at) as last_seen
+             FROM {$this->table}
+             WHERE visitor_ip != ''
+             GROUP BY visitor_ip
+             $having
+             ORDER BY (google_conv > 0 AND meta_conv > 0) DESC, conversions DESC, sessions DESC
+             LIMIT %d OFFSET %d",
+            $per_page, $offset
+        ));
+
+        /* ---- Session detail for IPs on this page ---- */
+        $by_ip = [];
+        if (!empty($ip_rows)) {
+            $ip_list = array_column((array) $ip_rows, 'visitor_ip');
+            $ph      = implode(',', array_fill(0, count($ip_list), '%s'));
+            $details = $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT platform, click_id, utm_campaign, utm_source, landing_url,
+                             captured_at, pages_viewed, funnel_view_content, funnel_add_to_cart,
+                             funnel_begin_checkout, order_id, order_total, currency, visitor_ip
+                     FROM {$this->table}
+                     WHERE visitor_ip IN ($ph)
+                     ORDER BY visitor_ip, captured_at ASC",
+                    ...$ip_list
+                )
+            );
+            foreach ($details as $d) $by_ip[$d->visitor_ip][] = $d;
+        }
+
+        ?>
+        <style>
+        .jrn-cards{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+        .jrn-card{background:#fff;border:1px solid #c3c4c7;border-radius:8px;padding:14px 18px;flex:1;min-width:160px}
+        .jrn-card .val{font-size:1.8em;font-weight:700;display:block;line-height:1.1;color:#1d2327}
+        .jrn-card .lbl{font-size:.78em;color:#646970;margin-top:2px;display:block}
+        .jrn-card.card-overlap .val{color:#c0392b}
+        .jrn-card.card-bot     .val{color:#856404}
+        .jrn-filters{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+        .jrn-filters a{text-decoration:none;padding:4px 10px;border-radius:3px;border:1px solid #c3c4c7;font-size:.8em;background:#fff;color:#1d2327}
+        .jrn-filters a.active{background:#2271b1;color:#fff;border-color:#2271b1}
+
+        /* Journey accordion cards */
+        .jrn-item{background:#fff;border:1px solid #c3c4c7;border-radius:6px;margin-bottom:8px;overflow:hidden}
+        .jrn-item.is-overlap{border-color:#e74c3c;border-width:2px}
+        .jrn-item summary{list-style:none;cursor:pointer;padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+        .jrn-item summary::-webkit-details-marker{display:none}
+        .jrn-item summary::before{content:'▶';font-size:.7em;color:#646970;transition:transform .15s;flex-shrink:0}
+        .jrn-item[open] summary::before{transform:rotate(90deg)}
+        .jrn-item summary:hover{background:#f6f7f7}
+        .jrn-ip{font-family:monospace;font-size:.92em;font-weight:600;color:#1d2327;min-width:130px}
+        .jrn-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+        .badge-overlap{background:#fde8e8;color:#c0392b;border:1px solid #e74c3c;border-radius:4px;padding:2px 8px;font-size:.74em;font-weight:700}
+        .badge-bot    {background:#fff3cd;color:#856404;border:1px solid #f0ad4e;border-radius:4px;padding:2px 8px;font-size:.74em;font-weight:700}
+        .badge-g{background:#e8f0fe;color:#1a73e8;padding:2px 7px;border-radius:10px;font-size:.74em;font-weight:600}
+        .badge-m{background:#e7f3ff;color:#0866ff;padding:2px 7px;border-radius:10px;font-size:.74em;font-weight:600}
+        .jrn-stats{display:flex;gap:14px;margin-left:auto;flex-wrap:wrap;font-size:.8em;color:#646970}
+        .jrn-stats strong{color:#1d2327}
+        .jrn-conv-g{color:#1a73e8;font-weight:700}
+        .jrn-conv-m{color:#0866ff;font-weight:700}
+
+        /* Session timeline table */
+        .jrn-detail{padding:0 16px 14px;border-top:1px solid #f0f0f1}
+        .jrn-tbl{width:100%;border-collapse:collapse;font-size:.78em;margin-top:10px}
+        .jrn-tbl th{background:#f6f7f7;padding:5px 8px;text-align:left;border-bottom:1px solid #e0e0e0;white-space:nowrap;color:#646970;font-weight:600}
+        .jrn-tbl td{padding:5px 8px;border-bottom:1px solid #f5f5f5;vertical-align:middle}
+        .jrn-tbl tr:last-child td{border-bottom:none}
+        .jrn-tbl tr.has-order td{background:#f0fdf4}
+        .step-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:2px}
+        .dot-view{background:#7c9ef7}
+        .dot-cart{background:#f0a500}
+        .dot-check{background:#e67c22}
+        </style>
+
+        <!-- Cards resumen -->
+        <div class="jrn-cards">
+            <div class="jrn-card">
+                <span class="val"><?php echo esc_html(number_format((int)($summary->total_multi ?? 0))); ?></span>
+                <span class="lbl"><?php esc_html_e('IPs con múltiples sesiones','mad-suite'); ?></span>
+            </div>
+            <div class="jrn-card card-overlap">
+                <span class="val"><?php echo esc_html(number_format((int)($summary->overlaps ?? 0))); ?></span>
+                <span class="lbl"><?php esc_html_e('Conversiones solapadas (Google + Meta)','mad-suite'); ?></span>
+            </div>
+            <div class="jrn-card card-bot">
+                <span class="val"><?php echo esc_html(number_format((int)($summary->suspicious ?? 0))); ?></span>
+                <span class="lbl"><?php esc_html_e('IPs sospechosas (3+ sesiones)','mad-suite'); ?></span>
+            </div>
+        </div>
+
+        <?php if ((int)($summary->overlaps ?? 0) > 0): ?>
+        <div class="notice notice-warning inline" style="margin-bottom:16px">
+            <p><strong><?php esc_html_e('Conversiones solapadas detectadas:','mad-suite'); ?></strong>
+            <?php printf(
+                esc_html__('%d IP(s) tienen compras atribuidas tanto a Google como a Meta. Esto puede inflar las conversiones reportadas en ambas plataformas para los mismos pedidos.','mad-suite'),
+                (int)($summary->overlaps ?? 0)
+            ); ?></p>
+        </div>
+        <?php endif; ?>
+
+        <!-- Filtros -->
+        <div class="jrn-filters">
+            <?php foreach ([
+                'all'        => __('Todas','mad-suite'),
+                'overlap'    => __('⚠ Solapadas','mad-suite'),
+                'converted'  => __('Con compra','mad-suite'),
+                'suspicious' => __('Sospechosas (3+)','mad-suite'),
+            ] as $val => $label): ?>
+            <a href="<?php echo esc_url(add_query_arg(['jfilter' => $val, 'jpage' => 1], $base_url)); ?>"
+               class="<?php echo $jf === $val ? 'active' : ''; ?>">
+                <?php echo esc_html($label); ?>
+            </a>
+            <?php endforeach; ?>
+            <span style="margin-left:auto;color:#646970;font-size:.8em">
+                <?php printf(esc_html__('%d IPs','mad-suite'), $total_ips); ?>
+            </span>
+        </div>
+
+        <?php if (empty($ip_rows)): ?>
+            <p style="color:#646970"><?php esc_html_e('No hay IPs con múltiples sesiones todavía.','mad-suite'); ?></p>
+        <?php else: ?>
+
+        <?php foreach ($ip_rows as $r):
+            $is_overlap = (int)$r->google_conv > 0 && (int)$r->meta_conv > 0;
+            $is_bot     = (int)$r->sessions >= 3;
+            $sessions   = $by_ip[$r->visitor_ip] ?? [];
+        ?>
+        <details class="jrn-item <?php echo $is_overlap ? 'is-overlap' : ''; ?>">
+            <summary>
+                <span class="jrn-ip"><?php echo esc_html($r->visitor_ip); ?></span>
+                <span class="jrn-badges">
+                    <?php if ($is_overlap): ?>
+                        <span class="badge-overlap">&#9888; <?php esc_html_e('Solapada G+M','mad-suite'); ?></span>
+                    <?php endif; ?>
+                    <?php if ($is_bot): ?>
+                        <span class="badge-bot">&#9888; <?php esc_html_e('Sospechosa','mad-suite'); ?></span>
+                    <?php endif; ?>
+                    <?php if ((int)$r->google_sessions > 0): ?>
+                        <span class="badge-g">Google ×<?php echo esc_html($r->google_sessions); ?></span>
+                    <?php endif; ?>
+                    <?php if ((int)$r->meta_sessions > 0): ?>
+                        <span class="badge-m">Meta ×<?php echo esc_html($r->meta_sessions); ?></span>
+                    <?php endif; ?>
+                </span>
+                <span class="jrn-stats">
+                    <span><?php printf(esc_html__('%s sesiones','mad-suite'), '<strong>'.esc_html($r->sessions).'</strong>'); ?></span>
+                    <?php if ((int)$r->num_campaigns > 0): ?>
+                    <span><?php printf(esc_html__('%s campañas','mad-suite'), '<strong>'.esc_html($r->num_campaigns).'</strong>'); ?></span>
+                    <?php endif; ?>
+                    <?php if ((int)$r->conversions > 0): ?>
+                    <span>
+                        <?php if ((int)$r->google_conv > 0): ?><span class="jrn-conv-g">G:<?php echo esc_html($r->google_conv); ?></span>&nbsp;<?php endif; ?>
+                        <?php if ((int)$r->meta_conv   > 0): ?><span class="jrn-conv-m">M:<?php echo esc_html($r->meta_conv); ?></span>&nbsp;<?php endif; ?>
+                        <?php echo esc_html(number_format((float)$r->revenue, 2) . ' — ' . (int)$r->conversions . ' ' . _n('compra','compras',(int)$r->conversions,'mad-suite')); ?>
+                    </span>
+                    <?php endif; ?>
+                    <span style="white-space:nowrap"><?php echo esc_html(
+                        wp_date('d/m/Y', strtotime($r->first_seen)) . ' → ' . wp_date('d/m/Y', strtotime($r->last_seen))
+                    ); ?></span>
+                </span>
+            </summary>
+            <div class="jrn-detail">
+                <table class="jrn-tbl">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e('Fecha','mad-suite'); ?></th>
+                            <th><?php esc_html_e('Plat.','mad-suite'); ?></th>
+                            <th><?php esc_html_e('Campaña','mad-suite'); ?></th>
+                            <th><?php esc_html_e('Click ID','mad-suite'); ?></th>
+                            <th><?php esc_html_e('Landing','mad-suite'); ?></th>
+                            <th title="<?php esc_attr_e('Producto / Carrito / Checkout','mad-suite'); ?>"><?php esc_html_e('Embudo','mad-suite'); ?></th>
+                            <th><?php esc_html_e('Pedido','mad-suite'); ?></th>
+                            <th><?php esc_html_e('Importe','mad-suite'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($sessions as $s): ?>
+                        <tr class="<?php echo $s->order_id ? 'has-order' : ''; ?>">
+                            <td style="white-space:nowrap"><?php echo esc_html(wp_date('d/m/y H:i', strtotime($s->captured_at))); ?></td>
+                            <td>
+                                <?php if ($s->platform === 'google'): ?>
+                                    <span class="badge-g">G</span>
+                                <?php else: ?>
+                                    <span class="badge-m">M</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($s->utm_campaign): ?>
+                                    <?php echo esc_html($s->utm_campaign); ?>
+                                    <?php if ($s->utm_source): ?><br><small style="color:#8c8f94"><?php echo esc_html($s->utm_source); ?></small><?php endif; ?>
+                                <?php else: ?><span style="color:#c3c4c7">—</span><?php endif; ?>
+                            </td>
+                            <td><span style="font-family:monospace;font-size:.85em;color:#8c8f94" title="<?php echo esc_attr($s->click_id); ?>"><?php echo esc_html(substr($s->click_id, 0, 14)); ?>…</span></td>
+                            <td>
+                                <?php if ($s->landing_url):
+                                    $path = wp_parse_url($s->landing_url, PHP_URL_PATH) ?: '/'; ?>
+                                    <a href="<?php echo esc_url($s->landing_url); ?>" target="_blank" style="font-size:.85em"
+                                       title="<?php echo esc_attr($s->landing_url); ?>"><?php echo esc_html(strlen($path) > 20 ? substr($path, 0, 20).'…' : $path); ?></a>
+                                <?php else: ?><span style="color:#c3c4c7">—</span><?php endif; ?>
+                            </td>
+                            <td style="white-space:nowrap">
+                                <?php if ((int)$s->funnel_view_content > 0):   ?><span class="step-dot dot-view"  title="<?php esc_attr_e('Vista de producto','mad-suite'); ?>"></span><?php echo esc_html($s->funnel_view_content); ?> <?php endif; ?>
+                                <?php if ((int)$s->funnel_add_to_cart > 0):    ?><span class="step-dot dot-cart"  title="<?php esc_attr_e('Carrito','mad-suite'); ?>"></span><?php echo esc_html($s->funnel_add_to_cart); ?> <?php endif; ?>
+                                <?php if ((int)$s->funnel_begin_checkout > 0): ?><span class="step-dot dot-check" title="<?php esc_attr_e('Checkout','mad-suite'); ?>"></span><?php echo esc_html($s->funnel_begin_checkout); ?><?php endif; ?>
+                                <?php if (!(int)$s->funnel_view_content && !(int)$s->funnel_add_to_cart && !(int)$s->funnel_begin_checkout): ?><span style="color:#c3c4c7">—</span><?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($s->order_id): ?>
+                                    <a href="<?php echo esc_url($this->get_order_edit_url($s->order_id)); ?>" style="font-weight:600">#<?php echo esc_html($s->order_id); ?></a>
+                                <?php else: ?><span style="color:#c3c4c7">—</span><?php endif; ?>
+                            </td>
+                            <td style="white-space:nowrap">
+                                <?php echo $s->order_total !== null
+                                    ? esc_html(number_format((float)$s->order_total, 2) . ' ' . $s->currency)
+                                    : '<span style="color:#c3c4c7">—</span>'; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </details>
+        <?php endforeach; ?>
+
+        <?php if ($total_pages > 1): ?>
+        <div style="margin-top:14px;">
+            <?php echo paginate_links([
+                'base'    => add_query_arg(['jfilter' => $jf, 'jpage' => '%#%'], $base_url),
                 'format'  => '',
                 'current' => $page,
                 'total'   => $total_pages,
