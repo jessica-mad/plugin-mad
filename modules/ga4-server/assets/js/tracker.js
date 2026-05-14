@@ -133,8 +133,14 @@
             send(session, 'page_view');
         }
 
-        // 3. Add-to-cart (click-based, doesn't count as extra page view)
-        //    WooCommerce fires the jQuery 'added_to_cart' event on document.body
+        // 3. Non-AJAX add-to-cart: WooCommerce reloads the page with ?added-to-cart=ID
+        //    This covers stores where AJAX add to cart is disabled
+        if (getUrlParam('added-to-cart')) {
+            send(session, 'add_to_cart');
+        }
+
+        // 4. AJAX add-to-cart: WooCommerce fires 'added_to_cart' on document.body
+        //    This covers stores where AJAX add to cart is enabled
         if (typeof jQuery !== 'undefined') {
             jQuery(document.body).on('added_to_cart', function () {
                 send(session, 'add_to_cart');
