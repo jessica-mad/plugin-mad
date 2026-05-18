@@ -326,9 +326,23 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             ];
         }
 
-        $client_id   = $order->get_meta('_ga_client_id') ?: wp_generate_uuid4();
+        $gclid     = $order->get_meta('_gclid');
+        $client_id = $order->get_meta('_ga_client_id');
+
+        // Fallback: if checkout hook didn't save the GA client_id, use the browser_id
+        // we captured at click time (stored in our click table when the user landed)
+        if (!$client_id && $gclid) {
+            global $wpdb;
+            $client_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT browser_id FROM {$this->table}
+                 WHERE platform = 'google' AND click_id = %s AND browser_id != ''
+                 LIMIT 1",
+                $gclid
+            ));
+        }
+        $client_id = $client_id ?: wp_generate_uuid4();
+
         $user_id     = $order->get_user_id() ? (string) $order->get_user_id() : null;
-        $gclid       = $order->get_meta('_gclid');
         $order_total = $this->apply_test_coupon($order, (float) $order->get_total(), $settings);
 
         $params = [
@@ -349,8 +363,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ];
         if ($user_id) $payload['user_id'] = $user_id;
 
-        $this->debug_log('info', sprintf('Google GA4: purchase pedido #%d | client_id: %s | gclid: %s',
-            $order->get_id(), $client_id, $gclid ?: 'sin gclid'));
+        $client_id_source = $order->get_meta('_ga_client_id') ? 'cookie-checkout' : ($gclid ? 'click-table-fallback' : 'uuid-generado');
+        $this->debug_log('info', sprintf('Google GA4: purchase pedido #%d | client_id: %s (%s) | gclid: %s',
+            $order->get_id(), $client_id, $client_id_source, $gclid ?: 'sin gclid'));
 
         $response = wp_remote_post(
             add_query_arg(['measurement_id' => $measurement_id, 'api_secret' => $api_secret],
