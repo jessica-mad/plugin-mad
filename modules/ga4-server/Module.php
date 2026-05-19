@@ -37,6 +37,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         add_action('wp_ajax_nopriv_mad_ads_track_event',    [$this, 'handle_track_event']);
         add_action('wp_ajax_mad_ads_track_event',           [$this, 'handle_track_event']);
+        add_action('admin_enqueue_scripts',                 [$this, 'enqueue_admin_assets']);
     }
 
     /* =========================================================
@@ -759,6 +760,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private function render_dashboard(){
         global $wpdb;
 
+        $dr       = $this->get_date_range();
         $page     = max(1, intval($_GET['paged'] ?? 1));
         $per_page = 30;
         $offset   = ($page - 1) * $per_page;
@@ -766,17 +768,20 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $pf_filter   = isset($_GET['platform']) ? sanitize_key($_GET['platform']) : 'all';
         $conv_filter = isset($_GET['filter'])   ? sanitize_key($_GET['filter'])   : 'all';
 
-        // Platform filter for funnel (all conversions, not just a subset)
-        $pf_where = in_array($pf_filter, ['google','meta','pinterest'], true)
-            ? $wpdb->prepare('WHERE platform = %s', $pf_filter)
-            : '';
+        $date_cond = $this->date_where($dr);
 
-        // Combined where for the table
-        $wheres = [];
+        // Platform filter for funnel
+        $pf_extra = in_array($pf_filter, ['google','meta','pinterest'], true)
+            ? ' AND ' . $wpdb->prepare('platform = %s', $pf_filter)
+            : '';
+        $pf_where = "WHERE $date_cond $pf_extra";
+
+        // Combined WHERE for the table
+        $wheres = [$date_cond];
         if (in_array($pf_filter, ['google','meta','pinterest'], true)) $wheres[] = $wpdb->prepare('platform = %s', $pf_filter);
         if ($conv_filter === 'converted') $wheres[] = 'order_id IS NOT NULL';
         if ($conv_filter === 'pending')   $wheres[] = 'order_id IS NULL';
-        $where = $wheres ? 'WHERE ' . implode(' AND ', $wheres) : '';
+        $where = 'WHERE ' . implode(' AND ', $wheres);
 
         // Stats per platform
         $stats_rows = $wpdb->get_results(
@@ -784,7 +789,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     COUNT(*) as total,
                     SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) as converted,
                     SUM(CASE WHEN order_id IS NOT NULL THEN order_total ELSE 0 END) as revenue
-             FROM {$this->table} GROUP BY platform"
+             FROM {$this->table} WHERE $date_cond GROUP BY platform"
         );
         $by_pf   = [];
         $combined = ['total' => 0, 'converted' => 0, 'revenue' => 0.0];
@@ -823,14 +828,19 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $suspicious_ips = [];
         $ip_counts = $wpdb->get_results(
             "SELECT visitor_ip, COUNT(*) as cnt FROM {$this->table}
-             WHERE visitor_ip != '' GROUP BY visitor_ip HAVING cnt >= 3"
+             WHERE visitor_ip != '' AND $date_cond GROUP BY visitor_ip HAVING cnt >= 3"
         );
         foreach ($ip_counts as $r) {
             $suspicious_ips[$r->visitor_ip] = (int) $r->cnt;
         }
 
-        $settings      = $this->get_settings();
-        $base_url      = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=dashboard');
+        $settings  = $this->get_settings();
+        $date_args = ['dp' => $dr['preset']];
+        if ($dr['preset'] === 'custom') { $date_args['df'] = $dr['from_date']; $date_args['dt'] = $dr['to_date']; }
+        $base_url  = add_query_arg(
+            array_merge(['page' => $this->menu_slug(), 'tab' => 'dashboard'], $date_args),
+            admin_url('admin.php')
+        );
         $google_ok     = !empty($settings['google_enabled'])    && !empty($settings['measurement_id'])       && !empty($settings['api_secret']);
         $meta_ok       = !empty($settings['meta_enabled'])      && !empty($settings['pixel_id'])             && !empty($settings['access_token']);
         $pinterest_ok  = !empty($settings['pinterest_enabled']) && !empty($settings['pinterest_ad_account']) && !empty($settings['pinterest_access_token']);
@@ -888,6 +898,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         .ip-bot{display:inline-flex;align-items:center;gap:3px;background:#ffeeba;border:1px solid #f0ad4e;border-radius:3px;padding:1px 5px;font-size:.72em;font-weight:600;color:#856404;cursor:help}
         .ip-ok{font-family:monospace;font-size:.76em;color:#8c8f94}
         </style>
+
+        <?php $this->render_date_filter($dr); ?>
+        <?php $this->render_chart($dr, $pf_filter); ?>
 
         <?php if (!$google_ok && !$meta_ok && !$pinterest_ok): ?>
         <div class="notice notice-warning inline" style="margin-bottom:16px">
@@ -963,7 +976,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ?>
         <div class="ads-funnel">
             <h3><?php esc_html_e('Embudo de conversión','mad-suite');
-                if ($pf_filter !== 'all') echo ' — ' . ($pf_filter === 'google' ? 'Google Ads' : 'Meta Ads');
+                if ($pf_filter !== 'all') {
+                $pf_labels = ['google' => 'Google Ads', 'meta' => 'Meta Ads', 'pinterest' => 'Pinterest Ads'];
+                echo ' — ' . esc_html($pf_labels[$pf_filter] ?? $pf_filter);
+            }
             ?></h3>
             <div class="funnel-steps">
                 <?php foreach ($funnel_steps as [$cls, $val, $raw, $label, $total_events]):
@@ -1156,11 +1172,18 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private function render_journeys(){
         global $wpdb;
 
+        $dr        = $this->get_date_range();
+        $date_cond = $this->date_where($dr);
+        $date_args = ['dp' => $dr['preset']];
+        if ($dr['preset'] === 'custom') { $date_args['df'] = $dr['from_date']; $date_args['dt'] = $dr['to_date']; }
         $page     = max(1, intval($_GET['jpage'] ?? 1));
         $per_page = 20;
         $offset   = ($page - 1) * $per_page;
         $jf       = isset($_GET['jfilter']) ? sanitize_key($_GET['jfilter']) : 'all';
-        $base_url = admin_url('admin.php?page=' . $this->menu_slug() . '&tab=journeys');
+        $base_url = add_query_arg(
+            array_merge(['page' => $this->menu_slug(), 'tab' => 'journeys'], $date_args),
+            admin_url('admin.php')
+        );
 
         /* ---- Global summary (for cards) ---- */
         $summary = $wpdb->get_row(
@@ -1175,7 +1198,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                         SUM(CASE WHEN platform='meta'      AND order_id IS NOT NULL THEN 1 ELSE 0 END) as meta_conv,
                         SUM(CASE WHEN platform='pinterest' AND order_id IS NOT NULL THEN 1 ELSE 0 END) as pint_conv
                  FROM {$this->table}
-                 WHERE visitor_ip != ''
+                 WHERE visitor_ip != '' AND $date_cond
                  GROUP BY visitor_ip
                  HAVING COUNT(*) > 1
              ) as t"
@@ -1198,7 +1221,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $having = "HAVING COUNT(*) > 1 $extra";
 
         /* ---- Pagination total ---- */
-        $total_ips   = (int) $wpdb->get_var("SELECT COUNT(*) FROM (SELECT visitor_ip FROM {$this->table} WHERE visitor_ip != '' GROUP BY visitor_ip $having) as t");
+        $total_ips   = (int) $wpdb->get_var("SELECT COUNT(*) FROM (SELECT visitor_ip FROM {$this->table} WHERE visitor_ip != '' AND $date_cond GROUP BY visitor_ip $having) as t");
         $total_pages = (int) ceil($total_ips / $per_page);
 
         /* ---- IP summary rows ---- */
@@ -1219,7 +1242,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                  MIN(captured_at) as first_seen,
                  MAX(captured_at) as last_seen
              FROM {$this->table}
-             WHERE visitor_ip != ''
+             WHERE visitor_ip != '' AND $date_cond
              GROUP BY visitor_ip
              $having
              ORDER BY conversions DESC, sessions DESC
@@ -1290,6 +1313,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         .dot-cart{background:#f0a500}
         .dot-check{background:#e67c22}
         </style>
+
+        <?php $this->render_date_filter($dr); ?>
 
         <!-- Cards resumen -->
         <div class="jrn-cards">
@@ -1459,6 +1484,275 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         </div>
         <?php endif; ?>
         <?php endif; ?>
+        <?php
+    }
+
+    /* =========================================================
+     * ADMIN ASSETS
+     * ======================================================= */
+    public function enqueue_admin_assets($hook){
+        if (strpos($hook, $this->menu_slug()) === false) return;
+        wp_enqueue_script(
+            'mad-chartjs',
+            'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js',
+            [],
+            null,
+            true
+        );
+    }
+
+    /* =========================================================
+     * DATE RANGE HELPERS
+     * ======================================================= */
+    private function get_date_range() : array {
+        $dp  = isset($_GET['dp']) ? sanitize_key($_GET['dp']) : 'last30';
+        $tz  = wp_timezone();
+        $now = new DateTime('now', $tz);
+
+        switch ($dp) {
+            case 'today':
+                $from = (clone $now)->setTime(0, 0, 0);
+                $to   = (clone $now)->setTime(23, 59, 59);
+                break;
+            case 'yesterday':
+                $from = (clone $now)->modify('-1 day')->setTime(0, 0, 0);
+                $to   = (clone $from)->setTime(23, 59, 59);
+                break;
+            case 'last7':
+                $from = (clone $now)->modify('-6 days')->setTime(0, 0, 0);
+                $to   = (clone $now)->setTime(23, 59, 59);
+                break;
+            case 'thismonth':
+                $from = (new DateTime('first day of this month', $tz))->setTime(0, 0, 0);
+                $to   = (clone $now)->setTime(23, 59, 59);
+                break;
+            case 'custom':
+                $df_raw = isset($_GET['df']) ? sanitize_text_field($_GET['df']) : '';
+                $dt_raw = isset($_GET['dt']) ? sanitize_text_field($_GET['dt']) : '';
+                $from   = $df_raw ? DateTime::createFromFormat('Y-m-d', $df_raw, $tz) : false;
+                $to     = $dt_raw ? DateTime::createFromFormat('Y-m-d', $dt_raw, $tz) : false;
+                if ($from) $from->setTime(0, 0, 0); else $from = (clone $now)->modify('-29 days')->setTime(0, 0, 0);
+                if ($to)   $to->setTime(23, 59, 59); else $to = (clone $now)->setTime(23, 59, 59);
+                break;
+            default:
+                $dp   = 'last30';
+                $from = (clone $now)->modify('-29 days')->setTime(0, 0, 0);
+                $to   = (clone $now)->setTime(23, 59, 59);
+        }
+
+        return [
+            'preset'    => $dp,
+            'from'      => $from->format('Y-m-d H:i:s'),
+            'to'        => $to->format('Y-m-d H:i:s'),
+            'from_date' => $from->format('Y-m-d'),
+            'to_date'   => $to->format('Y-m-d'),
+            'days'      => max(1, (int) $from->diff($to)->days + 1),
+        ];
+    }
+
+    private function date_where(array $dr, string $col = 'captured_at') : string {
+        global $wpdb;
+        return $wpdb->prepare("$col >= %s AND $col <= %s", $dr['from'], $dr['to']);
+    }
+
+    private function render_date_filter(array $dr) : void {
+        $clean_base = remove_query_arg(['dp', 'df', 'dt']);
+        $cur        = $dr['preset'];
+        $presets    = [
+            'today'     => __('Hoy',             'mad-suite'),
+            'yesterday' => __('Ayer',            'mad-suite'),
+            'last7'     => __('Últimos 7 días',  'mad-suite'),
+            'last30'    => __('Últimos 30 días', 'mad-suite'),
+            'thismonth' => __('Este mes',        'mad-suite'),
+        ];
+        ?>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;background:#fff;border:1px solid #c3c4c7;border-radius:6px;padding:10px 14px">
+            <strong style="font-size:.8em;color:#1d2327;white-space:nowrap"><?php esc_html_e('Período:','mad-suite'); ?></strong>
+            <?php foreach ($presets as $val => $label): ?>
+            <a href="<?php echo esc_url(add_query_arg('dp', $val, $clean_base)); ?>"
+               style="text-decoration:none;padding:4px 10px;border-radius:3px;font-size:.8em;
+                      border:1px solid <?php echo $cur === $val ? '#2271b1' : '#c3c4c7'; ?>;
+                      background:<?php echo $cur === $val ? '#2271b1' : '#fff'; ?>;
+                      color:<?php echo $cur === $val ? '#fff' : '#1d2327'; ?>">
+                <?php echo esc_html($label); ?>
+            </a>
+            <?php endforeach; ?>
+            <span style="color:#c3c4c7;margin:0 2px">|</span>
+            <form method="get" action="" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <?php foreach ($_GET as $k => $v):
+                    if (in_array($k, ['dp','df','dt'], true)) continue; ?>
+                    <input type="hidden" name="<?php echo esc_attr($k); ?>" value="<?php echo esc_attr(is_array($v) ? '' : $v); ?>" />
+                <?php endforeach; ?>
+                <input type="hidden" name="dp" value="custom" />
+                <input type="date" name="df"
+                       value="<?php echo esc_attr($cur === 'custom' ? $dr['from_date'] : ''); ?>"
+                       style="border:1px solid #c3c4c7;border-radius:3px;padding:3px 6px;font-size:.8em" />
+                <span style="font-size:.8em;color:#646970"><?php esc_html_e('hasta','mad-suite'); ?></span>
+                <input type="date" name="dt"
+                       value="<?php echo esc_attr($cur === 'custom' ? $dr['to_date'] : ''); ?>"
+                       style="border:1px solid #c3c4c7;border-radius:3px;padding:3px 6px;font-size:.8em" />
+                <button type="submit" style="padding:4px 10px;border-radius:3px;border:1px solid #c3c4c7;font-size:.8em;background:#fff;cursor:pointer">
+                    <?php esc_html_e('Aplicar','mad-suite'); ?>
+                </button>
+            </form>
+        </div>
+        <?php
+    }
+
+    private function get_chart_data(array $dr, string $pf_filter = 'all') : array {
+        global $wpdb;
+
+        $hourly    = $dr['days'] <= 3;
+        $fmt       = $hourly ? '%Y-%m-%d %H:00:00' : '%Y-%m-%d';
+        $date_cond = $this->date_where($dr);
+        $pf_cond   = in_array($pf_filter, ['google','meta','pinterest'], true)
+                     ? $wpdb->prepare(' AND platform = %s', $pf_filter)
+                     : '';
+
+        $rows = $wpdb->get_results(
+            "SELECT DATE_FORMAT(captured_at, '$fmt') as period,
+                    COUNT(*) as clicks,
+                    SUM(pages_viewed) as pages,
+                    SUM(funnel_view_content) as views,
+                    SUM(funnel_add_to_cart) as carts,
+                    SUM(funnel_begin_checkout) as checkouts,
+                    SUM(CASE WHEN order_id IS NOT NULL THEN 1 ELSE 0 END) as purchases
+             FROM {$this->table}
+             WHERE $date_cond $pf_cond
+             GROUP BY period
+             ORDER BY period ASC"
+        ) ?: [];
+
+        // Build complete timeline (gap-fill with zeros)
+        $tz       = wp_timezone();
+        $cur      = new DateTime($dr['from'], $tz);
+        $end      = new DateTime($dr['to'],   $tz);
+        $step     = $hourly ? new DateInterval('PT1H') : new DateInterval('P1D');
+        $fmt_key  = $hourly ? 'Y-m-d H:00:00' : 'Y-m-d';
+        if ($hourly) $cur->setTime((int)$cur->format('H'), 0, 0);
+        else         $cur->setTime(0, 0, 0);
+
+        $timeline = [];
+        while ($cur <= $end) {
+            $timeline[$cur->format($fmt_key)] = ['clicks'=>0,'pages'=>0,'views'=>0,'carts'=>0,'checkouts'=>0,'purchases'=>0];
+            $cur->add($step);
+        }
+
+        foreach ($rows as $r) {
+            if (isset($timeline[$r->period])) {
+                $timeline[$r->period] = [
+                    'clicks'    => (int) $r->clicks,
+                    'pages'     => (int) $r->pages,
+                    'views'     => (int) $r->views,
+                    'carts'     => (int) $r->carts,
+                    'checkouts' => (int) $r->checkouts,
+                    'purchases' => (int) $r->purchases,
+                ];
+            }
+        }
+
+        $labels   = [];
+        $datasets = ['clicks'=>[],'pages'=>[],'views'=>[],'carts'=>[],'checkouts'=>[],'purchases'=>[]];
+        foreach ($timeline as $key => $vals) {
+            if ($hourly) {
+                $dt = DateTime::createFromFormat('Y-m-d H:i:s', $key, $tz);
+                $labels[] = $dt ? $dt->format('d/m H:i') : $key;
+            } else {
+                $dt = DateTime::createFromFormat('Y-m-d', $key, $tz);
+                $labels[] = $dt ? $dt->format('d/m') : $key;
+            }
+            foreach ($datasets as $metric => &$arr) {
+                $arr[] = $vals[$metric];
+            }
+            unset($arr);
+        }
+
+        return ['labels' => $labels, 'datasets' => $datasets];
+    }
+
+    private function render_chart(array $dr, string $pf_filter = 'all') : void {
+        $data     = $this->get_chart_data($dr, $pf_filter);
+        $dm_raw   = isset($_GET['dm']) ? sanitize_text_field($_GET['dm']) : '';
+        $active_m = $dm_raw
+            ? array_filter(array_map('trim', explode(',', $dm_raw)))
+            : ['clicks','views','carts','checkouts','purchases'];
+        $active_m = array_values(array_intersect(
+            $active_m,
+            ['clicks','pages','views','carts','checkouts','purchases']
+        ));
+        if (empty($active_m)) $active_m = ['clicks','views','carts','checkouts','purchases'];
+
+        $defs = [
+            'clicks'    => ['label' => __('Clics','mad-suite'),         'color' => '#c3c4c7'],
+            'pages'     => ['label' => __('Páginas vistas','mad-suite'), 'color' => '#9c64a6'],
+            'views'     => ['label' => __('Producto','mad-suite'),       'color' => '#7c9ef7'],
+            'carts'     => ['label' => __('Carrito','mad-suite'),        'color' => '#f0a500'],
+            'checkouts' => ['label' => __('Checkout','mad-suite'),       'color' => '#e67c22'],
+            'purchases' => ['label' => __('Compras','mad-suite'),        'color' => '#00a32a'],
+        ];
+
+        $chart_ds = [];
+        foreach ($defs as $key => $def) {
+            if (!in_array($key, $active_m, true)) continue;
+            $chart_ds[] = [
+                'label'           => $def['label'],
+                'data'            => $data['datasets'][$key],
+                'borderColor'     => $def['color'],
+                'backgroundColor' => $def['color'] . '22',
+                'borderWidth'     => 2,
+                'pointRadius'     => count($data['labels']) <= 72 ? 3 : 0,
+                'tension'         => 0.3,
+                'fill'            => false,
+            ];
+        }
+
+        $chart_json = wp_json_encode(['labels' => $data['labels'], 'datasets' => $chart_ds]);
+        $canvas_id  = 'mad-chart-' . substr(md5(microtime()), 0, 8);
+        $clean_base = remove_query_arg(['dm']);
+        ?>
+        <div style="background:#fff;border:1px solid #c3c4c7;border-radius:8px;padding:16px 20px;margin-bottom:20px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+                <strong style="font-size:.8em;color:#1d2327"><?php esc_html_e('Métricas:','mad-suite'); ?></strong>
+                <?php foreach ($defs as $key => $def):
+                    $is_on   = in_array($key, $active_m, true);
+                    $new_set = $is_on
+                        ? implode(',', array_values(array_diff($active_m, [$key])))
+                        : implode(',', array_values(array_merge($active_m, [$key])));
+                    ?>
+                <a href="<?php echo esc_url(add_query_arg('dm', $new_set ?: 'none', $clean_base)); ?>"
+                   style="display:inline-flex;align-items:center;gap:4px;text-decoration:none;padding:3px 9px;border-radius:10px;font-size:.77em;
+                          border:2px solid <?php echo esc_attr($def['color']); ?>;
+                          background:<?php echo $is_on ? esc_attr($def['color']) : 'transparent'; ?>;
+                          color:<?php echo $is_on ? '#fff' : esc_attr($def['color']); ?>">
+                    <?php echo esc_html($def['label']); ?>
+                </a>
+                <?php endforeach; ?>
+            </div>
+            <div style="position:relative;height:240px">
+                <canvas id="<?php echo esc_attr($canvas_id); ?>"></canvas>
+            </div>
+        </div>
+        <script>
+        (function(){
+            if (typeof Chart === 'undefined') return;
+            new Chart(document.getElementById(<?php echo wp_json_encode($canvas_id); ?>), {
+                type: 'line',
+                data: <?php echo $chart_json; ?>,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top', labels: { boxWidth: 12, font: { size: 11 } } }
+                    },
+                    scales: {
+                        x: { ticks: { maxTicksLimit: 20, font: { size: 10 }, maxRotation: 45 } },
+                        y: { beginAtZero: true, ticks: { font: { size: 10 }, precision: 0 } }
+                    }
+                }
+            });
+        })();
+        </script>
         <?php
     }
 
