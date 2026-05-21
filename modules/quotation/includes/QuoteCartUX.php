@@ -67,10 +67,9 @@ class QuoteCartUX {
     /* ===== Renombrar textos WC ===== */
 
     public function rename_wc_strings( string $translated, string $original, string $domain ): string {
-        if ( $domain !== 'woocommerce' || ! is_callable( [ $this, 'is_quote_context' ] ) ) {
+        if ( $domain !== 'woocommerce' || $this->role_manager->is_professional() ) {
             return $translated;
         }
-        if ( $this->role_manager->is_professional() ) return $translated;
 
         $s = $this->module->get_settings();
 
@@ -89,7 +88,11 @@ class QuoteCartUX {
     public function hide_payment_section() {
         if ( $this->role_manager->is_professional() ) return;
         // Inyectar CSS para ocultar la sección de pago en el checkout
-        echo '<style>#payment, .woocommerce-checkout #payment { display:none !important; }</style>';
+        echo '<style>
+            #payment .payment_methods,
+            #payment .woocommerce-info,
+            #payment .payment_box { display:none !important; }
+        </style>';
     }
 
     public function rename_place_order_btn( string $text ): string {

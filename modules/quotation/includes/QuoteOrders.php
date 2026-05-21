@@ -36,6 +36,7 @@ if ( class_exists('WC_Payment_Gateway') && ! class_exists('MADSuite\Modules\Quot
 
             $this->init_form_fields();
             $this->init_settings();
+            $this->enabled = $this->get_option( 'enabled', 'yes' );
         }
 
         public function init_form_fields() {
