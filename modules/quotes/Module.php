@@ -593,25 +593,43 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Controla qué gateways de pago se muestran según el contexto:
+     * Controla qué gateways de pago se muestran según el contexto.
      *
-     * - Página order-pay (cliente paga presupuesto aprobado): gateways reales, sin quotes-gateway.
-     * - Usuario con rol de presupuesto en checkout normal: solo quotes-gateway.
-     * - Profesionales / sin rol de presupuesto: gateways reales, sin quotes-gateway.
+     * Contextos detectados:
+     * – Página order-pay: get_query_var('order-pay') tiene el ID del pedido.
+     * – AJAX de pago desde order-pay: wp_doing_ajax() true y carrito vacío
+     *   (el order-pay no añade ítems al carrito de sesión).
+     * – Checkout normal con rol de presupuesto: resto de casos.
+     *
+     * Nota clave: QWC elimina 'quotes-gateway' de $gateways en prioridad 10
+     * cuando cart_contains_quotable() es false (productos sin qwc_enable_quotes='on').
+     * Por eso recuperamos el gateway directamente de payment_gateways() en lugar
+     * de confiar en que siga presente en $gateways al llegar a prioridad 999.
      */
     public function filter_quote_gateway( $gateways ) {
-        $cart_has_items = isset( WC()->cart ) && ! is_null( WC()->cart ) && ! WC()->cart->is_empty();
+        $is_order_pay = (bool) get_query_var( 'order-pay' )
+            || ( wp_doing_ajax() && isset( WC()->cart ) && WC()->cart->is_empty() );
 
-        if ( $this->current_user_is_quote_role() && $cart_has_items ) {
-            // Flujo de solicitud de presupuesto: solo mostrar quotes-gateway
+        if ( $is_order_pay ) {
+            $restored = ! empty( $this->original_gateways ) ? $this->original_gateways : $gateways;
+            unset( $restored['quotes-gateway'] );
+            return $restored;
+        }
+
+        if ( $this->current_user_is_quote_role() ) {
+            // QWC puede haber eliminado quotes-gateway de $gateways (prioridad 10).
+            // Lo buscamos en todos los gateways registrados para garantizar que esté disponible.
             if ( isset( $gateways['quotes-gateway'] ) ) {
                 return [ 'quotes-gateway' => $gateways['quotes-gateway'] ];
             }
-            // Si por alguna razón no está disponible, devolver la lista tal cual
-            return $gateways;
+            $all = WC()->payment_gateways()->payment_gateways();
+            if ( isset( $all['quotes-gateway'] ) ) {
+                return [ 'quotes-gateway' => $all['quotes-gateway'] ];
+            }
+            return $gateways; // Fallback: quotes-gateway no registrado en absoluto
         }
 
-        // Profesionales o página order-pay (carrito vacío): gateways reales sin quotes-gateway
+        // Profesionales: gateways reales sin quotes-gateway
         $restored = ! empty( $this->original_gateways ) ? $this->original_gateways : $gateways;
         unset( $restored['quotes-gateway'] );
         return $restored;
