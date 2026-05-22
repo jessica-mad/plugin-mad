@@ -1620,9 +1620,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 if ($product->is_type('variable')) {
                     foreach ($product->get_children() as $vid) {
                         $v = wc_get_product($vid);
-                        if ($v && $v->is_in_stock()) {
-                            $this->page_products[$vid] = $this->format_product_data($v);
-                        }
+                        if ($v) $this->page_products[$vid] = $this->format_product_data($v);
                     }
                 }
             }
@@ -1643,7 +1641,19 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         qty = qty || 1;
         var id = variationId ? String(variationId) : String(productId);
         var p  = CATALOG[id] || CATALOG[String(productId)];
-        if (!p) return;
+        if (!p) {
+            var nameEl  = document.querySelector('h1.product_title, h1.entry-title');
+            var priceEl = document.querySelector('.summary .woocommerce-Price-amount bdi, .summary .price .amount bdi');
+            var rawPrice = priceEl ? priceEl.textContent.replace(/[^\d.,]/g, '') : '0';
+            // handle both comma-decimal (1.234,56) and dot-decimal (1,234.56) formats
+            if (/\d+,\d{2}$/.test(rawPrice)) rawPrice = rawPrice.replace(/\./g, '').replace(',', '.');
+            else rawPrice = rawPrice.replace(/,/g, '');
+            p = {
+                item_id:   String(productId),
+                item_name: nameEl ? nameEl.textContent.trim() : '',
+                price:     parseFloat(rawPrice) || 0
+            };
+        }
         var item = Object.assign({}, p, { quantity: qty });
         window.dataLayer.push({ ecommerce: null }); // clear previous ecommerce data (GA4 best practice)
         window.dataLayer.push({
