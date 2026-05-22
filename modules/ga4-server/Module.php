@@ -38,6 +38,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_ajax_nopriv_mad_ads_track_event',    [$this, 'handle_track_event']);
         add_action('wp_ajax_mad_ads_track_event',           [$this, 'handle_track_event']);
         add_action('admin_enqueue_scripts',                 [$this, 'enqueue_admin_assets']);
+
+        // Google Tag Manager injection
+        add_action('wp_head',      [$this, 'inject_gtm_head'],  1);
+        add_action('wp_body_open', [$this, 'inject_gtm_body'],  1);
+        add_action('wp_footer',    [$this, 'inject_gtm_body_fallback'], 1);
     }
 
     /* =========================================================
@@ -697,6 +702,18 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             ['pinterest_test_code',    __('Código de prueba (opcional)','mad-suite'),     'field_pinterest_test_code'],
         ] as [$id, $label, $cb]){
             add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'pinterest_section');
+        }
+
+        add_settings_section('gtm_section',
+            __('Google Tag Manager','mad-suite'),
+            fn() => print('<p>' . esc_html__('Inyecta el snippet de GTM en el <head> y <body> de todas las páginas públicas. Útil para conectar Google Ads Enhanced Conversions y otros tags.','mad-suite') . '</p>'),
+            $this->menu_slug()
+        );
+        foreach ([
+            ['gtm_enabled',      __('Activar','mad-suite'),            'field_gtm_enabled'],
+            ['gtm_container_id', __('Container ID','mad-suite'),        'field_gtm_container_id'],
+        ] as [$id, $label, $cb]){
+            add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'gtm_section');
         }
 
         add_settings_section('general_section', __('General','mad-suite'), '__return_false', $this->menu_slug());
@@ -1492,13 +1509,42 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
      * ======================================================= */
     public function enqueue_admin_assets($hook){
         if (strpos($hook, $this->menu_slug()) === false) return;
+        // false = load in <head> so Chart is defined before inline init scripts in page body
         wp_enqueue_script(
             'mad-chartjs',
             'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js',
             [],
             null,
-            true
+            false
         );
+    }
+
+    /* =========================================================
+     * GOOGLE TAG MANAGER — frontend injection
+     * ======================================================= */
+    public function inject_gtm_head() : void {
+        $s   = $this->get_settings();
+        $cid = trim($s['gtm_container_id'] ?? '');
+        if (empty($s['gtm_enabled']) || !$cid) return;
+        $cid = esc_js($cid);
+        echo "<!-- Google Tag Manager -->\n<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','$cid');</script>\n<!-- End Google Tag Manager -->\n";
+    }
+
+    private bool $gtm_body_injected = false;
+
+    public function inject_gtm_body() : void {
+        $s   = $this->get_settings();
+        $cid = trim($s['gtm_container_id'] ?? '');
+        if (empty($s['gtm_enabled']) || !$cid) return;
+        $this->gtm_body_injected = true;
+        $cid = esc_attr($cid);
+        echo "<!-- Google Tag Manager (noscript) -->\n<noscript><iframe src=\"https://www.googletagmanager.com/ns.html?id=$cid\" height=\"0\" width=\"0\" style=\"display:none;visibility:hidden\"></iframe></noscript>\n<!-- End Google Tag Manager (noscript) -->\n";
+    }
+
+    public function inject_gtm_body_fallback() : void {
+        // Only fires if the theme does not support wp_body_open
+        if ($this->gtm_body_injected) return;
+        $this->inject_gtm_body();
     }
 
     /* =========================================================
@@ -1761,6 +1807,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
      * ======================================================= */
     private function defaults(){
         return [
+            'gtm_enabled'             => 0,
+            'gtm_container_id'        => '',
             'google_enabled'          => 1,
             'measurement_id'          => '',
             'api_secret'              => '',
@@ -1791,6 +1839,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     public function sanitize_settings($input){
         $out = [];
+        $out['gtm_enabled']        = !empty($input['gtm_enabled'])        ? 1 : 0;
+        $out['gtm_container_id']   = sanitize_text_field($input['gtm_container_id'] ?? '');
         $out['google_enabled']     = !empty($input['google_enabled'])     ? 1 : 0;
         $out['measurement_id']     = sanitize_text_field($input['measurement_id']     ?? '');
         $out['api_secret']         = sanitize_text_field($input['api_secret']         ?? '');
@@ -1899,6 +1949,19 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         printf('<input type="text" class="regular-text" name="%s[pinterest_test_code]" value="%s" placeholder="" />',
             esc_attr($this->option_key), esc_attr($v));
         echo '<p class="description">'.esc_html__('Pinterest Ads Manager → Conversions API → Código de evento de prueba. Dejar vacío en producción.','mad-suite').'</p>';
+    }
+
+    public function field_gtm_enabled(){
+        $v = (int) $this->get_settings()['gtm_enabled'];
+        printf('<label><input type="checkbox" name="%s[gtm_enabled]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Inyectar Google Tag Manager en el frontend','mad-suite'));
+    }
+    public function field_gtm_container_id(){
+        $v = $this->get_settings()['gtm_container_id'];
+        printf('<input type="text" class="regular-text" name="%s[gtm_container_id]" value="%s" placeholder="GTM-XXXXXXX" />',
+            esc_attr($this->option_key), esc_attr($v));
+        echo '<p class="description">' . esc_html__('Google Tag Manager → Admin → Container ID. Formato: GTM-XXXXXXX.','mad-suite') . '</p>';
     }
 
     public function field_require_payment(){
