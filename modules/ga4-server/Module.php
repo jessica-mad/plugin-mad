@@ -41,6 +41,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_ajax_mad_ads_track_event',           [$this, 'handle_track_event']);
         add_action('admin_enqueue_scripts',                 [$this, 'enqueue_admin_assets']);
 
+        // Consent Mode V2 — must fire before GTM snippet
+        add_action('wp_head', [$this, 'inject_consent_mode'], 0);
+        // Meta Pixel client-side
+        add_action('wp_head', [$this, 'inject_meta_pixel_head'], 2);
         // Google Tag Manager injection
         add_action('wp_head',      [$this, 'inject_gtm_head'],  1);
         add_action('wp_body_open', [$this, 'inject_gtm_body'],  1);
@@ -686,12 +690,13 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             $this->menu_slug()
         );
         foreach ([
-            ['meta_enabled',       __('Activar','mad-suite'),                       'field_meta_enabled'],
-            ['pixel_id',           __('Pixel ID','mad-suite'),                      'field_pixel_id'],
-            ['access_token',       __('Access Token','mad-suite'),                  'field_access_token'],
-            ['meta_statuses',      __('Estados que disparan Purchase','mad-suite'), 'field_meta_statuses'],
-            ['meta_test_code',     __('Código de prueba (opcional)','mad-suite'),   'field_meta_test_code'],
-            ['send_customer_data', __('Datos del cliente hasheados','mad-suite'),   'field_send_customer_data'],
+            ['meta_enabled',          __('Activar CAPI (server-side)','mad-suite'),        'field_meta_enabled'],
+            ['pixel_id',              __('Pixel ID','mad-suite'),                           'field_pixel_id'],
+            ['access_token',          __('Access Token','mad-suite'),                       'field_access_token'],
+            ['meta_statuses',         __('Estados que disparan Purchase','mad-suite'),      'field_meta_statuses'],
+            ['meta_test_code',        __('Código de prueba (opcional)','mad-suite'),        'field_meta_test_code'],
+            ['send_customer_data',    __('Datos del cliente hasheados','mad-suite'),        'field_send_customer_data'],
+            ['meta_pixel_js_enabled', __('Pixel client-side (fbevents.js)','mad-suite'),   'field_meta_pixel_js_enabled'],
         ] as [$id, $label, $cb]){
             add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'meta_section');
         }
@@ -709,6 +714,19 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             ['pinterest_test_code',    __('Código de prueba (opcional)','mad-suite'),     'field_pinterest_test_code'],
         ] as [$id, $label, $cb]){
             add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'pinterest_section');
+        }
+
+        add_settings_section('consent_section',
+            __('Google Consent Mode V2','mad-suite'),
+            fn() => print('<p>' . esc_html__('Inyecta el bloque de consentimiento por defecto antes del snippet de GTM. Necesario para Google Ads y GA4 en la UE (GDPR). Los tags se cargan en modo ping hasta que el usuario acepta.','mad-suite') . '</p>'),
+            $this->menu_slug()
+        );
+        foreach ([
+            ['consent_mode_enabled',      __('Activar','mad-suite'),                         'field_consent_mode_enabled'],
+            ['consent_analytics_default', __('analytics_storage por defecto','mad-suite'),   'field_consent_analytics_default'],
+            ['consent_ads_default',       __('ad_storage por defecto','mad-suite'),          'field_consent_ads_default'],
+        ] as [$id, $label, $cb]){
+            add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'consent_section');
         }
 
         add_settings_section('gtm_section',
@@ -1535,6 +1553,57 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     /* =========================================================
+     * GOOGLE CONSENT MODE V2
+     * ======================================================= */
+    public function inject_consent_mode() : void {
+        $s = $this->get_settings();
+        if (empty($s['consent_mode_enabled'])) return;
+        $analytics = ($s['consent_analytics_default'] ?? 'denied') === 'granted' ? 'granted' : 'denied';
+        $ads       = ($s['consent_ads_default']       ?? 'denied') === 'granted' ? 'granted' : 'denied';
+        ?>
+<!-- Google Consent Mode V2 -->
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('consent','default',{
+    'ad_storage':         '<?php echo $ads; ?>',
+    'ad_user_data':       '<?php echo $ads; ?>',
+    'ad_personalization': '<?php echo $ads; ?>',
+    'analytics_storage':  '<?php echo $analytics; ?>',
+    'wait_for_update':    500
+});
+gtag('set','ads_data_redaction', true);
+</script>
+<!-- End Google Consent Mode V2 -->
+        <?php
+    }
+
+    /* =========================================================
+     * META PIXEL — client-side (fbevents.js)
+     * ======================================================= */
+    public function inject_meta_pixel_head() : void {
+        $s = $this->get_settings();
+        if (empty($s['meta_pixel_js_enabled']) || empty($s['pixel_id'])) return;
+        $pid     = esc_js(trim($s['pixel_id']));
+        $pid_esc = esc_attr(trim($s['pixel_id']));
+        ?>
+<!-- Meta Pixel Code -->
+<script>
+!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+document,'script','https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '<?php echo $pid; ?>');
+fbq('track', 'PageView');
+</script>
+<noscript><img height="1" width="1" style="display:none"
+  src="https://www.facebook.com/tr?id=<?php echo $pid_esc; ?>&ev=PageView&noscript=1"/></noscript>
+<!-- End Meta Pixel Code -->
+        <?php
+    }
+
+    /* =========================================================
      * GOOGLE TAG MANAGER — frontend injection
      * ======================================================= */
     public function inject_gtm_head() : void {
@@ -1608,12 +1677,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     public function inject_ecommerce_script() : void {
-        $s = $this->get_settings();
-        if (empty($s['gtm_enabled'])) return;
-        if (!function_exists('is_woocommerce')) return;
+        $s         = $this->get_settings();
+        $has_gtm   = !empty($s['gtm_enabled']);
+        $has_pixel = !empty($s['meta_pixel_js_enabled']) && !empty($s['pixel_id']);
 
-        // Single product page: add main product + all its variations (so AJAX on variable products works)
-        if (is_singular('product')) {
+        if (!$has_gtm && !$has_pixel) return;
+        if (!function_exists('is_woocommerce') && !function_exists('is_checkout')) return;
+
+        // Single product page: collect main product + all variations
+        if (function_exists('is_singular') && is_singular('product')) {
             $product = wc_get_product(get_the_ID());
             if ($product) {
                 $this->page_products[$product->get_id()] = $this->format_product_data($product);
@@ -1626,26 +1698,234 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             }
         }
 
-        if (empty($this->page_products)) return;
+        // Checkout page: collect cart items
+        $checkout_items = [];
+        $checkout_value = 0.0;
+        if (function_exists('is_checkout') && is_checkout() && !is_order_received_page()) {
+            if (WC()->cart && !WC()->cart->is_empty()) {
+                foreach (WC()->cart->get_cart() as $ci) {
+                    $cp = $ci['data'];
+                    if ($cp instanceof WC_Product) {
+                        $d             = $this->format_product_data($cp);
+                        $d['quantity'] = (int) $ci['quantity'];
+                        $checkout_items[] = $d;
+                    }
+                }
+                $checkout_value = (float) WC()->cart->get_cart_contents_total();
+            }
+        }
+
+        // Thank you page: collect order data
+        $purchase_data = null;
+        if (function_exists('is_order_received_page') && is_order_received_page()) {
+            $oid = absint(get_query_var('order-received'));
+            if ($oid) {
+                $order = wc_get_order($oid);
+                if ($order instanceof WC_Order) {
+                    $pitems = [];
+                    foreach ($order->get_items() as $item) {
+                        $op = $item->get_product();
+                        if ($op instanceof WC_Product) {
+                            $d             = $this->format_product_data($op);
+                            $d['quantity'] = (int) $item->get_quantity();
+                            $pitems[]      = $d;
+                        }
+                    }
+                    $purchase_data = [
+                        'transaction_id' => (string) $order->get_id(),
+                        'value'          => round((float) $order->get_total(), 2),
+                        'shipping'       => round((float) $order->get_shipping_total(), 2),
+                        'tax'            => round((float) $order->get_total_tax(), 2),
+                        'coupon'         => implode(',', $order->get_coupon_codes()),
+                        'items'          => $pitems,
+                    ];
+                }
+            }
+        }
+
+        if (empty($this->page_products) && empty($checkout_items) && !$purchase_data) return;
+
+        // Auto params injected from PHP
+        $wc_user    = wp_get_current_user();
+        $user_role  = !empty($wc_user->roles) ? $wc_user->roles[0] : 'guest';
+        $post_id    = (int) get_the_ID();
+        $page_title = get_the_title() ?: get_bloginfo('name');
 
         $catalog_json  = wp_json_encode((object) $this->page_products);
         $currency_json = wp_json_encode(get_woocommerce_currency());
+        $checkout_json = wp_json_encode($checkout_items);
+        $purchase_json = wp_json_encode($purchase_data);
+        $auto_json     = wp_json_encode([
+            'user_role'  => $user_role,
+            'post_id'    => $post_id,
+            'page_title' => $page_title,
+        ]);
+
+        $is_product_js  = (is_singular('product') && !is_checkout()) ? 'true' : 'false';
+        $product_id_js  = is_singular('product') ? (int) get_the_ID() : 0;
+        $is_checkout_js = !empty($checkout_items) ? 'true' : 'false';
+        $is_purchase_js = ($purchase_data !== null) ? 'true' : 'false';
+
+        $list_name = '';
+        if (function_exists('is_product_category') && is_product_category()) {
+            $list_name = single_cat_title('', false);
+        } elseif (function_exists('is_shop') && is_shop()) {
+            $list_name = 'Shop';
+        }
+
+        $list_name_json = wp_json_encode($list_name);
+        $has_gtm_js     = $has_gtm   ? 'true' : 'false';
+        $has_pixel_js   = $has_pixel ? 'true' : 'false';
         ?>
 <script>
 (function(){
     window.dataLayer = window.dataLayer || [];
-    var CATALOG  = <?php echo $catalog_json; ?>;
-    var CURRENCY = <?php echo $currency_json; ?>;
+    var CATALOG     = <?php echo $catalog_json; ?>;
+    var CURRENCY    = <?php echo $currency_json; ?>;
+    var CHECKOUT    = <?php echo $checkout_json; ?>;
+    var PURCHASE    = <?php echo $purchase_json; ?>;
+    var AUTO        = <?php echo $auto_json; ?>;
+    var IS_PRODUCT  = <?php echo $is_product_js; ?>;
+    var PRODUCT_ID  = <?php echo $product_id_js; ?>;
+    var IS_CHECKOUT = <?php echo $is_checkout_js; ?>;
+    var IS_PURCHASE = <?php echo $is_purchase_js; ?>;
+    var LIST_NAME   = <?php echo $list_name_json; ?>;
+    var HAS_GTM     = <?php echo $has_gtm_js; ?>;
+    var HAS_PIXEL   = <?php echo $has_pixel_js; ?>;
 
+    function genUUID() {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+
+    function autoParams() {
+        return {
+            event_id:   genUUID(),
+            user_role:  AUTO.user_role,
+            post_id:    AUTO.post_id,
+            page_title: AUTO.page_title || document.title,
+            event_url:  window.location.href,
+            plugin:     'MADSuite'
+        };
+    }
+
+    /* ---- GA4 dataLayer events ---- */
+    if (HAS_GTM) {
+        // view_item on single product page
+        if (IS_PRODUCT && PRODUCT_ID) {
+            var vip = CATALOG[String(PRODUCT_ID)];
+            if (vip) {
+                window.dataLayer.push({ecommerce: null});
+                window.dataLayer.push(Object.assign({
+                    event: 'view_item',
+                    ecommerce: {
+                        currency: CURRENCY,
+                        value:    +vip.price.toFixed(2),
+                        items:    [Object.assign({}, vip, {quantity: 1})]
+                    }
+                }, autoParams()));
+            }
+        }
+
+        // view_item_list on catalog / category pages
+        if (!IS_PRODUCT && !IS_CHECKOUT && !IS_PURCHASE && Object.keys(CATALOG).length > 0) {
+            var listItems = Object.values(CATALOG).map(function(p, i) {
+                return Object.assign({}, p, {index: i + 1, item_list_name: LIST_NAME, quantity: 1});
+            });
+            window.dataLayer.push({ecommerce: null});
+            window.dataLayer.push(Object.assign({
+                event: 'view_item_list',
+                ecommerce: {
+                    currency:       CURRENCY,
+                    item_list_name: LIST_NAME,
+                    items:          listItems
+                }
+            }, autoParams()));
+        }
+
+        // begin_checkout on checkout page
+        if (IS_CHECKOUT && CHECKOUT.length > 0) {
+            var chkVal = CHECKOUT.reduce(function(s, p) { return s + (p.price * p.quantity); }, 0);
+            window.dataLayer.push({ecommerce: null});
+            window.dataLayer.push(Object.assign({
+                event: 'begin_checkout',
+                ecommerce: {
+                    currency: CURRENCY,
+                    value:    +chkVal.toFixed(2),
+                    items:    CHECKOUT
+                }
+            }, autoParams()));
+        }
+
+        // purchase on thank you page
+        if (IS_PURCHASE && PURCHASE) {
+            window.dataLayer.push({ecommerce: null});
+            window.dataLayer.push(Object.assign({
+                event: 'purchase',
+                ecommerce: {
+                    transaction_id: PURCHASE.transaction_id,
+                    currency:       CURRENCY,
+                    value:          PURCHASE.value,
+                    shipping:       PURCHASE.shipping,
+                    tax:            PURCHASE.tax,
+                    coupon:         PURCHASE.coupon,
+                    items:          PURCHASE.items
+                }
+            }, autoParams()));
+        }
+    }
+
+    /* ---- Meta Pixel fbq events ---- */
+    if (HAS_PIXEL && typeof fbq === 'function') {
+        // ViewContent on single product page
+        if (IS_PRODUCT && PRODUCT_ID) {
+            var mvp = CATALOG[String(PRODUCT_ID)];
+            if (mvp) {
+                fbq('track', 'ViewContent', {
+                    content_ids:  [mvp.item_id],
+                    content_name: mvp.item_name,
+                    content_type: 'product',
+                    value:        mvp.price,
+                    currency:     CURRENCY
+                });
+            }
+        }
+
+        // InitiateCheckout on checkout page
+        if (IS_CHECKOUT && CHECKOUT.length > 0) {
+            var mchkVal = CHECKOUT.reduce(function(s, p) { return s + (p.price * p.quantity); }, 0);
+            fbq('track', 'InitiateCheckout', {
+                content_ids: CHECKOUT.map(function(p) { return p.item_id; }),
+                num_items:   CHECKOUT.reduce(function(s, p) { return s + p.quantity; }, 0),
+                value:       +mchkVal.toFixed(2),
+                currency:    CURRENCY
+            });
+        }
+
+        // Purchase on thank you page — eventID matches CAPI for deduplication
+        if (IS_PURCHASE && PURCHASE) {
+            fbq('track', 'Purchase', {
+                content_ids: PURCHASE.items.map(function(p) { return p.item_id; }),
+                num_items:   PURCHASE.items.reduce(function(s, p) { return s + p.quantity; }, 0),
+                value:       PURCHASE.value,
+                currency:    CURRENCY,
+                order_id:    PURCHASE.transaction_id
+            }, {eventID: 'wc_order_' + PURCHASE.transaction_id});
+        }
+    }
+
+    /* ---- add_to_cart: GA4 + Meta Pixel ---- */
     function pushAddToCart(productId, variationId, qty) {
         qty = qty || 1;
         var id = variationId ? String(variationId) : String(productId);
         var p  = CATALOG[id] || CATALOG[String(productId)];
         if (!p) {
-            var nameEl  = document.querySelector('h1.product_title, h1.entry-title');
-            var priceEl = document.querySelector('.summary .woocommerce-Price-amount bdi, .summary .price .amount bdi');
+            var nameEl   = document.querySelector('h1.product_title, h1.entry-title');
+            var priceEl  = document.querySelector('.summary .woocommerce-Price-amount bdi, .summary .price .amount bdi');
             var rawPrice = priceEl ? priceEl.textContent.replace(/[^\d.,]/g, '') : '0';
-            // handle both comma-decimal (1.234,56) and dot-decimal (1,234.56) formats
             if (/\d+,\d{2}$/.test(rawPrice)) rawPrice = rawPrice.replace(/\./g, '').replace(',', '.');
             else rawPrice = rawPrice.replace(/,/g, '');
             p = {
@@ -1654,17 +1934,30 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 price:     parseFloat(rawPrice) || 0
             };
         }
-        var item = Object.assign({}, p, { quantity: qty });
-        window.dataLayer.push({ ecommerce: null }); // clear previous ecommerce data (GA4 best practice)
-        window.dataLayer.push({
-            event: 'add_to_cart',
-            ecommerce: {
-                currency: CURRENCY,
-                value:    +(p.price * qty).toFixed(2),
-                items:    [item]
-            },
-            plugin: 'MADSuite'
-        });
+        var item = Object.assign({}, p, {quantity: qty});
+        var ap   = autoParams();
+
+        if (HAS_GTM) {
+            window.dataLayer.push({ecommerce: null});
+            window.dataLayer.push(Object.assign({
+                event: 'add_to_cart',
+                ecommerce: {
+                    currency: CURRENCY,
+                    value:    +(p.price * qty).toFixed(2),
+                    items:    [item]
+                }
+            }, ap));
+        }
+
+        if (HAS_PIXEL && typeof fbq === 'function') {
+            fbq('track', 'AddToCart', {
+                content_ids:  [p.item_id],
+                content_name: p.item_name,
+                content_type: 'product',
+                value:        +(p.price * qty).toFixed(2),
+                currency:     CURRENCY
+            }, {eventID: ap.event_id});
+        }
     }
 
     // Non-AJAX: WooCommerce reloads with ?added-to-cart=ID&quantity=N
@@ -1690,8 +1983,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 if (!productId && $btn && $btn.length) {
                     var $form = $btn.closest('form.cart');
                     if ($form.length) {
-                        productId   = $form.find('input[name="add-to-cart"]').val()    || null;
-                        variationId = $form.find('input[name="variation_id"]').val()   || null;
+                        productId   = $form.find('input[name="add-to-cart"]').val()  || null;
+                        variationId = $form.find('input[name="variation_id"]').val() || null;
                         qty         = parseInt($form.find('input[name="quantity"]').val() || '1', 10);
                     }
                 }
@@ -2025,27 +2318,31 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
      * ======================================================= */
     private function defaults(){
         return [
-            'gtm_enabled'             => 0,
-            'gtm_container_id'        => '',
-            'gads_events'             => [],
-            'google_enabled'          => 1,
-            'measurement_id'          => '',
-            'api_secret'              => '',
-            'google_statuses'         => ['processing'],
-            'meta_enabled'            => 0,
-            'pixel_id'                => '',
-            'access_token'            => '',
-            'meta_statuses'           => ['processing'],
-            'meta_test_code'          => '',
-            'pinterest_enabled'       => 0,
-            'pinterest_ad_account'    => '',
-            'pinterest_access_token'  => '',
-            'pinterest_statuses'      => ['processing'],
-            'pinterest_test_code'     => '',
-            'send_customer_data'      => 1,
-            'require_payment'         => 1,
-            'test_coupon'             => '',
-            'debug'                   => 0,
+            'consent_mode_enabled'      => 0,
+            'consent_analytics_default' => 'denied',
+            'consent_ads_default'       => 'denied',
+            'gtm_enabled'               => 0,
+            'gtm_container_id'          => '',
+            'gads_events'               => [],
+            'google_enabled'            => 1,
+            'measurement_id'            => '',
+            'api_secret'                => '',
+            'google_statuses'           => ['processing'],
+            'meta_enabled'              => 0,
+            'meta_pixel_js_enabled'     => 0,
+            'pixel_id'                  => '',
+            'access_token'              => '',
+            'meta_statuses'             => ['processing'],
+            'meta_test_code'            => '',
+            'pinterest_enabled'         => 0,
+            'pinterest_ad_account'      => '',
+            'pinterest_access_token'    => '',
+            'pinterest_statuses'        => ['processing'],
+            'pinterest_test_code'       => '',
+            'send_customer_data'        => 1,
+            'require_payment'           => 1,
+            'test_coupon'               => '',
+            'debug'                     => 0,
         ];
     }
 
@@ -2058,6 +2355,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     public function sanitize_settings($input){
         $out = [];
+        $valid_consent             = ['denied', 'granted'];
+        $out['consent_mode_enabled']      = !empty($input['consent_mode_enabled']) ? 1 : 0;
+        $out['consent_analytics_default'] = in_array($input['consent_analytics_default'] ?? '', $valid_consent, true) ? $input['consent_analytics_default'] : 'denied';
+        $out['consent_ads_default']       = in_array($input['consent_ads_default']       ?? '', $valid_consent, true) ? $input['consent_ads_default']       : 'denied';
         $out['gtm_enabled']        = !empty($input['gtm_enabled'])        ? 1 : 0;
         $out['gtm_container_id']   = sanitize_text_field($input['gtm_container_id'] ?? '');
         $valid_triggers            = ['page_view','view_content','add_to_cart','begin_checkout','purchase'];
@@ -2077,6 +2378,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $out['api_secret']         = sanitize_text_field($input['api_secret']         ?? '');
         $out['google_statuses']    = $this->sanitize_statuses($input['google_statuses']    ?? []);
         $out['meta_enabled']             = !empty($input['meta_enabled'])             ? 1 : 0;
+        $out['meta_pixel_js_enabled']    = !empty($input['meta_pixel_js_enabled'])   ? 1 : 0;
         $out['pixel_id']                 = sanitize_text_field($input['pixel_id']                 ?? '');
         $out['access_token']             = sanitize_text_field($input['access_token']             ?? '');
         $out['meta_statuses']            = $this->sanitize_statuses($input['meta_statuses']            ?? []);
@@ -2331,6 +2633,41 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         printf('<label><input type="checkbox" name="%s[debug]" value="1" %s /> %s</label>',
             esc_attr($this->option_key), checked(1, $v, false),
             esc_html__('Registrar actividad en WC Logger (no registra credenciales)','mad-suite'));
+    }
+
+    public function field_meta_pixel_js_enabled(){
+        $v = (int) $this->get_settings()['meta_pixel_js_enabled'];
+        printf('<label><input type="checkbox" name="%s[meta_pixel_js_enabled]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Inyectar fbevents.js y disparar ViewContent, AddToCart, InitiateCheckout y Purchase','mad-suite'));
+        echo '<p class="description">'.esc_html__('Usa el mismo Pixel ID que la CAPI. Las compras se deduplicarán automáticamente con los eventos server-side.','mad-suite').'</p>';
+    }
+
+    public function field_consent_mode_enabled(){
+        $v = (int) $this->get_settings()['consent_mode_enabled'];
+        printf('<label><input type="checkbox" name="%s[consent_mode_enabled]" value="1" %s /> %s</label>',
+            esc_attr($this->option_key), checked(1, $v, false),
+            esc_html__('Activar Consent Mode V2 (recomendado para sitios con visitantes de la UE)','mad-suite'));
+    }
+
+    public function field_consent_analytics_default(){
+        $v   = $this->get_settings()['consent_analytics_default'] ?? 'denied';
+        $opt = esc_attr($this->option_key);
+        printf('<select name="%s[consent_analytics_default]"><option value="denied" %s>%s</option><option value="granted" %s>%s</option></select>',
+            $opt,
+            selected('denied',  $v, false), esc_html__('denied (recomendado GDPR)','mad-suite'),
+            selected('granted', $v, false), esc_html__('granted','mad-suite'));
+        echo '<p class="description">'.esc_html__('Estado de analytics_storage antes de consentimiento. "denied" activa el modelado de conversiones en Google.','mad-suite').'</p>';
+    }
+
+    public function field_consent_ads_default(){
+        $v   = $this->get_settings()['consent_ads_default'] ?? 'denied';
+        $opt = esc_attr($this->option_key);
+        printf('<select name="%s[consent_ads_default]"><option value="denied" %s>%s</option><option value="granted" %s>%s</option></select>',
+            $opt,
+            selected('denied',  $v, false), esc_html__('denied (recomendado GDPR)','mad-suite'),
+            selected('granted', $v, false), esc_html__('granted','mad-suite'));
+        echo '<p class="description">'.esc_html__('Estado de ad_storage, ad_user_data y ad_personalization. Afecta a Google Ads y Meta.','mad-suite').'</p>';
     }
 
     private function render_statuses_checkboxes($key){
