@@ -7,6 +7,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private $option_key;
     private $logger;
     private $table;
+    private bool $gtm_body_injected = false;
+    private array $page_products    = [];
 
     // Bump to trigger dbDelta when schema changes
     private const TABLE_VERSION = '1.4';
@@ -44,6 +46,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_body_open', [$this, 'inject_gtm_body'],  1);
         add_action('wp_footer',    [$this, 'inject_gtm_body_fallback'], 1);
         add_action('wp_footer',    [$this, 'inject_gads_event_conversions'], 20);
+
+        // GA4 ecommerce dataLayer events
+        add_action('woocommerce_after_shop_loop_item', [$this, 'collect_loop_product'], 5);
+        add_action('wp_footer',                        [$this, 'inject_ecommerce_script'], 15);
     }
 
     /* =========================================================
@@ -1539,8 +1545,6 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         echo "<!-- Google Tag Manager -->\n<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','$cid');</script>\n<!-- End Google Tag Manager -->\n";
     }
 
-    private bool $gtm_body_injected = false;
-
     public function inject_gtm_body() : void {
         $s   = $this->get_settings();
         $cid = trim($s['gtm_container_id'] ?? '');
@@ -1554,6 +1558,130 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         // Only fires if the theme does not support wp_body_open
         if ($this->gtm_body_injected) return;
         $this->inject_gtm_body();
+    }
+
+    /* =========================================================
+     * GA4 ECOMMERCE — dataLayer events via GTM
+     * ======================================================= */
+    public function collect_loop_product() : void {
+        global $product;
+        if ($product instanceof WC_Product) {
+            $this->page_products[$product->get_id()] = $this->format_product_data($product);
+        }
+    }
+
+    private function format_product_data(WC_Product $product) : array {
+        // Use the displayed price (respects tax settings)
+        $price = (float) wc_get_price_to_display($product);
+
+        // Category names — fall back to parent for variations
+        $cat_ids = $product->get_category_ids();
+        if (empty($cat_ids) && $product->get_parent_id()) {
+            $parent  = wc_get_product($product->get_parent_id());
+            if ($parent) $cat_ids = $parent->get_category_ids();
+        }
+        $cats = [];
+        foreach (array_slice($cat_ids, 0, 5) as $cid) {
+            $term = get_term($cid, 'product_cat');
+            if ($term && !is_wp_error($term)) $cats[] = $term->name;
+        }
+
+        $data = [
+            'item_id'   => (string) $product->get_id(),
+            'item_name' => $product->get_name(),
+            'price'     => $price,
+        ];
+
+        foreach (['item_category','item_category2','item_category3','item_category4','item_category5'] as $i => $key) {
+            if (isset($cats[$i])) $data[$key] = $cats[$i];
+        }
+
+        $brand = $product->get_attribute('brand') ?: $product->get_attribute('pa_brand') ?: '';
+        if ($brand) $data['item_brand'] = $brand;
+
+        if ($product->is_type('variation')) {
+            $parts = array_filter(array_values($product->get_variation_attributes()));
+            if ($parts) $data['item_variant'] = implode(' / ', $parts);
+        }
+
+        return $data;
+    }
+
+    public function inject_ecommerce_script() : void {
+        $s = $this->get_settings();
+        if (empty($s['gtm_enabled'])) return;
+        if (!function_exists('is_woocommerce')) return;
+
+        // Single product page: add main product + all its variations (so AJAX on variable products works)
+        if (is_singular('product')) {
+            $product = wc_get_product(get_the_ID());
+            if ($product) {
+                $this->page_products[$product->get_id()] = $this->format_product_data($product);
+                if ($product->is_type('variable')) {
+                    foreach ($product->get_children() as $vid) {
+                        $v = wc_get_product($vid);
+                        if ($v && $v->is_in_stock()) {
+                            $this->page_products[$vid] = $this->format_product_data($v);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (empty($this->page_products)) return;
+
+        $catalog_json  = wp_json_encode((object) $this->page_products);
+        $currency_json = wp_json_encode(get_woocommerce_currency());
+        ?>
+<script>
+(function(){
+    window.dataLayer = window.dataLayer || [];
+    var CATALOG  = <?php echo $catalog_json; ?>;
+    var CURRENCY = <?php echo $currency_json; ?>;
+
+    function pushAddToCart(productId, variationId, qty) {
+        qty = qty || 1;
+        var id = variationId ? String(variationId) : String(productId);
+        var p  = CATALOG[id] || CATALOG[String(productId)];
+        if (!p) return;
+        var item = Object.assign({}, p, { quantity: qty });
+        window.dataLayer.push({ ecommerce: null }); // clear previous ecommerce data (GA4 best practice)
+        window.dataLayer.push({
+            event: 'add_to_cart',
+            ecommerce: {
+                currency: CURRENCY,
+                value:    +(p.price * qty).toFixed(2),
+                items:    [item]
+            }
+        });
+    }
+
+    // Non-AJAX: WooCommerce reloads with ?added-to-cart=ID&quantity=N
+    (function() {
+        try {
+            var params = new URLSearchParams(window.location.search);
+            var id = params.get('added-to-cart');
+            if (!id) return;
+            var qty = parseInt(params.get('quantity') || '1', 10);
+            pushAddToCart(id, null, qty);
+        } catch(e) {}
+    })();
+
+    // AJAX: WooCommerce fires 'added_to_cart' on document.body
+    if (typeof jQuery !== 'undefined') {
+        jQuery(document.body).on('added_to_cart', function(e, fragments, cartHash, $btn) {
+            try {
+                if (!$btn || !$btn.length) return;
+                var productId   = $btn.data('product_id');
+                var variationId = $btn.data('variation_id') || null;
+                var qty         = parseInt($btn.data('quantity') || '1', 10);
+                pushAddToCart(productId, variationId, qty);
+            } catch(e) {}
+        });
+    }
+})();
+</script>
+        <?php
     }
 
     /* =========================================================
