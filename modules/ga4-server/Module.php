@@ -43,6 +43,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         add_action('wp_head',      [$this, 'inject_gtm_head'],  1);
         add_action('wp_body_open', [$this, 'inject_gtm_body'],  1);
         add_action('wp_footer',    [$this, 'inject_gtm_body_fallback'], 1);
+        add_action('wp_footer',    [$this, 'inject_gads_event_conversions'], 20);
     }
 
     /* =========================================================
@@ -715,6 +716,14 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ] as [$id, $label, $cb]){
             add_settings_field($id, $label, [$this, $cb], $this->menu_slug(), 'gtm_section');
         }
+
+        add_settings_section('gads_events_section',
+            __('Google Ads — Conversiones por evento','mad-suite'),
+            fn() => print('<p>' . esc_html__('Fragmentos de evento para conversiones que no tienen una URL de destino (ej. añadir al carrito AJAX). Requiere GTM activado con el Google Tag de tu cuenta de Ads.','mad-suite') . '</p>'),
+            $this->menu_slug()
+        );
+        add_settings_field('gads_events', __('Acciones de conversión','mad-suite'),
+            [$this, 'field_gads_events'], $this->menu_slug(), 'gads_events_section');
 
         add_settings_section('general_section', __('General','mad-suite'), '__return_false', $this->menu_slug());
         foreach ([
@@ -1548,6 +1557,65 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     }
 
     /* =========================================================
+     * GOOGLE ADS — EVENT CONVERSION SNIPPETS (client-side)
+     * ======================================================= */
+    public function inject_gads_event_conversions() : void {
+        $s      = $this->get_settings();
+        $events = array_values(array_filter(
+            $s['gads_events'] ?? [],
+            fn($e) => !empty($e['send_to'])
+        ));
+        if (empty($events)) return;
+
+        $json = wp_json_encode($events);
+        ?>
+<script>
+(function(){
+    var EVENTS = <?php echo $json; ?>;
+    function fire(ev) {
+        var params = { send_to: ev.send_to };
+        if (ev.value && parseFloat(ev.value) > 0) {
+            params.value    = parseFloat(ev.value);
+            params.currency = ev.currency || 'EUR';
+        }
+        if (typeof window.gtag === 'function') {
+            window.gtag('event', 'conversion', params);
+        } else {
+            window.dataLayer = window.dataLayer || [];
+            window.dataLayer.push({ event: 'gads_conversion', conversion_params: params });
+        }
+    }
+    var cls  = document.body.classList;
+    var urlP = typeof URLSearchParams !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    EVENTS.forEach(function(ev) {
+        switch (ev.trigger) {
+            case 'page_view':
+                fire(ev); break;
+            case 'view_content':
+                if (cls.contains('single-product')) fire(ev); break;
+            case 'begin_checkout':
+                if (cls.contains('woocommerce-checkout') && !cls.contains('woocommerce-order-received')) fire(ev); break;
+            case 'purchase':
+                if (cls.contains('woocommerce-order-received')) fire(ev); break;
+            case 'add_to_cart':
+                // non-AJAX (page reload with ?added-to-cart=)
+                if (urlP && urlP.get('added-to-cart')) fire(ev); break;
+        }
+    });
+    // AJAX add to cart
+    if (typeof jQuery !== 'undefined') {
+        jQuery(document.body).on('added_to_cart', function() {
+            EVENTS.forEach(function(ev) {
+                if (ev.trigger === 'add_to_cart') fire(ev);
+            });
+        });
+    }
+})();
+</script>
+        <?php
+    }
+
+    /* =========================================================
      * DATE RANGE HELPERS
      * ======================================================= */
     private function get_date_range() : array {
@@ -1809,6 +1877,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         return [
             'gtm_enabled'             => 0,
             'gtm_container_id'        => '',
+            'gads_events'             => [],
             'google_enabled'          => 1,
             'measurement_id'          => '',
             'api_secret'              => '',
@@ -1841,6 +1910,18 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $out = [];
         $out['gtm_enabled']        = !empty($input['gtm_enabled'])        ? 1 : 0;
         $out['gtm_container_id']   = sanitize_text_field($input['gtm_container_id'] ?? '');
+        $valid_triggers            = ['page_view','view_content','add_to_cart','begin_checkout','purchase'];
+        $raw_gads                  = is_array($input['gads_events'] ?? null) ? $input['gads_events'] : [];
+        $clean_gads                = [];
+        foreach ($raw_gads as $ev) {
+            $trigger  = sanitize_key($ev['trigger'] ?? '');
+            $send_to  = sanitize_text_field($ev['send_to'] ?? '');
+            $value    = is_numeric($ev['value'] ?? '') ? round((float) $ev['value'], 4) : 0.0;
+            $currency = strtoupper(substr(sanitize_text_field($ev['currency'] ?? 'EUR'), 0, 3));
+            if (!in_array($trigger, $valid_triggers, true) || !$send_to) continue;
+            $clean_gads[] = compact('trigger', 'send_to', 'value', 'currency');
+        }
+        $out['gads_events']        = $clean_gads;
         $out['google_enabled']     = !empty($input['google_enabled'])     ? 1 : 0;
         $out['measurement_id']     = sanitize_text_field($input['measurement_id']     ?? '');
         $out['api_secret']         = sanitize_text_field($input['api_secret']         ?? '');
@@ -1949,6 +2030,124 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         printf('<input type="text" class="regular-text" name="%s[pinterest_test_code]" value="%s" placeholder="" />',
             esc_attr($this->option_key), esc_attr($v));
         echo '<p class="description">'.esc_html__('Pinterest Ads Manager → Conversions API → Código de evento de prueba. Dejar vacío en producción.','mad-suite').'</p>';
+    }
+
+    public function field_gads_events(){
+        $events = $this->get_settings()['gads_events'] ?? [];
+        if (empty($events)) {
+            $events = [['trigger' => 'add_to_cart', 'send_to' => '', 'value' => '0', 'currency' => 'EUR']];
+        }
+        $key      = esc_attr($this->option_key);
+        $triggers = [
+            'page_view'      => __('Página vista','mad-suite'),
+            'view_content'   => __('Vista de producto','mad-suite'),
+            'add_to_cart'    => __('Añadir al carrito','mad-suite'),
+            'begin_checkout' => __('Inicio de checkout','mad-suite'),
+            'purchase'       => __('Compra confirmada','mad-suite'),
+        ];
+        ?>
+        <div id="gads-events-wrap">
+            <table style="border-collapse:collapse;width:100%;max-width:740px">
+                <thead>
+                    <tr style="font-size:.78em;color:#646970;border-bottom:2px solid #c3c4c7">
+                        <th style="padding:4px 8px;text-align:left;width:160px"><?php esc_html_e('Evento trigger','mad-suite'); ?></th>
+                        <th style="padding:4px 8px;text-align:left"><?php esc_html_e('Send To (AW-…/…)','mad-suite'); ?></th>
+                        <th style="padding:4px 8px;text-align:left;width:70px"><?php esc_html_e('Valor','mad-suite'); ?></th>
+                        <th style="padding:4px 8px;text-align:left;width:55px"><?php esc_html_e('Divisa','mad-suite'); ?></th>
+                        <th style="width:36px"></th>
+                    </tr>
+                </thead>
+                <tbody id="gads-events-body">
+                <?php foreach ($events as $i => $ev): ?>
+                <tr class="gads-row" style="border-bottom:1px solid #f0f0f1">
+                    <td style="padding:5px 8px">
+                        <select name="<?php echo $key; ?>[gads_events][<?php echo $i; ?>][trigger]" style="width:100%">
+                            <?php foreach ($triggers as $val => $lbl): ?>
+                            <option value="<?php echo esc_attr($val); ?>" <?php selected($ev['trigger'] ?? '', $val); ?>><?php echo esc_html($lbl); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
+                    <td style="padding:5px 8px">
+                        <input type="text"
+                               name="<?php echo $key; ?>[gads_events][<?php echo $i; ?>][send_to]"
+                               value="<?php echo esc_attr($ev['send_to'] ?? ''); ?>"
+                               placeholder="AW-XXXXXXXXX/XXXXXXXXXXXXXXXXXXXX"
+                               style="width:100%;font-family:monospace;font-size:.82em" />
+                    </td>
+                    <td style="padding:5px 8px">
+                        <input type="number"
+                               name="<?php echo $key; ?>[gads_events][<?php echo $i; ?>][value]"
+                               value="<?php echo esc_attr($ev['value'] ?? '0'); ?>"
+                               step="0.01" min="0" style="width:68px" />
+                    </td>
+                    <td style="padding:5px 8px">
+                        <input type="text"
+                               name="<?php echo $key; ?>[gads_events][<?php echo $i; ?>][currency]"
+                               value="<?php echo esc_attr($ev['currency'] ?? 'EUR'); ?>"
+                               maxlength="3" style="width:46px;text-transform:uppercase" />
+                    </td>
+                    <td style="padding:5px 4px">
+                        <button type="button" class="button gads-del" title="<?php esc_attr_e('Eliminar','mad-suite'); ?>"
+                                style="color:#b32d2e;border-color:#b32d2e;padding:0 6px;min-height:28px">✕</button>
+                    </td>
+                </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+            <p style="margin-top:8px">
+                <button type="button" id="gads-add-row" class="button button-secondary">
+                    + <?php esc_html_e('Añadir conversión','mad-suite'); ?>
+                </button>
+            </p>
+            <p class="description" style="margin-top:4px"><?php esc_html_e('Dispara gtag("event","conversion",{send_to}) en cada trigger. Si el valor es 0 no se envía. El snippet del botón de Google Ads te da el "Send To".','mad-suite'); ?></p>
+        </div>
+        <script>
+        (function(){
+            var body     = document.getElementById('gads-events-body');
+            var optKey   = <?php echo wp_json_encode($this->option_key); ?>;
+            var triggers = <?php echo wp_json_encode($triggers); ?>;
+
+            function reindex(){
+                body.querySelectorAll('.gads-row').forEach(function(row, i){
+                    row.querySelectorAll('[name]').forEach(function(el){
+                        el.name = el.name.replace(/\[gads_events\]\[\d+\]/, '[gads_events]['+i+']');
+                    });
+                });
+            }
+
+            function makeRow(idx){
+                var tr = document.createElement('tr');
+                tr.className = 'gads-row';
+                tr.style.borderBottom = '1px solid #f0f0f1';
+                var opts = Object.entries(triggers)
+                    .map(function(e){ return '<option value="'+e[0]+'">'+e[1]+'</option>'; }).join('');
+                tr.innerHTML =
+                    '<td style="padding:5px 8px"><select name="'+optKey+'[gads_events]['+idx+'][trigger]" style="width:100%">'+opts+'</select></td>'+
+                    '<td style="padding:5px 8px"><input type="text" name="'+optKey+'[gads_events]['+idx+'][send_to]" placeholder="AW-XXXXXXXXX/XXXXXXXXXXXXXXXXXXXX" style="width:100%;font-family:monospace;font-size:.82em" /></td>'+
+                    '<td style="padding:5px 8px"><input type="number" name="'+optKey+'[gads_events]['+idx+'][value]" value="0" step="0.01" min="0" style="width:68px" /></td>'+
+                    '<td style="padding:5px 8px"><input type="text" name="'+optKey+'[gads_events]['+idx+'][currency]" value="EUR" maxlength="3" style="width:46px;text-transform:uppercase" /></td>'+
+                    '<td style="padding:5px 4px"><button type="button" class="button gads-del" style="color:#b32d2e;border-color:#b32d2e;padding:0 6px;min-height:28px">✕</button></td>';
+                return tr;
+            }
+
+            document.getElementById('gads-add-row').addEventListener('click', function(){
+                body.appendChild(makeRow(body.querySelectorAll('.gads-row').length));
+            });
+
+            body.addEventListener('click', function(e){
+                if (!e.target.classList.contains('gads-del')) return;
+                var row = e.target.closest('.gads-row');
+                if (body.querySelectorAll('.gads-row').length > 1) {
+                    row.remove(); reindex();
+                } else {
+                    row.querySelectorAll('input').forEach(function(inp){
+                        inp.value = inp.name.includes('[currency]') ? 'EUR' : (inp.type === 'number' ? '0' : '');
+                    });
+                }
+            });
+        })();
+        </script>
+        <?php
     }
 
     public function field_gtm_enabled(){
