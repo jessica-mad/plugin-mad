@@ -1652,7 +1652,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 currency: CURRENCY,
                 value:    +(p.price * qty).toFixed(2),
                 items:    [item]
-            }
+            },
+            plugin: 'MADSuite'
         });
     }
 
