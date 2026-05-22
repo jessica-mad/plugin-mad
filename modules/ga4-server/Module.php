@@ -1749,7 +1749,7 @@ fbq('track', 'PageView');
         $wc_user    = wp_get_current_user();
         $user_role  = !empty($wc_user->roles) ? $wc_user->roles[0] : 'guest';
         $post_id    = (int) get_the_ID();
-        $page_title = get_the_title() ?: get_bloginfo('name');
+        $page_title = wp_specialchars_decode(get_the_title() ?: get_bloginfo('name'), ENT_QUOTES);
 
         $catalog_json  = wp_json_encode((object) $this->page_products);
         $currency_json = wp_json_encode(get_woocommerce_currency());
