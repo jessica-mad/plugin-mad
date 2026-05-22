@@ -1758,6 +1758,7 @@ fbq('track', 'PageView');
         $auto_json     = wp_json_encode([
             'user_role'  => $user_role,
             'post_id'    => $post_id,
+            'post_type'  => get_post_type() ?: '',
             'page_title' => $page_title,
         ]);
 
@@ -1806,6 +1807,7 @@ fbq('track', 'PageView');
             event_id:   genUUID(),
             user_role:  AUTO.user_role,
             post_id:    AUTO.post_id,
+            post_type:  AUTO.post_type,
             page_title: AUTO.page_title || document.title,
             event_url:  window.location.href,
             plugin:     'MADSuite'
