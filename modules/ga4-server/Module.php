@@ -1672,10 +1672,21 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     if (typeof jQuery !== 'undefined') {
         jQuery(document.body).on('added_to_cart', function(e, fragments, cartHash, $btn) {
             try {
-                if (!$btn || !$btn.length) return;
-                var productId   = $btn.data('product_id');
-                var variationId = $btn.data('variation_id') || null;
-                var qty         = parseInt($btn.data('quantity') || '1', 10);
+                var productId   = $btn ? $btn.data('product_id')   : null;
+                var variationId = $btn ? $btn.data('variation_id') : null;
+                var qty         = $btn ? parseInt($btn.data('quantity') || '1', 10) : 1;
+
+                // Single-product page: submit button has no data-* attrs — read from the form
+                if (!productId && $btn && $btn.length) {
+                    var $form = $btn.closest('form.cart');
+                    if ($form.length) {
+                        productId   = $form.find('input[name="add-to-cart"]').val()    || null;
+                        variationId = $form.find('input[name="variation_id"]').val()   || null;
+                        qty         = parseInt($form.find('input[name="quantity"]').val() || '1', 10);
+                    }
+                }
+
+                if (!productId) return;
                 pushAddToCart(productId, variationId, qty);
             } catch(e) {}
         });
