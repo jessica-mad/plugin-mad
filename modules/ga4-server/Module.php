@@ -39,6 +39,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
         add_action('wp_ajax_nopriv_mad_ads_track_event',    [$this, 'handle_track_event']);
         add_action('wp_ajax_mad_ads_track_event',           [$this, 'handle_track_event']);
+        add_action('wp_ajax_mad_ads_refresh_row',           [$this, 'handle_refresh_row']);
         add_action('admin_enqueue_scripts',                 [$this, 'enqueue_admin_assets']);
 
         // Consent Mode V2 — must fire before GTM snippet
@@ -184,6 +185,56 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ));
 
         wp_send_json_success();
+    }
+
+    /* =========================================================
+     * AJAX — manual refresh of customer history for a row
+     * ======================================================= */
+    public function handle_refresh_row(): void {
+        check_ajax_referer('mad_ads_refresh_row', 'nonce');
+        if (!current_user_can('manage_woocommerce')) wp_send_json_error('forbidden', 403);
+
+        global $wpdb;
+        $row_id = absint($_POST['row_id'] ?? 0);
+        if (!$row_id) wp_send_json_error('invalid_row');
+
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT id, order_id, wp_user_id FROM {$this->table} WHERE id = %d", $row_id
+        ));
+        if (!$row || !$row->order_id) wp_send_json_error('no_order');
+
+        $order = wc_get_order((int) $row->order_id);
+        if (!$order instanceof WC_Order) wp_send_json_error('order_not_found');
+
+        $history  = $this->compute_customer_history($order);
+        $wp_uid   = (int) $order->get_user_id();
+
+        $wpdb->update(
+            $this->table,
+            array_merge(['wp_user_id' => $wp_uid], $history),
+            ['id' => $row_id],
+            ['%d', '%d', '%d', '%f', '%s'],
+            ['%d']
+        );
+
+        // Resolve display name for response
+        $display = '';
+        if ($wp_uid) {
+            $u = get_userdata($wp_uid);
+            $display = $u ? ($u->display_name ?: $u->user_email) : '';
+        }
+
+        wp_send_json_success([
+            'wp_user_id'           => $wp_uid,
+            'display_name'         => $display,
+            'user_edit_url'        => $wp_uid ? admin_url('user-edit.php?user_id=' . $wp_uid) : '',
+            'customer_is_new'      => $history['customer_is_new'],
+            'customer_order_count' => $history['customer_order_count'],
+            'customer_total_spent' => number_format((float) $history['customer_total_spent'], 2) . ' ' . $order->get_currency(),
+            'customer_first_order' => $history['customer_first_order']
+                ? wp_date('d/m/Y', strtotime($history['customer_first_order']))
+                : '',
+        ]);
     }
 
     /* =========================================================
@@ -1159,6 +1210,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <th title="<?php esc_attr_e('Pedidos totales del cliente','mad-suite'); ?>"><?php esc_html_e('Pedidos','mad-suite'); ?></th>
                     <th title="<?php esc_attr_e('Total gastado por el cliente (histórico)','mad-suite'); ?>"><?php esc_html_e('Total hist.','mad-suite'); ?></th>
                     <th title="<?php esc_attr_e('Fecha de su primera compra','mad-suite'); ?>"><?php esc_html_e('1ª compra','mad-suite'); ?></th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -1285,10 +1337,20 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                             ? esc_html(number_format((float)$row->customer_total_spent, 2) . ' ' . ($row->currency ?: ''))
                             : '<span style="color:#c3c4c7">—</span>'; ?>
                     </td>
-                    <td style="white-space:nowrap;font-size:.82em">
+                    <td style="white-space:nowrap;font-size:.82em" class="cell-first-order">
                         <?php echo $row->customer_first_order
                             ? esc_html(wp_date('d/m/Y', strtotime($row->customer_first_order)))
                             : '<span style="color:#c3c4c7">—</span>'; ?>
+                    </td>
+                    <td>
+                        <?php if ($row->order_id): ?>
+                        <button type="button"
+                                class="button button-small mad-refresh-row"
+                                data-row="<?php echo esc_attr($row->id); ?>"
+                                title="<?php esc_attr_e('Actualizar historial del cliente','mad-suite'); ?>">
+                            ↻
+                        </button>
+                        <?php endif; ?>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -1307,6 +1369,67 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         </div>
         <?php endif; ?>
         <?php endif; ?>
+
+<script>
+(function(){
+    var ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
+    var nonce   = <?php echo wp_json_encode(wp_create_nonce('mad_ads_refresh_row')); ?>;
+    var newLabel = <?php echo wp_json_encode(__('Nuevo','mad-suite')); ?>;
+    var retLabel = <?php echo wp_json_encode(__('Recurrente','mad-suite')); ?>;
+    var guestLabel = <?php echo wp_json_encode(__('Invitado','mad-suite')); ?>;
+
+    document.querySelectorAll('.mad-refresh-row').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var rowId = btn.dataset.row;
+            var tr    = btn.closest('tr');
+            btn.disabled = true;
+            btn.textContent = '…';
+
+            var fd = new FormData();
+            fd.append('action',  'mad_ads_refresh_row');
+            fd.append('nonce',   nonce);
+            fd.append('row_id',  rowId);
+
+            fetch(ajaxUrl, {method:'POST', body:fd, credentials:'same-origin'})
+                .then(function(r){ return r.json(); })
+                .then(function(res) {
+                    if (!res.success) { btn.textContent = '✗'; return; }
+                    var d = res.data;
+
+                    // Cliente cell (index 12, 0-based)
+                    var cells = tr.querySelectorAll('td');
+                    var clienteCell = cells[12];
+                    if (d.wp_user_id && d.display_name) {
+                        clienteCell.innerHTML = '<a href="'+d.user_edit_url+'" style="font-size:.82em">'+escHtml(d.display_name)+'</a>';
+                    } else {
+                        clienteCell.innerHTML = '<span style="color:#8c8f94;font-size:.82em">'+guestLabel+'</span>';
+                    }
+
+                    // Tipo
+                    cells[13].innerHTML = d.customer_is_new === 1
+                        ? '<span class="badge-ok">'+newLabel+'</span>'
+                        : '<span class="badge-ret">'+retLabel+'</span>';
+
+                    // Pedidos
+                    cells[14].textContent = d.customer_order_count;
+
+                    // Total hist.
+                    cells[15].textContent = d.customer_total_spent;
+
+                    // 1ª compra
+                    cells[16].textContent = d.customer_first_order || '—';
+
+                    btn.textContent = '✓';
+                    btn.style.color = '#00a32a';
+                    setTimeout(function(){ btn.textContent = '↻'; btn.style.color = ''; btn.disabled = false; }, 2000);
+                })
+                .catch(function(){ btn.textContent = '✗'; btn.disabled = false; });
+        });
+    });
+
+    function escHtml(s){ var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+})();
+</script>
         <?php
     }
 
