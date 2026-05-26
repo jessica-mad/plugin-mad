@@ -11,7 +11,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
     private array $page_products    = [];
 
     // Bump to trigger dbDelta when schema changes
-    private const TABLE_VERSION = '1.4';
+    private const TABLE_VERSION = '1.5';
 
     public function __construct($core){
         $this->core       = $core;
@@ -86,10 +86,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             funnel_add_to_cart    smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
             funnel_begin_checkout smallint(5)    UNSIGNED NOT NULL DEFAULT 0,
             visitor_ip            varchar(45)    DEFAULT '',
+            wp_user_id            bigint(20)     NOT NULL DEFAULT 0,
             order_id              bigint(20)     DEFAULT NULL,
             order_total           decimal(10,2)  DEFAULT NULL,
             currency              varchar(10)    DEFAULT '',
             converted_at          datetime       DEFAULT NULL,
+            customer_is_new       tinyint(1)     DEFAULT NULL,
+            customer_order_count  int(11)        DEFAULT NULL,
+            customer_total_spent  decimal(10,2)  DEFAULT NULL,
+            customer_first_order  datetime       DEFAULT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY   platform_click (platform(10), click_id(191)),
             KEY          platform (platform),
@@ -164,6 +169,10 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         if ($event === 'add_to_cart')    $set_parts[] = 'funnel_add_to_cart = funnel_add_to_cart + 1';
         if ($event === 'begin_checkout') $set_parts[] = 'funnel_begin_checkout = funnel_begin_checkout + 1';
 
+        // Identify logged-in user if not yet captured on this row
+        $uid = get_current_user_id();
+        if ($uid) $set_parts[] = $wpdb->prepare('wp_user_id = CASE WHEN wp_user_id = 0 THEN %d ELSE wp_user_id END', $uid);
+
         if (empty($set_parts)) {
             wp_send_json_success();
         }
@@ -215,7 +224,8 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'landing_url'  => $this->get_current_url(),
             'captured_at'  => current_time('mysql'),
             'visitor_ip'   => $this->get_visitor_ip(),
-        ], ['%s','%s','%s','%s','%s','%s','%s','%s','%s']);
+            'wp_user_id'   => get_current_user_id(),
+        ], ['%s','%s','%s','%s','%s','%s','%s','%s','%s','%d']);
     }
 
     /* =========================================================
@@ -248,19 +258,49 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
     private function link_order_to_click(WC_Order $order, $platform, $click_id, $browser_id){
         global $wpdb;
+        $history = $this->compute_customer_history($order);
         $wpdb->update(
             $this->table,
-            [
+            array_merge([
                 'order_id'     => $order->get_id(),
                 'order_total'  => (float) $order->get_total(),
                 'currency'     => $order->get_currency(),
                 'converted_at' => current_time('mysql'),
                 'browser_id'   => $browser_id ?: '',
-            ],
+                'wp_user_id'   => (int) $order->get_user_id(),
+            ], $history),
             ['platform' => $platform, 'click_id' => $click_id],
-            ['%d','%f','%s','%s','%s'],
+            ['%d','%f','%s','%s','%s','%d','%d','%d','%f','%s'],
             ['%s','%s']
         );
+    }
+
+    private function compute_customer_history(WC_Order $order): array {
+        $customer_id = (int) $order->get_user_id();
+        $args = [
+            'status'  => ['completed', 'processing'],
+            'limit'   => -1,
+            'return'  => 'objects',
+            'orderby' => 'date',
+            'order'   => 'ASC',
+        ];
+        if ($customer_id) {
+            $args['customer_id'] = $customer_id;
+        } else {
+            $args['billing_email'] = $order->get_billing_email();
+        }
+
+        $orders = wc_get_orders($args);
+        $count  = count($orders);
+        $total  = array_sum(array_map(fn($o) => (float) $o->get_total(), $orders));
+        $first  = !empty($orders) ? ($orders[0]->get_date_created()?->date('Y-m-d H:i:s') ?? null) : null;
+
+        return [
+            'customer_is_new'      => ($count <= 1) ? 1 : 0,
+            'customer_order_count' => $count,
+            'customer_total_spent' => round($total, 2),
+            'customer_first_order' => $first,
+        ];
     }
 
     /* =========================================================
@@ -874,6 +914,15 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         ));
         $total_pages = (int) ceil($total_filtered / $per_page);
 
+        // Batch-load WP users referenced on this page (avoids N+1 queries)
+        $user_ids = array_filter(array_unique(array_column((array) $rows, 'wp_user_id')));
+        $users_map = [];
+        if (!empty($user_ids)) {
+            foreach (get_users(['include' => $user_ids, 'fields' => ['ID','display_name','user_email']]) as $u) {
+                $users_map[(int)$u->ID] = $u->display_name ?: $u->user_email;
+            }
+        }
+
         // IPs with 3+ sessions (suspicious bot/click-farm activity)
         $suspicious_ips = [];
         $ip_counts = $wpdb->get_results(
@@ -934,8 +983,9 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         .ads-tbl td{padding:8px 10px;border-bottom:1px solid #f0f0f1;font-size:.8em;vertical-align:middle}
         .ads-tbl tr:last-child td{border-bottom:none}
         .ads-tbl tbody tr:hover td{background:#f9f9f9}
-        .badge-ok{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:600;font-size:.76em;background:#edfaef;color:#00a32a}
-        .badge-no{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.76em;background:#f0f0f1;color:#646970}
+        .badge-ok {display:inline-block;padding:2px 8px;border-radius:10px;font-weight:600;font-size:.76em;background:#edfaef;color:#00a32a}
+        .badge-no {display:inline-block;padding:2px 8px;border-radius:10px;font-size:.76em;background:#f0f0f1;color:#646970}
+        .badge-ret{display:inline-block;padding:2px 8px;border-radius:10px;font-weight:600;font-size:.76em;background:#dde9f7;color:#2271b1}
         .funnel-check{color:#00a32a;font-weight:700}
         .funnel-dash{color:#c3c4c7}
         .ads-mono{font-family:monospace;font-size:.76em;color:#8c8f94}
@@ -1104,6 +1154,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     <th><?php esc_html_e('Pedido','mad-suite'); ?></th>
                     <th><?php esc_html_e('Importe','mad-suite'); ?></th>
                     <th><?php esc_html_e('Estado','mad-suite'); ?></th>
+                    <th><?php esc_html_e('Cliente','mad-suite'); ?></th>
+                    <th title="<?php esc_attr_e('Nuevo o recurrente en el momento de la compra','mad-suite'); ?>"><?php esc_html_e('Tipo','mad-suite'); ?></th>
+                    <th title="<?php esc_attr_e('Pedidos totales del cliente','mad-suite'); ?>"><?php esc_html_e('Pedidos','mad-suite'); ?></th>
+                    <th title="<?php esc_attr_e('Total gastado por el cliente (histórico)','mad-suite'); ?>"><?php esc_html_e('Total hist.','mad-suite'); ?></th>
+                    <th title="<?php esc_attr_e('Fecha de su primera compra','mad-suite'); ?>"><?php esc_html_e('1ª compra','mad-suite'); ?></th>
                 </tr>
             </thead>
             <tbody>
@@ -1195,6 +1250,45 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                         <?php echo $row->order_id
                             ? '<span class="badge-ok">' . esc_html__('Compra','mad-suite') . '</span>'
                             : '<span class="badge-no">' . esc_html__('Sin compra','mad-suite') . '</span>'; ?>
+                    </td>
+                    <td style="white-space:nowrap">
+                        <?php
+                        $uid = (int)($row->wp_user_id ?? 0);
+                        if ($uid && isset($users_map[$uid])):
+                            printf('<a href="%s" style="font-size:.82em">%s</a>',
+                                esc_url(admin_url('user-edit.php?user_id=' . $uid)),
+                                esc_html($users_map[$uid])
+                            );
+                        elseif ($row->order_id):
+                            echo '<span style="color:#8c8f94;font-size:.82em">' . esc_html__('Invitado','mad-suite') . '</span>';
+                        else:
+                            echo '<span style="color:#c3c4c7">—</span>';
+                        endif;
+                        ?>
+                    </td>
+                    <td>
+                        <?php if ($row->customer_is_new === null || $row->customer_is_new === ''): ?>
+                            <span style="color:#c3c4c7">—</span>
+                        <?php elseif ((int)$row->customer_is_new === 1): ?>
+                            <span class="badge-ok" title="<?php esc_attr_e('Primera compra','mad-suite'); ?>"><?php esc_html_e('Nuevo','mad-suite'); ?></span>
+                        <?php else: ?>
+                            <span class="badge-ret" title="<?php esc_attr_e('Ya había comprado antes','mad-suite'); ?>"><?php esc_html_e('Recurrente','mad-suite'); ?></span>
+                        <?php endif; ?>
+                    </td>
+                    <td style="text-align:center">
+                        <?php echo $row->customer_order_count !== null
+                            ? esc_html((int)$row->customer_order_count)
+                            : '<span style="color:#c3c4c7">—</span>'; ?>
+                    </td>
+                    <td style="white-space:nowrap">
+                        <?php echo $row->customer_total_spent !== null
+                            ? esc_html(number_format((float)$row->customer_total_spent, 2) . ' ' . ($row->currency ?: ''))
+                            : '<span style="color:#c3c4c7">—</span>'; ?>
+                    </td>
+                    <td style="white-space:nowrap;font-size:.82em">
+                        <?php echo $row->customer_first_order
+                            ? esc_html(wp_date('d/m/Y', strtotime($row->customer_first_order)))
+                            : '<span style="color:#c3c4c7">—</span>'; ?>
                     </td>
                 </tr>
             <?php endforeach; ?>
