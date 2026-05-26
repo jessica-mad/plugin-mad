@@ -1303,7 +1303,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                             ? '<span class="badge-ok">' . esc_html__('Compra','mad-suite') . '</span>'
                             : '<span class="badge-no">' . esc_html__('Sin compra','mad-suite') . '</span>'; ?>
                     </td>
-                    <td style="white-space:nowrap">
+                    <td class="cell-cliente" style="white-space:nowrap">
                         <?php
                         $uid = (int)($row->wp_user_id ?? 0);
                         if ($uid && isset($users_map[$uid])):
@@ -1318,7 +1318,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                         endif;
                         ?>
                     </td>
-                    <td>
+                    <td class="cell-tipo">
                         <?php if ($row->customer_is_new === null || $row->customer_is_new === ''): ?>
                             <span style="color:#c3c4c7">—</span>
                         <?php elseif ((int)$row->customer_is_new === 1): ?>
@@ -1327,17 +1327,17 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                             <span class="badge-ret" title="<?php esc_attr_e('Ya había comprado antes','mad-suite'); ?>"><?php esc_html_e('Recurrente','mad-suite'); ?></span>
                         <?php endif; ?>
                     </td>
-                    <td style="text-align:center">
+                    <td class="cell-pedidos" style="text-align:center">
                         <?php echo $row->customer_order_count !== null
                             ? esc_html((int)$row->customer_order_count)
                             : '<span style="color:#c3c4c7">—</span>'; ?>
                     </td>
-                    <td style="white-space:nowrap">
+                    <td class="cell-total-hist" style="white-space:nowrap">
                         <?php echo $row->customer_total_spent !== null
                             ? esc_html(number_format((float)$row->customer_total_spent, 2) . ' ' . ($row->currency ?: ''))
                             : '<span style="color:#c3c4c7">—</span>'; ?>
                     </td>
-                    <td style="white-space:nowrap;font-size:.82em" class="cell-first-order">
+                    <td class="cell-primera-compra" style="white-space:nowrap;font-size:.82em">
                         <?php echo $row->customer_first_order
                             ? esc_html(wp_date('d/m/Y', strtotime($row->customer_first_order)))
                             : '<span style="color:#c3c4c7">—</span>'; ?>
@@ -1396,28 +1396,21 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                     if (!res.success) { btn.textContent = '✗'; return; }
                     var d = res.data;
 
-                    // Cliente cell (index 12, 0-based)
-                    var cells = tr.querySelectorAll('td');
-                    var clienteCell = cells[12];
+                    var q = function(cls){ return tr.querySelector('.'+cls); };
+
                     if (d.wp_user_id && d.display_name) {
-                        clienteCell.innerHTML = '<a href="'+d.user_edit_url+'" style="font-size:.82em">'+escHtml(d.display_name)+'</a>';
+                        q('cell-cliente').innerHTML = '<a href="'+d.user_edit_url+'" style="font-size:.82em">'+escHtml(d.display_name)+'</a>';
                     } else {
-                        clienteCell.innerHTML = '<span style="color:#8c8f94;font-size:.82em">'+guestLabel+'</span>';
+                        q('cell-cliente').innerHTML = '<span style="color:#8c8f94;font-size:.82em">'+guestLabel+'</span>';
                     }
 
-                    // Tipo
-                    cells[13].innerHTML = d.customer_is_new === 1
+                    q('cell-tipo').innerHTML = d.customer_is_new === 1
                         ? '<span class="badge-ok">'+newLabel+'</span>'
                         : '<span class="badge-ret">'+retLabel+'</span>';
 
-                    // Pedidos
-                    cells[14].textContent = d.customer_order_count;
-
-                    // Total hist.
-                    cells[15].textContent = d.customer_total_spent;
-
-                    // 1ª compra
-                    cells[16].textContent = d.customer_first_order || '—';
+                    q('cell-pedidos').textContent    = d.customer_order_count;
+                    q('cell-total-hist').textContent = d.customer_total_spent;
+                    q('cell-primera-compra').textContent = d.customer_first_order || '—';
 
                     btn.textContent = '✓';
                     btn.style.color = '#00a32a';
