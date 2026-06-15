@@ -2,14 +2,6 @@
 /**
  * Olofane — Configuración específica para el cliente Olofane.
  *
- * Features:
- *  1. Etiqueta de texto sobre imagen de producto agotado en catálogo.
- *  2. Área de notas del pedido expandida por defecto en checkout.
- *  3. Precio en ficha de producto: grande sin IVA + pequeño con IVA.
- *  4. Campo NIF/CIF/VAT requerido en checkout para roles configurables.
- *  5. Descripciones con IA (Claude/OpenAI) + traducción automática WPML (ES→EN/FR).
- *  6. WPML + Quotes: emails en idioma del cliente + herramienta de traducción en pedidos.
- *
  * @package MAD_Suite/Olofane
  */
 
@@ -23,8 +15,6 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     private const OPTION_KEY = 'madsuite_olofane_settings';
     private const NONCE_KEY  = 'mads_olofane_save';
 
-    // ── MAD_Suite_Module identity ────────────────────────────────────────────
-
     public function __construct( $core ) {}
 
     public function slug()        { return 'olofane'; }
@@ -34,33 +24,24 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     public function description() { return __( 'Ajustes exclusivos para el cliente Olofane.', 'mad-suite' ); }
     public function required_plugins() { return [ 'WooCommerce' => 'woocommerce/woocommerce.php' ]; }
 
-    // ── Settings helper ──────────────────────────────────────────────────────
+    // ── Settings ─────────────────────────────────────────────────────────────
 
     private function get_settings(): array {
         $defaults = [
-            // Feature 1 – out-of-stock label
             'outofstock_label'         => __( 'Agotado', 'mad-suite' ),
             'outofstock_label_enabled' => true,
-
-            // Feature 3 – dual price display
             'dual_price_enabled'       => true,
-
-            // Feature 4 – VAT field
             'vat_field_roles'          => [],
             'vat_field_label'          => __( 'NIF/CIF/VAT Number', 'mad-suite' ),
-
-            // Feature 5 – AI descriptions
-            'ai_provider'              => 'claude',   // 'claude' | 'openai'
+            'ai_provider'              => 'claude',
             'ai_api_key_claude'        => '',
             'ai_api_key_openai'        => '',
             'ai_model_claude'          => 'claude-sonnet-4-6',
             'ai_model_openai'          => 'gpt-4o',
             'ai_prompt_description'    => 'Escribe una descripción de producto atractiva, profesional y en español para: {product_name}. Incluye características principales y beneficios. Devuelve solo el texto, sin etiquetas HTML.',
             'ai_prompt_translate_en'   => 'Translate the following Spanish product description to English. Return only the translated text:\n\n{text}',
-            'ai_prompt_translate_fr'   => 'Traduis la description de produit suivante de l\'espagnol vers le français. Retourne uniquement le texte traduit :\n\n{text}',
+            'ai_prompt_translate_fr'   => "Traduis la description de produit suivante de l'espagnol vers le français. Retourne uniquement le texte traduit :\n\n{text}",
             'ai_wpml_enabled'          => true,
-
-            // Feature 6 – WPML + Quotes
             'wpml_quotes_enabled'      => true,
         ];
 
@@ -68,40 +49,59 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );
     }
 
-    // ── Lifecycle hooks ──────────────────────────────────────────────────────
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     public function init(): void {
         $s = $this->get_settings();
 
-        // Feature 1 – out-of-stock label overlay
+        // Feature 1 – out-of-stock overlay (wraps the product image directly)
         if ( ! empty( $s['outofstock_label_enabled'] ) ) {
-            add_action( 'woocommerce_before_shop_loop_item_title', [ $this, 'render_outofstock_overlay' ], 11 );
+            add_filter( 'woocommerce_product_get_image', [ $this, 'wrap_outofstock_image' ], 10, 6 );
             add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_frontend_assets' ] );
         }
 
-        // Feature 2 – expanded order notes textarea
-        add_filter( 'woocommerce_checkout_fields', [ $this, 'expand_order_notes' ], 20 );
+        // Feature 2 – expanded order notes
+        // Classic checkout: filter fields
+        add_filter( 'woocommerce_checkout_fields', [ $this, 'expand_order_notes_classic' ], 20 );
+        // Blocks checkout: JS MutationObserver to auto-click the "Add note" checkbox
+        add_action( 'wp_footer', [ $this, 'expand_order_notes_blocks_js' ] );
 
         // Feature 3 – dual price on product page
+        // Priority 1000 so it runs AFTER Quotes module's maybe_restore_price (priority 999)
         if ( ! empty( $s['dual_price_enabled'] ) ) {
-            add_filter( 'woocommerce_get_price_html', [ $this, 'dual_price_display' ], 20, 2 );
+            add_filter( 'woocommerce_get_price_html',      [ $this, 'dual_price_display' ], 1000, 2 );
+            add_filter( 'woocommerce_variable_price_html', [ $this, 'dual_price_display' ], 1000, 2 );
         }
 
         // Feature 4 – VAT/NIF field
         if ( ! empty( $s['vat_field_roles'] ) ) {
-            add_filter( 'woocommerce_checkout_fields',       [ $this, 'add_vat_checkout_field' ], 25 );
-            add_action( 'woocommerce_checkout_process',      [ $this, 'validate_vat_field' ] );
-            add_action( 'woocommerce_checkout_update_order_meta', [ $this, 'save_vat_to_order' ] );
-            add_action( 'woocommerce_checkout_update_customer', [ $this, 'save_vat_to_user' ], 10, 2 );
+            // Classic checkout
+            add_filter( 'woocommerce_checkout_fields',            [ $this, 'add_vat_checkout_field' ], 25 );
+            add_action( 'woocommerce_checkout_process',           [ $this, 'validate_vat_field_classic' ] );
+            add_action( 'woocommerce_checkout_update_order_meta', [ $this, 'save_vat_to_order_classic' ] );
+            add_action( 'woocommerce_checkout_update_customer',   [ $this, 'save_vat_to_user_classic' ], 10, 2 );
+
+            // Blocks checkout (WooCommerce Blocks / Store API)
+            add_action( 'init', [ $this, 'register_vat_blocks_field' ], 10 );
+            add_action( 'woocommerce_store_api_checkout_order_processed', [ $this, 'save_vat_from_blocks' ] );
+            add_action( 'wp_footer', [ $this, 'prefill_vat_blocks_js' ] );
         }
 
-        // Feature 5 – AI descriptions (admin only)
+        // Feature 5 – AI descriptions (admin only, handled in AI_Description class)
         if ( is_admin() ) {
             $ai = new MAD_Olofane_AI_Description( $s );
             $ai->init();
         }
 
-        // Feature 6 – WPML + Quotes translation tool
+        // Feature 6 – NIF in WP admin user profiles
+        if ( ! empty( $s['vat_field_roles'] ) ) {
+            add_action( 'show_user_profile',       [ $this, 'render_vat_user_profile_field' ] );
+            add_action( 'edit_user_profile',       [ $this, 'render_vat_user_profile_field' ] );
+            add_action( 'personal_options_update', [ $this, 'save_vat_user_profile_field' ] );
+            add_action( 'edit_user_profile_update',[ $this, 'save_vat_user_profile_field' ] );
+        }
+
+        // Feature 6b – WPML + Quotes translation tool
         if ( ! empty( $s['wpml_quotes_enabled'] ) ) {
             $wpml = new MAD_Olofane_WPML_Quotes( $s );
             $wpml->init();
@@ -112,18 +112,22 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         add_action( 'admin_post_mads_olofane_save', [ $this, 'handle_save_settings' ] );
     }
 
-    // ── Feature 1: Out-of-stock overlay ─────────────────────────────────────
+    // ── Feature 1: Out-of-stock overlay ──────────────────────────────────────
+    // Wraps the product image HTML so the label sits inside the image container,
+    // making CSS position:absolute reliable regardless of theme structure.
 
-    public function render_outofstock_overlay(): void {
-        global $product;
-        if ( ! $product instanceof WC_Product ) return;
-        if ( $product->is_in_stock() ) return;
+    public function wrap_outofstock_image( $image, $product, $size, $attr, $placeholder, $image_id ): string {
+        if ( ! $product instanceof WC_Product ) return $image;
+        if ( $product->is_in_stock() ) return $image;
 
         $s     = $this->get_settings();
         $label = esc_html( trim( $s['outofstock_label'] ) );
-        if ( $label === '' ) return;
+        if ( $label === '' ) return $image;
 
-        echo '<span class="mad-olofane-outofstock-label">' . $label . '</span>';
+        return '<span class="mad-olofane-outofstock-wrap">'
+            . $image
+            . '<span class="mad-olofane-outofstock-label">' . $label . '</span>'
+            . '</span>';
     }
 
     public function enqueue_frontend_assets(): void {
@@ -133,7 +137,12 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
 
     private function outofstock_css(): string {
         return '
-        .woocommerce ul.products li.product { position: relative; }
+        /* Olofane: out-of-stock overlay */
+        .mad-olofane-outofstock-wrap {
+            position: relative;
+            display: block;
+            overflow: hidden;
+        }
         .mad-olofane-outofstock-label {
             position: absolute;
             top: 50%;
@@ -143,9 +152,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             color: #fff;
             font-size: 0.85rem;
             font-weight: 600;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.08em;
             text-transform: uppercase;
-            padding: 6px 14px;
+            padding: 7px 16px;
             border-radius: 3px;
             pointer-events: none;
             z-index: 10;
@@ -153,40 +162,71 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         }';
     }
 
-    // ── Feature 2: Expand order notes ────────────────────────────────────────
+    // ── Feature 2: Order notes expanded ──────────────────────────────────────
 
-    public function expand_order_notes( array $fields ): array {
+    public function expand_order_notes_classic( array $fields ): array {
         if ( isset( $fields['order']['order_comments'] ) ) {
             $fields['order']['order_comments']['rows'] = 5;
-            $fields['order']['order_comments']['class'][] = 'mad-olofane-notes-expanded';
         }
         return $fields;
     }
 
-    // ── Feature 3: Dual price display (excl. + incl. VAT) ───────────────────
+    public function expand_order_notes_blocks_js(): void {
+        if ( ! is_checkout() ) return;
+        ?>
+        <script>
+        (function () {
+            'use strict';
+            // Auto-click the "Add order note" checkbox in the WooCommerce Blocks checkout
+            // so the textarea is open by default.
+            function tryExpandNotes() {
+                var cb = document.querySelector(
+                    '#order-notes .wc-block-components-checkbox__input, '
+                    + '.wc-block-checkout__add-note .wc-block-components-checkbox__input'
+                );
+                if (cb && !cb.checked) {
+                    cb.click();
+                    return true;
+                }
+                return !!cb;
+            }
+
+            if (!tryExpandNotes()) {
+                var obs = new MutationObserver(function (mutations, observer) {
+                    if (tryExpandNotes()) observer.disconnect();
+                });
+                obs.observe(document.body, { childList: true, subtree: true });
+                // Safety: disconnect after 15 s to avoid leaking observers
+                setTimeout(function () { obs.disconnect(); }, 15000);
+            }
+        })();
+        </script>
+        <?php
+    }
+
+    // ── Feature 3: Dual price (excl. + incl. VAT) ────────────────────────────
+    // Priority 1000 ensures this runs AFTER the Quotes module's maybe_restore_price
+    // (priority 999), which otherwise overwrites our transformation.
 
     public function dual_price_display( string $price_html, WC_Product $product ): string {
         if ( ! is_product() ) return $price_html;
         if ( $price_html === '' ) return $price_html;
 
-        // Variable products: use min price; simple/external: use active price.
         if ( $product->is_type( 'variable' ) ) {
             /** @var WC_Product_Variable $product */
-            $min_price = (float) $product->get_variation_price( 'min', true );
-            $max_price = (float) $product->get_variation_price( 'max', true );
+            $min_price = (float) $product->get_variation_price( 'min' );
+            $max_price = (float) $product->get_variation_price( 'max' );
             if ( $min_price <= 0 ) return $price_html;
 
             $excl_min = (float) wc_get_price_excluding_tax( $product, [ 'price' => $min_price ] );
             $incl_min = (float) wc_get_price_including_tax( $product, [ 'price' => $min_price ] );
 
             if ( $min_price !== $max_price ) {
-                $excl_max = (float) wc_get_price_excluding_tax( $product, [ 'price' => $max_price ] );
-                $range    = wc_price( $excl_min ) . ' – ' . wc_price( $excl_max );
-                $excl_formatted = $range;
+                $excl_max       = (float) wc_get_price_excluding_tax( $product, [ 'price' => $max_price ] );
+                $excl_formatted = wc_price( $excl_min ) . ' – ' . wc_price( $excl_max );
             } else {
                 $excl_formatted = wc_price( $excl_min );
             }
-
             $incl_formatted = wc_price( $incl_min );
         } else {
             $price_excl = (float) wc_get_price_excluding_tax( $product );
@@ -201,9 +241,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( ! $css_printed ) {
             $css_printed = true;
             $css = '<style>
-                .mad-olofane-price-excl { display:block; font-size:1.4em; font-weight:700; line-height:1.2; }
-                .mad-olofane-price-excl small { font-size:0.55em; font-weight:400; opacity:.75; }
-                .mad-olofane-price-incl { display:block; font-size:0.85em; opacity:.7; margin-top:2px; }
+                .mad-olofane-price-excl { display:block; font-size:1.5em; font-weight:700; line-height:1.15; }
+                .mad-olofane-price-excl small { font-size:0.5em; font-weight:400; opacity:.7; }
+                .mad-olofane-price-incl { display:block; font-size:0.85em; color:#666; margin-top:3px; }
                 .mad-olofane-price-incl small { font-size:0.9em; }
             </style>';
         }
@@ -218,7 +258,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         );
     }
 
-    // ── Feature 4: VAT / NIF field ───────────────────────────────────────────
+    // ── Feature 4: VAT / NIF — classic checkout ───────────────────────────────
 
     private function current_user_needs_vat(): bool {
         $s     = $this->get_settings();
@@ -232,9 +272,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     public function add_vat_checkout_field( array $fields ): array {
         if ( ! $this->current_user_needs_vat() ) return $fields;
 
-        $s       = $this->get_settings();
-        $label   = ! empty( $s['vat_field_label'] ) ? $s['vat_field_label'] : __( 'NIF/CIF/VAT Number', 'mad-suite' );
-        $default = get_user_meta( get_current_user_id(), 'billing_vat', true );
+        $s     = $this->get_settings();
+        $label = ! empty( $s['vat_field_label'] ) ? $s['vat_field_label'] : __( 'NIF/CIF/VAT Number', 'mad-suite' );
 
         $fields['billing']['billing_vat'] = [
             'label'       => $label,
@@ -242,17 +281,17 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'required'    => true,
             'class'       => [ 'form-row-wide' ],
             'priority'    => 25,
-            'default'     => $default,
+            'default'     => get_user_meta( get_current_user_id(), 'billing_vat', true ),
         ];
 
         return $fields;
     }
 
-    public function validate_vat_field(): void {
+    public function validate_vat_field_classic(): void {
         if ( ! $this->current_user_needs_vat() ) return;
         $val = isset( $_POST['billing_vat'] ) ? sanitize_text_field( wp_unslash( $_POST['billing_vat'] ) ) : '';
         if ( empty( $val ) ) {
-            $s = $this->get_settings();
+            $s     = $this->get_settings();
             $label = $s['vat_field_label'] ?? __( 'NIF/CIF/VAT Number', 'mad-suite' );
             wc_add_notice(
                 sprintf( __( 'El campo "%s" es obligatorio.', 'mad-suite' ), esc_html( $label ) ),
@@ -261,20 +300,157 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         }
     }
 
-    public function save_vat_to_order( int $order_id ): void {
+    public function save_vat_to_order_classic( int $order_id ): void {
         if ( ! isset( $_POST['billing_vat'] ) ) return;
         $val = sanitize_text_field( wp_unslash( $_POST['billing_vat'] ) );
         update_post_meta( $order_id, '_billing_vat', $val );
     }
 
-    public function save_vat_to_user( WC_Customer $customer, array $data ): void {
+    public function save_vat_to_user_classic( WC_Customer $customer, array $data ): void {
         $val = isset( $_POST['billing_vat'] ) ? sanitize_text_field( wp_unslash( $_POST['billing_vat'] ) ) : '';
         if ( $val !== '' && $customer->get_id() ) {
             update_user_meta( $customer->get_id(), 'billing_vat', $val );
         }
     }
 
-    // ── Settings save handler ────────────────────────────────────────────────
+    // ── Feature 4: VAT / NIF — WooCommerce Blocks checkout ───────────────────
+
+    public function register_vat_blocks_field(): void {
+        if ( ! function_exists( 'woocommerce_register_additional_checkout_field' ) ) return;
+
+        $s     = $this->get_settings();
+        $label = ! empty( $s['vat_field_label'] ) ? $s['vat_field_label'] : __( 'NIF/CIF/VAT Number', 'mad-suite' );
+
+        woocommerce_register_additional_checkout_field( [
+            'id'                => 'mad-olofane/billing-vat',
+            'label'             => $label,
+            'location'          => 'address',
+            'required'          => false,       // conditional: enforced via validate_callback
+            'sanitize_callback' => 'sanitize_text_field',
+            'validate_callback' => [ $this, 'validate_vat_blocks_field' ],
+        ] );
+    }
+
+    public function validate_vat_blocks_field( $value ) {
+        if ( ! $this->current_user_needs_vat() ) return true;
+        if ( empty( trim( (string) $value ) ) ) {
+            $s     = $this->get_settings();
+            $label = $s['vat_field_label'] ?? __( 'NIF/CIF/VAT Number', 'mad-suite' );
+            return new WP_Error(
+                'required_vat',
+                sprintf( __( 'El campo "%s" es obligatorio.', 'mad-suite' ), $label )
+            );
+        }
+        return true;
+    }
+
+    public function save_vat_from_blocks( WC_Order $order ): void {
+        // WC Blocks stores the additional field value in order meta with the field ID as key
+        $val = $order->get_meta( 'mad-olofane/billing-vat' );
+        if ( ! $val ) return;
+
+        // Mirror to _billing_vat for consistency with classic checkout and admin display
+        $order->update_meta_data( '_billing_vat', $val );
+        $order->save();
+
+        if ( $order->get_customer_id() ) {
+            update_user_meta( $order->get_customer_id(), 'billing_vat', $val );
+        }
+    }
+
+    public function prefill_vat_blocks_js(): void {
+        if ( ! is_checkout() ) return;
+        if ( ! is_user_logged_in() ) return;
+        if ( ! $this->current_user_needs_vat() ) return;
+
+        $saved = get_user_meta( get_current_user_id(), 'billing_vat', true );
+        if ( empty( $saved ) ) return;
+        ?>
+        <script>
+        (function () {
+            'use strict';
+            var savedVat = <?php echo wp_json_encode( $saved ); ?>;
+
+            function tryFillVat() {
+                // WC Blocks renders the additional field input with an ID derived from the field id
+                var inp = document.querySelector(
+                    'input[id="billing-vat"], '
+                    + 'input[id*="billing-vat"], '
+                    + 'input[name="billing-vat"]'
+                );
+                if (!inp) {
+                    // Fallback: find by associated label text
+                    var labels = document.querySelectorAll('label');
+                    for (var i = 0; i < labels.length; i++) {
+                        var text = labels[i].textContent || '';
+                        if (text.indexOf('NIF') !== -1 || text.indexOf('VAT') !== -1) {
+                            var forId = labels[i].getAttribute('for');
+                            if (forId) { inp = document.getElementById(forId); }
+                            break;
+                        }
+                    }
+                }
+                if (inp && inp.value === '') {
+                    // React-controlled input requires native setter + synthetic event
+                    var nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    );
+                    nativeSetter.set.call(inp, savedVat);
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    return true;
+                }
+                return !!inp;
+            }
+
+            if (!tryFillVat()) {
+                var obs = new MutationObserver(function (mutations, observer) {
+                    if (tryFillVat()) observer.disconnect();
+                });
+                obs.observe(document.body, { childList: true, subtree: true });
+                setTimeout(function () { obs.disconnect(); }, 15000);
+            }
+        })();
+        </script>
+        <?php
+    }
+
+    // ── Feature 6: NIF in WP admin user profiles ─────────────────────────────
+
+    public function render_vat_user_profile_field( WP_User $user ): void {
+        $s     = $this->get_settings();
+        $label = ! empty( $s['vat_field_label'] ) ? $s['vat_field_label'] : __( 'NIF/CIF/VAT Number', 'mad-suite' );
+        $val   = get_user_meta( $user->ID, 'billing_vat', true );
+        $roles = array_filter( (array) ( $s['vat_field_roles'] ?? [] ) );
+        $note  = ! empty( array_intersect( (array) $user->roles, $roles ) )
+            ? __( 'Requerido en el checkout para este usuario.', 'mad-suite' )
+            : __( 'Este rol no requiere NIF en el checkout, pero puede guardarse igualmente.', 'mad-suite' );
+        ?>
+        <h2><?php esc_html_e( 'Datos de facturación (Olofane)', 'mad-suite' ); ?></h2>
+        <table class="form-table">
+            <tr>
+                <th><label for="mad_billing_vat"><?php echo esc_html( $label ); ?></label></th>
+                <td>
+                    <input type="text"
+                           id="mad_billing_vat"
+                           name="mad_billing_vat"
+                           value="<?php echo esc_attr( $val ); ?>"
+                           class="regular-text"
+                           placeholder="B12345678">
+                    <p class="description"><?php echo esc_html( $note ); ?></p>
+                </td>
+            </tr>
+        </table>
+        <?php
+    }
+
+    public function save_vat_user_profile_field( int $user_id ): void {
+        if ( ! current_user_can( 'edit_user', $user_id ) ) return;
+        if ( ! isset( $_POST['mad_billing_vat'] ) ) return;
+        $val = sanitize_text_field( wp_unslash( $_POST['mad_billing_vat'] ) );
+        update_user_meta( $user_id, 'billing_vat', $val );
+    }
+
+    // ── Settings save ────────────────────────────────────────────────────────
 
     public function handle_save_settings(): void {
         if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) wp_die( 'Sin permisos.' );
@@ -291,8 +467,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                                             : [],
             'vat_field_label'          => sanitize_text_field( $post['vat_field_label'] ?? '' ),
             'ai_provider'              => in_array( $post['ai_provider'] ?? '', [ 'claude', 'openai' ], true )
-                                            ? $post['ai_provider']
-                                            : 'claude',
+                                            ? $post['ai_provider'] : 'claude',
             'ai_api_key_claude'        => sanitize_text_field( $post['ai_api_key_claude'] ?? '' ),
             'ai_api_key_openai'        => sanitize_text_field( $post['ai_api_key_openai'] ?? '' ),
             'ai_model_claude'          => sanitize_text_field( $post['ai_model_claude'] ?? 'claude-sonnet-4-6' ),
@@ -331,8 +506,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                 <?php wp_nonce_field( self::NONCE_KEY, 'mads_olofane_nonce' ); ?>
                 <input type="hidden" name="action" value="mads_olofane_save">
 
-                <!-- ── Feature 1: Out-of-stock label ──────────────────────── -->
-                <h2><?php esc_html_e( '1. Etiqueta de producto agotado', 'mad-suite' ); ?></h2>
+                <!-- ── 1: Out-of-stock ─────────────────────────────────── -->
+                <h2><?php esc_html_e( '1. Etiqueta de producto agotado en catálogo', 'mad-suite' ); ?></h2>
                 <table class="form-table" role="presentation">
                     <tr>
                         <th><?php esc_html_e( 'Activar etiqueta', 'mad-suite' ); ?></th>
@@ -350,11 +525,15 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             <input type="text" id="outofstock_label" name="outofstock_label"
                                 value="<?php echo esc_attr( $s['outofstock_label'] ); ?>"
                                 class="regular-text">
+                            <span style="display:inline-block;margin-left:12px;background:rgba(0,0,0,0.65);color:#fff;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:3px;">
+                                <?php echo esc_html( $s['outofstock_label'] ); ?>
+                            </span>
+                            <p class="description"><?php esc_html_e( 'Vista previa de cómo se verá la etiqueta.', 'mad-suite' ); ?></p>
                         </td>
                     </tr>
                 </table>
 
-                <!-- ── Feature 3: Dual price ──────────────────────────────── -->
+                <!-- ── 3: Dual price ──────────────────────────────────── -->
                 <h2><?php esc_html_e( '3. Precio con/sin IVA en ficha de producto', 'mad-suite' ); ?></h2>
                 <table class="form-table" role="presentation">
                     <tr>
@@ -363,13 +542,13 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             <label>
                                 <input type="checkbox" name="dual_price_enabled" value="1"
                                     <?php checked( ! empty( $s['dual_price_enabled'] ) ); ?>>
-                                <?php esc_html_e( 'Mostrar precio excl. IVA (grande) + incl. IVA (pequeño) en la ficha de producto', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'Mostrar precio excl. IVA (grande) + incl. IVA (pequeño)', 'mad-suite' ); ?>
                             </label>
                         </td>
                     </tr>
                 </table>
 
-                <!-- ── Feature 4: VAT field ───────────────────────────────── -->
+                <!-- ── 4: VAT field ──────────────────────────────────── -->
                 <h2><?php esc_html_e( '4. Campo NIF/CIF/VAT en checkout', 'mad-suite' ); ?></h2>
                 <table class="form-table" role="presentation">
                     <tr>
@@ -398,11 +577,11 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                     </tr>
                 </table>
 
-                <!-- ── Feature 5: AI Descriptions ────────────────────────── -->
+                <!-- ── 5: AI ────────────────────────────────────────── -->
                 <h2><?php esc_html_e( '5. Descripciones con IA', 'mad-suite' ); ?></h2>
                 <table class="form-table" role="presentation">
                     <tr>
-                        <th><?php esc_html_e( 'Proveedor de IA', 'mad-suite' ); ?></th>
+                        <th><?php esc_html_e( 'Proveedor', 'mad-suite' ); ?></th>
                         <td>
                             <select name="ai_provider">
                                 <option value="claude" <?php selected( $s['ai_provider'], 'claude' ); ?>>Claude (Anthropic)</option>
@@ -411,7 +590,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                         </td>
                     </tr>
                     <tr>
-                        <th><label for="ai_api_key_claude"><?php esc_html_e( 'API Key de Claude', 'mad-suite' ); ?></label></th>
+                        <th><label for="ai_api_key_claude"><?php esc_html_e( 'API Key Claude', 'mad-suite' ); ?></label></th>
                         <td>
                             <input type="password" id="ai_api_key_claude" name="ai_api_key_claude"
                                 value="<?php echo esc_attr( $s['ai_api_key_claude'] ); ?>"
@@ -422,13 +601,12 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                         <th><label for="ai_model_claude"><?php esc_html_e( 'Modelo Claude', 'mad-suite' ); ?></label></th>
                         <td>
                             <input type="text" id="ai_model_claude" name="ai_model_claude"
-                                value="<?php echo esc_attr( $s['ai_model_claude'] ); ?>"
-                                class="regular-text">
-                            <p class="description"><?php esc_html_e( 'p.ej. claude-sonnet-4-6, claude-haiku-4-5-20251001', 'mad-suite' ); ?></p>
+                                value="<?php echo esc_attr( $s['ai_model_claude'] ); ?>" class="regular-text">
+                            <p class="description">claude-sonnet-4-6 · claude-haiku-4-5-20251001</p>
                         </td>
                     </tr>
                     <tr>
-                        <th><label for="ai_api_key_openai"><?php esc_html_e( 'API Key de OpenAI', 'mad-suite' ); ?></label></th>
+                        <th><label for="ai_api_key_openai"><?php esc_html_e( 'API Key OpenAI', 'mad-suite' ); ?></label></th>
                         <td>
                             <input type="password" id="ai_api_key_openai" name="ai_api_key_openai"
                                 value="<?php echo esc_attr( $s['ai_api_key_openai'] ); ?>"
@@ -439,9 +617,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                         <th><label for="ai_model_openai"><?php esc_html_e( 'Modelo OpenAI', 'mad-suite' ); ?></label></th>
                         <td>
                             <input type="text" id="ai_model_openai" name="ai_model_openai"
-                                value="<?php echo esc_attr( $s['ai_model_openai'] ); ?>"
-                                class="regular-text">
-                            <p class="description"><?php esc_html_e( 'p.ej. gpt-4o, gpt-4o-mini', 'mad-suite' ); ?></p>
+                                value="<?php echo esc_attr( $s['ai_model_openai'] ); ?>" class="regular-text">
+                            <p class="description">gpt-4o · gpt-4o-mini</p>
                         </td>
                     </tr>
                     <tr>
@@ -449,7 +626,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                         <td>
                             <textarea id="ai_prompt_description" name="ai_prompt_description"
                                 rows="4" class="large-text"><?php echo esc_textarea( $s['ai_prompt_description'] ); ?></textarea>
-                            <p class="description"><?php esc_html_e( 'Usa {product_name} para insertar el nombre del producto.', 'mad-suite' ); ?></p>
+                            <p class="description">{product_name}</p>
                         </td>
                     </tr>
                     <tr>
@@ -457,7 +634,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                         <td>
                             <textarea id="ai_prompt_translate_en" name="ai_prompt_translate_en"
                                 rows="3" class="large-text"><?php echo esc_textarea( $s['ai_prompt_translate_en'] ); ?></textarea>
-                            <p class="description"><?php esc_html_e( 'Usa {text} para insertar el texto a traducir.', 'mad-suite' ); ?></p>
+                            <p class="description">{text}</p>
                         </td>
                     </tr>
                     <tr>
@@ -473,13 +650,13 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             <label>
                                 <input type="checkbox" name="ai_wpml_enabled" value="1"
                                     <?php checked( ! empty( $s['ai_wpml_enabled'] ) ); ?>>
-                                <?php esc_html_e( 'Al guardar la descripción en español, crear/actualizar traducciones EN y FR automáticamente.', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'Al guardar descripción en español → actualizar EN y FR automáticamente', 'mad-suite' ); ?>
                             </label>
                         </td>
                     </tr>
                 </table>
 
-                <!-- ── Feature 6: WPML + Quotes ───────────────────────────── -->
+                <!-- ── 6: WPML + Quotes ──────────────────────────────── -->
                 <h2><?php esc_html_e( '6. WPML + Cotizaciones', 'mad-suite' ); ?></h2>
                 <table class="form-table" role="presentation">
                     <tr>
@@ -488,7 +665,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             <label>
                                 <input type="checkbox" name="wpml_quotes_enabled" value="1"
                                     <?php checked( ! empty( $s['wpml_quotes_enabled'] ) ); ?>>
-                                <?php esc_html_e( 'Mostrar meta box de traducción en todos los pedidos de WooCommerce.', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'Meta box de respuesta/traducción en todos los pedidos de WooCommerce', 'mad-suite' ); ?>
                             </label>
                         </td>
                     </tr>
