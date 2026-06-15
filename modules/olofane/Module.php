@@ -169,16 +169,46 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( ! is_product() ) return $price_html;
         if ( $price_html === '' ) return $price_html;
 
-        // Only for simple/variable products with a regular price
-        $price_excl = (float) wc_get_price_excluding_tax( $product );
-        $price_incl = (float) wc_get_price_including_tax( $product );
+        // Variable products: use min price; simple/external: use active price.
+        if ( $product->is_type( 'variable' ) ) {
+            /** @var WC_Product_Variable $product */
+            $min_price = (float) $product->get_variation_price( 'min', true );
+            $max_price = (float) $product->get_variation_price( 'max', true );
+            if ( $min_price <= 0 ) return $price_html;
 
-        if ( $price_excl <= 0 ) return $price_html;
+            $excl_min = (float) wc_get_price_excluding_tax( $product, [ 'price' => $min_price ] );
+            $incl_min = (float) wc_get_price_including_tax( $product, [ 'price' => $min_price ] );
 
-        $excl_formatted = wc_price( $price_excl );
-        $incl_formatted = wc_price( $price_incl );
+            if ( $min_price !== $max_price ) {
+                $excl_max = (float) wc_get_price_excluding_tax( $product, [ 'price' => $max_price ] );
+                $range    = wc_price( $excl_min ) . ' – ' . wc_price( $excl_max );
+                $excl_formatted = $range;
+            } else {
+                $excl_formatted = wc_price( $excl_min );
+            }
 
-        return sprintf(
+            $incl_formatted = wc_price( $incl_min );
+        } else {
+            $price_excl = (float) wc_get_price_excluding_tax( $product );
+            $price_incl = (float) wc_get_price_including_tax( $product );
+            if ( $price_excl <= 0 ) return $price_html;
+            $excl_formatted = wc_price( $price_excl );
+            $incl_formatted = wc_price( $price_incl );
+        }
+
+        static $css_printed = false;
+        $css = '';
+        if ( ! $css_printed ) {
+            $css_printed = true;
+            $css = '<style>
+                .mad-olofane-price-excl { display:block; font-size:1.4em; font-weight:700; line-height:1.2; }
+                .mad-olofane-price-excl small { font-size:0.55em; font-weight:400; opacity:.75; }
+                .mad-olofane-price-incl { display:block; font-size:0.85em; opacity:.7; margin-top:2px; }
+                .mad-olofane-price-incl small { font-size:0.9em; }
+            </style>';
+        }
+
+        return $css . sprintf(
             '<span class="mad-olofane-price-excl">%s <small>%s</small></span>'
             . '<span class="mad-olofane-price-incl">%s <small>%s</small></span>',
             $excl_formatted,

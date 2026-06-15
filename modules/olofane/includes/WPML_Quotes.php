@@ -220,7 +220,8 @@ class MAD_Olofane_WPML_Quotes {
         return null;
     }
 
-    private function translate_text( string $text, string $target_lang ): string|\WP_Error {
+    /** @return string|WP_Error */
+    private function translate_text( string $text, string $target_lang ) {
         $prompt_key = 'ai_prompt_translate_' . $target_lang;
         $prompt_tpl = $this->settings[ $prompt_key ] ?? "Translate the following text to {$target_lang}. Return only the translated text:\n\n{text}";
         $prompt     = str_replace( '{text}', $text, $prompt_tpl );
@@ -234,7 +235,8 @@ class MAD_Olofane_WPML_Quotes {
         return $this->call_claude( $prompt );
     }
 
-    private function call_claude( string $prompt ): string|\WP_Error {
+    /** @return string|WP_Error */
+    private function call_claude( string $prompt ) {
         $api_key = $this->settings['ai_api_key_claude'] ?? '';
         $model   = $this->settings['ai_model_claude'] ?? 'claude-sonnet-4-6';
 
@@ -271,7 +273,8 @@ class MAD_Olofane_WPML_Quotes {
         return trim( $body['content'][0]['text'] ?? '' );
     }
 
-    private function call_openai( string $prompt ): string|\WP_Error {
+    /** @return string|WP_Error */
+    private function call_openai( string $prompt ) {
         $api_key = $this->settings['ai_api_key_openai'] ?? '';
         $model   = $this->settings['ai_model_openai'] ?? 'gpt-4o';
 

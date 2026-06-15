@@ -220,7 +220,8 @@ class MAD_Olofane_AI_Description {
 
     // ── Core: generate description ────────────────────────────────────────────
 
-    private function generate_description( string $product_name ): string|\WP_Error {
+    /** @return string|WP_Error */
+    private function generate_description( string $product_name ) {
         $prompt_tpl = $this->settings['ai_prompt_description'] ?? '';
         $prompt     = str_replace( '{product_name}', $product_name, $prompt_tpl );
 
@@ -260,7 +261,8 @@ class MAD_Olofane_AI_Description {
 
     // ── Core: call AI provider ────────────────────────────────────────────────
 
-    private function call_ai( string $prompt ): string|\WP_Error {
+    /** @return string|WP_Error */
+    private function call_ai( string $prompt ) {
         $provider = $this->settings['ai_provider'] ?? 'claude';
 
         if ( $provider === 'openai' ) {
@@ -270,7 +272,8 @@ class MAD_Olofane_AI_Description {
         return $this->call_claude( $prompt );
     }
 
-    private function call_claude( string $prompt ): string|\WP_Error {
+    /** @return string|WP_Error */
+    private function call_claude( string $prompt ) {
         $api_key = $this->settings['ai_api_key_claude'] ?? '';
         $model   = $this->settings['ai_model_claude'] ?? 'claude-sonnet-4-6';
 
@@ -310,7 +313,8 @@ class MAD_Olofane_AI_Description {
         return trim( $body['content'][0]['text'] ?? '' );
     }
 
-    private function call_openai( string $prompt ): string|\WP_Error {
+    /** @return string|WP_Error */
+    private function call_openai( string $prompt ) {
         $api_key = $this->settings['ai_api_key_openai'] ?? '';
         $model   = $this->settings['ai_model_openai'] ?? 'gpt-4o';
 
