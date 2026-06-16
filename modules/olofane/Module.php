@@ -54,10 +54,13 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     public function init(): void {
         $s = $this->get_settings();
 
-        // Feature 1 – out-of-stock overlay (wraps the product image directly)
+        // Feature 1 – out-of-stock overlay
+        // CSS loads on wp_head so it works in standard WC loops AND manual/Elementor templates.
+        // PHP filter wraps the image when WC renders it; manual templates use the ::after CSS
+        // by adding class "mad-olofane-outofstock-wrap" to their image container widget.
         if ( ! empty( $s['outofstock_label_enabled'] ) ) {
             add_filter( 'woocommerce_product_get_image', [ $this, 'wrap_outofstock_image' ], 10, 6 );
-            add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_frontend_assets' ] );
+            add_action( 'wp_head', [ $this, 'output_outofstock_css' ] );
         }
 
         // Feature 2 – expanded order notes
@@ -130,20 +133,17 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             . '</span>';
     }
 
-    public function enqueue_frontend_assets(): void {
-        if ( ! ( is_shop() || is_product_category() || is_product_tag() || is_product() ) ) return;
-        wp_add_inline_style( 'woocommerce-general', $this->outofstock_css() );
+    public function output_outofstock_css(): void {
+        $s     = $this->get_settings();
+        $label = esc_attr( trim( $s['outofstock_label'] ) );
+        if ( $label === '' ) return;
+
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+        echo '<style id="mad-olofane-outofstock">' . $this->outofstock_css( $label ) . '</style>';
     }
 
-    private function outofstock_css(): string {
-        return '
-        /* Olofane: out-of-stock overlay */
-        .mad-olofane-outofstock-wrap {
-            position: relative;
-            display: block;
-            overflow: hidden;
-        }
-        .mad-olofane-outofstock-label {
+    private function outofstock_css( string $label = 'Agotado' ): string {
+        $shared = '
             position: absolute;
             top: 50%;
             left: 50%;
@@ -158,7 +158,26 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             border-radius: 3px;
             pointer-events: none;
             z-index: 10;
-            white-space: nowrap;
+            white-space: nowrap;';
+
+        // Escape for CSS content value (replace " with \")
+        $label_css = str_replace( '"', '\\"', $label );
+
+        return '
+        /* Olofane: out-of-stock overlay — shared wrapper */
+        .mad-olofane-outofstock-wrap {
+            position: relative;
+            display: block;
+            overflow: hidden;
+        }
+        /* Case A: PHP filter injected a <span> inside the image wrapper */
+        .mad-olofane-outofstock-label {' . $shared . '
+        }
+        /* Case B: manual / Elementor template — add class mad-olofane-outofstock-wrap
+           to the image container widget. WooCommerce adds .outofstock to the product <li>.
+           The label text is generated server-side from the settings value. */
+        .outofstock .mad-olofane-outofstock-wrap::after {
+            content: "' . $label_css . '";' . $shared . '
         }';
     }
 
@@ -207,40 +226,22 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     // ── Feature 3: Dual price (excl. + incl. VAT) ────────────────────────────
     // Priority 1000 ensures this runs AFTER the Quotes module's maybe_restore_price
     // (priority 999), which otherwise overwrites our transformation.
+    //
+    // Price logic for this store:
+    //   Regular price = B2C price  (shown crossed-out so B2B sees the discount)
+    //   Sale price    = B2B price  (shown as excl. IVA big + incl. IVA small)
+    // If no sale price exists, only show excl/incl for the regular price.
 
     public function dual_price_display( string $price_html, WC_Product $product ): string {
         if ( ! is_product() ) return $price_html;
         if ( $price_html === '' ) return $price_html;
-
-        if ( $product->is_type( 'variable' ) ) {
-            /** @var WC_Product_Variable $product */
-            $min_price = (float) $product->get_variation_price( 'min' );
-            $max_price = (float) $product->get_variation_price( 'max' );
-            if ( $min_price <= 0 ) return $price_html;
-
-            $excl_min = (float) wc_get_price_excluding_tax( $product, [ 'price' => $min_price ] );
-            $incl_min = (float) wc_get_price_including_tax( $product, [ 'price' => $min_price ] );
-
-            if ( $min_price !== $max_price ) {
-                $excl_max       = (float) wc_get_price_excluding_tax( $product, [ 'price' => $max_price ] );
-                $excl_formatted = wc_price( $excl_min ) . ' – ' . wc_price( $excl_max );
-            } else {
-                $excl_formatted = wc_price( $excl_min );
-            }
-            $incl_formatted = wc_price( $incl_min );
-        } else {
-            $price_excl = (float) wc_get_price_excluding_tax( $product );
-            $price_incl = (float) wc_get_price_including_tax( $product );
-            if ( $price_excl <= 0 ) return $price_html;
-            $excl_formatted = wc_price( $price_excl );
-            $incl_formatted = wc_price( $price_incl );
-        }
 
         static $css_printed = false;
         $css = '';
         if ( ! $css_printed ) {
             $css_printed = true;
             $css = '<style>
+                .mad-olofane-price-b2c { display:block; font-size:.9em; opacity:.6; text-decoration:line-through; margin-bottom:4px; }
                 .mad-olofane-price-excl { display:block; font-size:1.5em; font-weight:700; line-height:1.15; }
                 .mad-olofane-price-excl small { font-size:0.5em; font-weight:400; opacity:.7; }
                 .mad-olofane-price-incl { display:block; font-size:0.85em; color:#666; margin-top:3px; }
@@ -248,12 +249,55 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             </style>';
         }
 
-        return $css . sprintf(
+        // Variable products: show min–max excl. range + min incl.
+        // We don't show the B2C del for variables since the range already implies discount.
+        if ( $product->is_type( 'variable' ) ) {
+            $min_price = (float) $product->get_variation_price( 'min' );
+            if ( $min_price <= 0 ) return $price_html;
+
+            $max_price = (float) $product->get_variation_price( 'max' );
+            $excl_min  = (float) wc_get_price_excluding_tax( $product, [ 'price' => $min_price ] );
+            $incl_min  = (float) wc_get_price_including_tax( $product, [ 'price' => $min_price ] );
+
+            if ( $min_price !== $max_price ) {
+                $excl_max       = (float) wc_get_price_excluding_tax( $product, [ 'price' => $max_price ] );
+                $excl_formatted = wc_price( $excl_min ) . ' – ' . wc_price( $excl_max );
+            } else {
+                $excl_formatted = wc_price( $excl_min );
+            }
+
+            return $css . sprintf(
+                '<span class="mad-olofane-price-excl">%s <small>%s</small></span>'
+                . '<span class="mad-olofane-price-incl">%s <small>%s</small></span>',
+                $excl_formatted,
+                esc_html__( 'excl. IVA', 'mad-suite' ),
+                wc_price( $incl_min ),
+                esc_html__( 'incl. IVA', 'mad-suite' )
+            );
+        }
+
+        // Simple / external product
+        // The B2B price is the active price (sale price if set, else regular price)
+        $b2b_raw = (float) $product->get_price();
+        if ( $b2b_raw <= 0 ) return $price_html;
+
+        $excl = (float) wc_get_price_excluding_tax( $product );
+        $incl = (float) wc_get_price_including_tax( $product );
+
+        // B2C crossed-out price — only when there is a separate sale (B2B) price
+        $del_html = '';
+        if ( $product->is_on_sale() ) {
+            // Use WC's display-price logic so it respects the shop's tax display setting
+            $b2c_display = (float) wc_get_price_to_display( $product, [ 'price' => $product->get_regular_price() ] );
+            $del_html    = '<span class="mad-olofane-price-b2c">' . wc_price( $b2c_display ) . '</span>';
+        }
+
+        return $css . $del_html . sprintf(
             '<span class="mad-olofane-price-excl">%s <small>%s</small></span>'
             . '<span class="mad-olofane-price-incl">%s <small>%s</small></span>',
-            $excl_formatted,
+            wc_price( $excl ),
             esc_html__( 'excl. IVA', 'mad-suite' ),
-            $incl_formatted,
+            wc_price( $incl ),
             esc_html__( 'incl. IVA', 'mad-suite' )
         );
     }
