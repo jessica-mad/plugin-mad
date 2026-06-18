@@ -300,8 +300,14 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function register_emails( $email_classes ) {
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-confirmation.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-request.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-send-quote.php';
-        $email_classes['MAD_Quotes_Email_Send_Quote'] = new MAD_Quotes_Email_Send_Quote();
+
+        $email_classes['MAD_Quotes_Email_Confirmation'] = new MAD_Quotes_Email_Confirmation();
+        $email_classes['MAD_Quotes_Email_New_Request']  = new MAD_Quotes_Email_New_Request();
+        $email_classes['MAD_Quotes_Email_Send_Quote']   = new MAD_Quotes_Email_Send_Quote();
+
         return $email_classes;
     }
 
@@ -561,9 +567,21 @@ return new class( $core ) implements MAD_Suite_Module {
         ) {
             return;
         }
-        if ( $order->get_status() === 'quote-pending' ) return;
-        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
-        $order->save();
+
+        $already_pending = $order->get_status() === 'quote-pending';
+
+        if ( ! $already_pending ) {
+            $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+            $order->save();
+        }
+
+        // Fire confirmation + admin notification only once (guard via order meta)
+        if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
+            $order->update_meta_data( '_mad_quote_emails_sent', '1' );
+            $order->save();
+            WC_Emails::instance();
+            do_action( 'mad_quotes_new_request', $order_id );
+        }
     }
 
     /**
