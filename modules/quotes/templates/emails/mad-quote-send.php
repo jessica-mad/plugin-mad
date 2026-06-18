@@ -4,6 +4,7 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $additional_content
  * @var WC_Email $email
  * @var string   $admin_note   Optional note from the admin.
  */
@@ -73,5 +74,11 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
         <?php esc_html_e( 'Aceptar y pagar', 'mad-suite' ); ?>
     </a>
 </p>
+
+<?php if ( $additional_content ) : ?>
+<div style="margin-top:20px;">
+    <?php echo wp_kses_post( wpautop( wptexturize( $additional_content ) ) ); ?>
+</div>
+<?php endif; ?>
 
 <?php do_action( 'woocommerce_email_footer', $email );

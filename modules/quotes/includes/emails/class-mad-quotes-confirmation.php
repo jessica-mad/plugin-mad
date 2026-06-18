@@ -2,8 +2,6 @@
 /**
  * WC_Email: customer confirmation when a quote request is received.
  *
- * Fires immediately after the order is placed with quotes-gateway.
- *
  * @package MAD_Suite/Quotes/Emails
  */
 
@@ -52,14 +50,20 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
     }
 
     public function get_content_html() {
+        // Guard: $this->object can be null when WC generates a preview/test email.
+        if ( ! $this->object ) {
+            return $this->get_preview_fallback_html();
+        }
+
         return wc_get_template_html(
             $this->template_html,
             [
-                'order'         => $this->object,
-                'email_heading' => $this->get_heading(),
-                'sent_to_admin' => false,
-                'plain_text'    => false,
-                'email'         => $this,
+                'order'              => $this->object,
+                'email_heading'      => $this->get_heading(),
+                'additional_content' => $this->get_additional_content(),
+                'sent_to_admin'      => false,
+                'plain_text'         => false,
+                'email'              => $this,
             ],
             '',
             $this->template_base
@@ -67,14 +71,19 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
     }
 
     public function get_content_plain() {
+        if ( ! $this->object ) {
+            return $this->get_heading() . "\n\n" . __( '[Vista previa — necesitas un pedido real para ver el contenido completo]', 'mad-suite' );
+        }
+
         return wc_get_template_html(
             $this->template_plain,
             [
-                'order'         => $this->object,
-                'email_heading' => $this->get_heading(),
-                'sent_to_admin' => false,
-                'plain_text'    => true,
-                'email'         => $this,
+                'order'              => $this->object,
+                'email_heading'      => $this->get_heading(),
+                'additional_content' => $this->get_additional_content(),
+                'sent_to_admin'      => false,
+                'plain_text'         => true,
+                'email'              => $this,
             ],
             '',
             $this->template_base
@@ -87,5 +96,16 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
 
     public function get_default_heading() {
         return __( 'Hemos recibido tu solicitud', 'mad-suite' );
+    }
+
+    private function get_preview_fallback_html(): string {
+        ob_start();
+        do_action( 'woocommerce_email_header', $this->get_heading(), $this );
+        echo '<p>' . esc_html__( 'Vista previa del email de confirmación de solicitud de presupuesto.', 'mad-suite' ) . '</p>';
+        if ( $this->get_additional_content() ) {
+            echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
+        }
+        do_action( 'woocommerce_email_footer', $this );
+        return ob_get_clean();
     }
 }

@@ -4,6 +4,7 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $additional_content
  * @var string   $admin_note
  */
 
@@ -56,3 +57,7 @@ printf(
 
 echo "\n";
 echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";
+
+if ( $additional_content ) {
+    echo "\n" . wp_strip_all_tags( wptexturize( $additional_content ) ) . "\n";
+}

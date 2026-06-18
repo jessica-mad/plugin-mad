@@ -4,6 +4,7 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $additional_content
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -22,3 +23,7 @@ echo esc_html__( 'Fecha: ', 'mad-suite' ) . esc_html( date_i18n( wc_date_format(
 echo esc_html__( 'Cliente: ', 'mad-suite' ) . esc_html( $order->get_billing_email() ) . "\n\n";
 
 echo wc_get_email_order_items( $order, [ 'plain_text' => true ] ); // phpcs:ignore
+
+if ( $additional_content ) {
+    echo "\n" . wp_strip_all_tags( wptexturize( $additional_content ) ) . "\n";
+}

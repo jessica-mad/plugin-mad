@@ -56,14 +56,19 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
     }
 
     public function get_content_html() {
+        if ( ! $this->object ) {
+            return $this->get_preview_fallback_html();
+        }
+
         return wc_get_template_html(
             $this->template_html,
             [
-                'order'         => $this->object,
-                'email_heading' => $this->get_heading(),
-                'sent_to_admin' => true,
-                'plain_text'    => false,
-                'email'         => $this,
+                'order'              => $this->object,
+                'email_heading'      => $this->get_heading(),
+                'additional_content' => $this->get_additional_content(),
+                'sent_to_admin'      => true,
+                'plain_text'         => false,
+                'email'              => $this,
             ],
             '',
             $this->template_base
@@ -71,18 +76,34 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
     }
 
     public function get_content_plain() {
+        if ( ! $this->object ) {
+            return $this->get_heading() . "\n\n" . __( '[Vista previa — necesitas un pedido real para ver el contenido completo]', 'mad-suite' );
+        }
+
         return wc_get_template_html(
             $this->template_plain,
             [
-                'order'         => $this->object,
-                'email_heading' => $this->get_heading(),
-                'sent_to_admin' => true,
-                'plain_text'    => true,
-                'email'         => $this,
+                'order'              => $this->object,
+                'email_heading'      => $this->get_heading(),
+                'additional_content' => $this->get_additional_content(),
+                'sent_to_admin'      => true,
+                'plain_text'         => true,
+                'email'              => $this,
             ],
             '',
             $this->template_base
         );
+    }
+
+    private function get_preview_fallback_html(): string {
+        ob_start();
+        do_action( 'woocommerce_email_header', $this->get_heading(), $this );
+        echo '<p>' . esc_html__( 'Vista previa del email de nueva solicitud de presupuesto (admin).', 'mad-suite' ) . '</p>';
+        if ( $this->get_additional_content() ) {
+            echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
+        }
+        do_action( 'woocommerce_email_footer', $this );
+        return ob_get_clean();
     }
 
     public function get_default_subject() {

@@ -4,6 +4,7 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $additional_content
  * @var WC_Email $email
  */
 
@@ -25,5 +26,11 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
 <?php do_action( 'woocommerce_email_order_meta', $order, true, false, $email ); ?>
 
 <?php do_action( 'woocommerce_email_customer_details', $order, true, false, $email ); ?>
+
+<?php if ( $additional_content ) : ?>
+<div style="margin-top:20px;">
+    <?php echo wp_kses_post( wpautop( wptexturize( $additional_content ) ) ); ?>
+</div>
+<?php endif; ?>
 
 <?php do_action( 'woocommerce_email_footer', $email );
