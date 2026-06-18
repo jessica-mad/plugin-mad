@@ -4,6 +4,7 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $body_text
  * @var string   $additional_content
  * @var WC_Email $email
  */
@@ -13,13 +14,7 @@ defined( 'ABSPATH' ) || exit;
 do_action( 'woocommerce_email_header', $email_heading, $email );
 ?>
 
-<p><?php
-    printf(
-        /* translators: 1: customer first name */
-        esc_html__( 'Hola %s, hemos recibido tu solicitud de presupuesto correctamente. Te responderemos lo antes posible.', 'mad-suite' ),
-        esc_html( $order->get_billing_first_name() )
-    );
-?></p>
+<p><?php echo wp_kses_post( $body_text ); ?></p>
 
 <table cellspacing="0" cellpadding="6" style="width:100%;border-collapse:collapse;margin-bottom:20px;">
     <thead>

@@ -4,6 +4,7 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $body_text
  * @var string   $additional_content
  */
 
@@ -11,11 +12,7 @@ defined( 'ABSPATH' ) || exit;
 
 echo esc_html( $email_heading ) . "\n\n";
 
-printf(
-    /* translators: 1: customer name */
-    esc_html__( 'Has recibido una nueva solicitud de presupuesto de %s.', 'mad-suite' ),
-    esc_html( $order->get_formatted_billing_full_name() )
-);
+echo wp_strip_all_tags( $body_text );
 
 echo "\n\n";
 echo esc_html__( 'Pedido #', 'mad-suite' ) . esc_html( $order->get_order_number() ) . "\n";

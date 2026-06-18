@@ -4,6 +4,7 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $body_text
  * @var string   $additional_content
  * @var WC_Email $email
  * @var string   $admin_note   Optional note from the admin.
@@ -14,13 +15,7 @@ defined( 'ABSPATH' ) || exit;
 do_action( 'woocommerce_email_header', $email_heading, $email );
 ?>
 
-<p><?php
-    printf(
-        /* translators: 1: customer first name */
-        esc_html__( 'Hola %s, tu presupuesto está listo. Puedes revisarlo a continuación.', 'mad-suite' ),
-        esc_html( $order->get_billing_first_name() )
-    );
-?></p>
+<p><?php echo wp_kses_post( $body_text ); ?></p>
 
 <?php if ( ! empty( $admin_note ) ) : ?>
 <blockquote style="border-left:4px solid #ddd;margin:12px 0;padding:8px 16px;color:#555;">

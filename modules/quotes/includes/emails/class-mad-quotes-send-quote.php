@@ -10,9 +10,6 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-/**
- * Class MAD_Quotes_Email_Send_Quote
- */
 class MAD_Quotes_Email_Send_Quote extends WC_Email {
 
     public function __construct() {
@@ -76,6 +73,7 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
+                'body_text'          => $this->get_body_text( $this->object ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => false,
@@ -97,6 +95,7 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
+                'body_text'          => $this->get_body_text( $this->object ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => true,
@@ -108,22 +107,42 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
         );
     }
 
-    private function get_preview_fallback_html(): string {
-        ob_start();
-        do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo '<p>' . esc_html__( 'Vista previa del email de presupuesto enviado al cliente.', 'mad-suite' ) . '</p>';
-        if ( $this->get_additional_content() ) {
-            echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
-        }
-        do_action( 'woocommerce_email_footer', $this );
-        return ob_get_clean();
-    }
-
     public function get_default_subject() {
         return __( '[{blogname}] Tu presupuesto (Pedido #{order_number})', 'mad-suite' );
     }
 
     public function get_default_heading() {
         return __( 'Tu presupuesto está listo', 'mad-suite' );
+    }
+
+    public function get_default_body_text(): string {
+        return __( 'Hola {customer_name}, tu presupuesto está listo. Puedes revisarlo a continuación.', 'mad-suite' );
+    }
+
+    public function init_form_fields() {
+        parent::init_form_fields();
+        $this->form_fields['body_text'] = [
+            'title'       => __( 'Cuerpo del email', 'mad-suite' ),
+            'type'        => 'textarea',
+            'description' => __( 'Texto principal del email. Usa {customer_name} para insertar el nombre del cliente.', 'mad-suite' ),
+            'default'     => $this->get_default_body_text(),
+            'css'         => 'width:400px;height:120px;',
+        ];
+    }
+
+    private function get_body_text( $order ): string {
+        $text = $this->get_option( 'body_text', $this->get_default_body_text() );
+        return str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
+    }
+
+    private function get_preview_fallback_html(): string {
+        ob_start();
+        do_action( 'woocommerce_email_header', $this->get_heading(), $this );
+        echo '<p>' . esc_html( $this->get_option( 'body_text', $this->get_default_body_text() ) ) . '</p>';
+        if ( $this->get_additional_content() ) {
+            echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
+        }
+        do_action( 'woocommerce_email_footer', $this );
+        return ob_get_clean();
     }
 }

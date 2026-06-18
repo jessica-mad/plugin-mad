@@ -65,6 +65,7 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
+                'body_text'          => $this->get_body_text( $this->object ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => true,
                 'plain_text'         => false,
@@ -85,6 +86,7 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
+                'body_text'          => $this->get_body_text( $this->object ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => true,
                 'plain_text'         => true,
@@ -95,17 +97,6 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
         );
     }
 
-    private function get_preview_fallback_html(): string {
-        ob_start();
-        do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo '<p>' . esc_html__( 'Vista previa del email de nueva solicitud de presupuesto (admin).', 'mad-suite' ) . '</p>';
-        if ( $this->get_additional_content() ) {
-            echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
-        }
-        do_action( 'woocommerce_email_footer', $this );
-        return ob_get_clean();
-    }
-
     public function get_default_subject() {
         return __( '[{blogname}] Nueva solicitud de presupuesto de {customer_name} (#{order_number})', 'mad-suite' );
     }
@@ -114,9 +105,10 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
         return __( 'Nueva solicitud de presupuesto', 'mad-suite' );
     }
 
-    /**
-     * Extra field in WC email settings: recipient email address(es).
-     */
+    public function get_default_body_text(): string {
+        return __( 'Has recibido una nueva solicitud de presupuesto de {customer_name}.', 'mad-suite' );
+    }
+
     public function init_form_fields() {
         parent::init_form_fields();
         $this->form_fields['recipient'] = [
@@ -126,5 +118,28 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
             'placeholder' => get_option( 'admin_email' ),
             'default'     => get_option( 'admin_email' ),
         ];
+        $this->form_fields['body_text'] = [
+            'title'       => __( 'Cuerpo del email', 'mad-suite' ),
+            'type'        => 'textarea',
+            'description' => __( 'Texto principal del email. Usa {customer_name} para insertar el nombre completo del cliente.', 'mad-suite' ),
+            'default'     => $this->get_default_body_text(),
+            'css'         => 'width:400px;height:120px;',
+        ];
+    }
+
+    private function get_body_text( $order ): string {
+        $text = $this->get_option( 'body_text', $this->get_default_body_text() );
+        return str_replace( '{customer_name}', $order->get_formatted_billing_full_name(), $text );
+    }
+
+    private function get_preview_fallback_html(): string {
+        ob_start();
+        do_action( 'woocommerce_email_header', $this->get_heading(), $this );
+        echo '<p>' . esc_html( $this->get_option( 'body_text', $this->get_default_body_text() ) ) . '</p>';
+        if ( $this->get_additional_content() ) {
+            echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
+        }
+        do_action( 'woocommerce_email_footer', $this );
+        return ob_get_clean();
     }
 }

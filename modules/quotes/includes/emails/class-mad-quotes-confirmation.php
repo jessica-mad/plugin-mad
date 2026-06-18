@@ -50,7 +50,6 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
     }
 
     public function get_content_html() {
-        // Guard: $this->object can be null when WC generates a preview/test email.
         if ( ! $this->object ) {
             return $this->get_preview_fallback_html();
         }
@@ -60,6 +59,7 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
+                'body_text'          => $this->get_body_text( $this->object ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => false,
@@ -80,6 +80,7 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
+                'body_text'          => $this->get_body_text( $this->object ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => true,
@@ -98,10 +99,30 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
         return __( 'Hemos recibido tu solicitud', 'mad-suite' );
     }
 
+    public function get_default_body_text(): string {
+        return __( 'Hola {customer_name}, hemos recibido tu solicitud de presupuesto correctamente. Te responderemos lo antes posible.', 'mad-suite' );
+    }
+
+    public function init_form_fields() {
+        parent::init_form_fields();
+        $this->form_fields['body_text'] = [
+            'title'       => __( 'Cuerpo del email', 'mad-suite' ),
+            'type'        => 'textarea',
+            'description' => __( 'Texto principal del email. Usa {customer_name} para insertar el nombre del cliente.', 'mad-suite' ),
+            'default'     => $this->get_default_body_text(),
+            'css'         => 'width:400px;height:120px;',
+        ];
+    }
+
+    private function get_body_text( $order ): string {
+        $text = $this->get_option( 'body_text', $this->get_default_body_text() );
+        return str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
+    }
+
     private function get_preview_fallback_html(): string {
         ob_start();
         do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo '<p>' . esc_html__( 'Vista previa del email de confirmación de solicitud de presupuesto.', 'mad-suite' ) . '</p>';
+        echo '<p>' . esc_html( $this->get_option( 'body_text', $this->get_default_body_text() ) ) . '</p>';
         if ( $this->get_additional_content() ) {
             echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
         }
