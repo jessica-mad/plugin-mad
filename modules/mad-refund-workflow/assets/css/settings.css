@@ -1,0 +1,258 @@
+/**
+ * MAD Refund Workflow - Settings Page Styles
+ *
+ * @package MAD_Suite
+ * @subpackage MAD_Refund_Workflow
+ * @since 1.0.0
+ */
+
+/* Settings page container */
+.mad-refund-settings-wrap {
+    max-width: 900px;
+}
+
+.mad-refund-settings-wrap .form-table th {
+    width: 200px;
+    padding: 20px 10px 20px 0;
+}
+
+.mad-refund-settings-wrap .form-table td {
+    padding: 15px 10px;
+}
+
+/* Section headers */
+.mad-refund-settings-wrap h2 {
+    padding-top: 20px;
+    border-top: 1px solid #c3c4c7;
+    margin-top: 30px;
+}
+
+.mad-refund-settings-wrap h2:first-of-type {
+    border-top: none;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+/* Color picker */
+.mad-color-picker {
+    width: 80px;
+}
+
+.wp-picker-container {
+    display: inline-block;
+}
+
+.wp-picker-container .wp-color-result.button {
+    margin-right: 10px;
+}
+
+/* Preview box */
+.status-preview {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.status-preview-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+/* Textarea fields */
+.mad-refund-settings-wrap textarea.large-text {
+    max-width: 600px;
+}
+
+/* PDF plugin notice */
+.pdf-plugin-notice {
+    padding: 15px;
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.pdf-plugin-notice .dashicons {
+    color: #856404;
+    flex-shrink: 0;
+}
+
+.pdf-plugin-notice p {
+    margin: 0;
+    color: #856404;
+}
+
+.pdf-plugin-notice a {
+    color: #533f03;
+    font-weight: 600;
+}
+
+/* Document type select */
+.document-type-description {
+    margin-top: 8px;
+    padding: 10px;
+    background: #f0f6fc;
+    border-left: 4px solid #2271b1;
+    font-size: 12px;
+    color: #50575e;
+}
+
+/* Email preview */
+.email-preview-box {
+    margin-top: 15px;
+    padding: 15px;
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+}
+
+.email-preview-box h4 {
+    margin: 0 0 10px;
+    color: #1d2327;
+}
+
+.email-preview-box .preview-content {
+    padding: 15px;
+    background: #f9f9f9;
+    border-radius: 4px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+
+/* Placeholder help text */
+.placeholder-help {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: #f6f7f7;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.placeholder-help code {
+    background: #fff;
+    padding: 2px 5px;
+    margin: 0 2px;
+    border-radius: 3px;
+}
+
+/* Toggle switches - optional enhancement */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-switch .slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: .3s;
+    border-radius: 24px;
+}
+
+.toggle-switch .slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .3s;
+    border-radius: 50%;
+}
+
+.toggle-switch input:checked + .slider {
+    background-color: #2271b1;
+}
+
+.toggle-switch input:checked + .slider:before {
+    transform: translateX(26px);
+}
+
+/* Settings tabs - if implemented */
+.settings-tabs {
+    display: flex;
+    border-bottom: 1px solid #c3c4c7;
+    margin-bottom: 20px;
+}
+
+.settings-tabs .tab {
+    padding: 10px 20px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    margin-bottom: -1px;
+    cursor: pointer;
+    background: transparent;
+    color: #50575e;
+    text-decoration: none;
+}
+
+.settings-tabs .tab:hover {
+    color: #2271b1;
+}
+
+.settings-tabs .tab.active {
+    background: #fff;
+    border-color: #c3c4c7;
+    color: #1d2327;
+    font-weight: 600;
+}
+
+/* Save button styling */
+.submit-wrap {
+    padding: 20px 0;
+    border-top: 1px solid #c3c4c7;
+    margin-top: 30px;
+}
+
+.submit-wrap .button-primary {
+    padding: 6px 20px;
+    height: auto;
+    font-size: 14px;
+}
+
+/* Responsive */
+@media screen and (max-width: 782px) {
+    .mad-refund-settings-wrap .form-table th {
+        width: 100%;
+        display: block;
+        padding-bottom: 5px;
+    }
+
+    .mad-refund-settings-wrap .form-table td {
+        display: block;
+        padding-left: 0;
+    }
+
+    .settings-tabs {
+        flex-wrap: wrap;
+    }
+
+    .settings-tabs .tab {
+        flex: 1;
+        text-align: center;
+        min-width: 100px;
+    }
+}
