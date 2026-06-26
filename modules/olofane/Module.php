@@ -9,6 +9,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 require_once __DIR__ . '/includes/AI_Description.php';
 require_once __DIR__ . '/includes/WPML_Quotes.php';
+require_once __DIR__ . '/includes/Menu_Duplicator.php';
 
 return new class ( $core ?? null ) implements MAD_Suite_Module {
 
@@ -94,6 +95,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( is_admin() ) {
             $ai = new MAD_Olofane_AI_Description( $s );
             $ai->init();
+
+            $menu_dup = new MAD_Olofane_Menu_Duplicator();
+            $menu_dup->init();
         }
 
         // Feature 6 – NIF in WP admin user profiles
