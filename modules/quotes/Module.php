@@ -150,8 +150,11 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Mini-carrito: ocultar botones y subtotal para usuarios de presupuesto ─
         // El plugin QWC base solo lo hace por producto (cart_contains_quotable()),
         // no por rol — aquí lo cubrimos con la lógica de rol de MAD Quotes.
-        add_action( 'woocommerce_widget_shopping_cart_buttons', [ $this, 'hide_mini_cart_buttons' ], 1 );
-        add_action( 'woocommerce_widget_shopping_cart_total',   [ $this, 'hide_mini_cart_total' ],   1 );
+        add_action( 'woocommerce_widget_shopping_cart_buttons', [ $this, 'hide_mini_cart_buttons' ],    1 );
+        add_action( 'woocommerce_widget_shopping_cart_total',   [ $this, 'hide_mini_cart_total' ],      1 );
+
+        // ── Mini-carrito: textos personalizables para usuarios normales ──
+        add_action( 'woocommerce_widget_shopping_cart_buttons', [ $this, 'override_mini_cart_buttons' ], 5 );
 
         // ── Checkout: ocultar precios y pagos para experiencia de presupuesto ─
         // PHP hooks: actúan en el origen, sin depender de selectores CSS del tema
@@ -237,6 +240,30 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_button_text',
             'mad_quotes_roles',
             __( 'Texto del botón en páginas de producto y carrito. Ej: "Solicitar presupuesto". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
+        );
+
+        // ── Sección: Textos del mini-carrito ─────────────────────────
+        add_settings_section(
+            'mad_quotes_mini_cart',
+            __( 'Textos del mini-carrito', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Personaliza los botones del mini-carrito flotante. Si WPML está activo puedes definir el texto en cada idioma.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'mini_cart_view_cart_text',
+            __( 'Botón "Ver carrito"', 'mad-suite' ),
+            'field_multilang_text',
+            'mad_quotes_mini_cart',
+            __( 'Texto del botón que lleva al carrito. Por defecto: "Ver carrito".', 'mad-suite' )
+        );
+        $this->register_field(
+            'mini_cart_checkout_text',
+            __( 'Botón "Finalizar compra"', 'mad-suite' ),
+            'field_multilang_text',
+            'mad_quotes_mini_cart',
+            __( 'Texto del botón que lleva al checkout. Por defecto: "Finalizar compra".', 'mad-suite' )
         );
 
         // ── Sección: Caducidad ─────────────────────────────────────────
@@ -537,6 +564,57 @@ return new class( $core ) implements MAD_Suite_Module {
     public function hide_mini_cart_total(): void {
         if ( ! $this->current_user_is_quote_role() ) return;
         remove_action( 'woocommerce_widget_shopping_cart_total', 'woocommerce_widget_shopping_cart_subtotal', 10 );
+    }
+
+    /** Reemplaza los botones estándar del mini-carrito con los textos configurados (usuarios normales). */
+    public function override_mini_cart_buttons(): void {
+        if ( $this->current_user_is_quote_role() ) return; // quote users handled by hide_mini_cart_buttons
+
+        $settings       = mad_quotes_get_settings();
+        $view_cart_text = trim( $this->resolve_lang_text( $settings['mini_cart_view_cart_text'] ?? [] ) );
+        $checkout_text  = trim( $this->resolve_lang_text( $settings['mini_cart_checkout_text'] ?? [] ) );
+
+        if ( $view_cart_text === '' && $checkout_text === '' ) return; // nothing to override
+
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_button_view_cart', 10 );
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_proceed_to_checkout', 20 );
+
+        if ( $view_cart_text === '' ) {
+            $view_cart_text = __( 'Ver carrito', 'woocommerce' );
+        }
+        if ( $checkout_text === '' ) {
+            $checkout_text = __( 'Finalizar compra', 'woocommerce' );
+        }
+
+        printf(
+            '<a href="%s" class="button wc-forward">%s</a>',
+            esc_url( wc_get_cart_url() ),
+            esc_html( $view_cart_text )
+        );
+        printf(
+            '<a href="%s" class="button checkout wc-forward">%s</a>',
+            esc_url( wc_get_checkout_url() ),
+            esc_html( $checkout_text )
+        );
+    }
+
+    /** Resolves a per-language text array to the current WPML language string. */
+    private function resolve_lang_text( $val ): string {
+        if ( is_string( $val ) ) return $val;
+        if ( empty( $val ) ) return '';
+
+        $current_lang = apply_filters( 'wpml_current_language', null );
+        if ( $current_lang && isset( $val[ $current_lang ] ) && $val[ $current_lang ] !== '' ) {
+            return $val[ $current_lang ];
+        }
+        $default_lang = apply_filters( 'wpml_default_language', null );
+        if ( $default_lang && isset( $val[ $default_lang ] ) && $val[ $default_lang ] !== '' ) {
+            return $val[ $default_lang ];
+        }
+        foreach ( $val as $entry ) {
+            if ( $entry !== '' ) return $entry;
+        }
+        return '';
     }
 
     /** Elimina el bloque de métodos de pago del checkout para usuarios de presupuesto. */
@@ -1213,6 +1291,52 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
     }
 
+    /** Generic per-language text field (reused for mini-cart button texts). */
+    public function field_multilang_text( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $stored   = $settings[ $key ] ?? [];
+        if ( ! is_array( $stored ) ) {
+            $stored = $stored !== '' ? [ 'default' => $stored ] : [];
+        }
+
+        $languages = [];
+        if ( function_exists( 'icl_get_languages' ) ) {
+            foreach ( icl_get_languages( 'skip_missing=0' ) as $code => $info ) {
+                $languages[ $code ] = $info['native_name'];
+            }
+        }
+
+        if ( empty( $languages ) ) {
+            $value = reset( $stored ) ?: '';
+            printf(
+                '<input type="text" name="%1$s[%2$s][default]" value="%3$s" class="regular-text"><br><span class="description">%4$s</span>',
+                esc_attr( $opt_key ),
+                esc_attr( $key ),
+                esc_attr( $value ),
+                esc_html( $args['desc'] ?? '' )
+            );
+            return;
+        }
+
+        echo '<table class="form-table" style="margin:0;"><tbody>';
+        foreach ( $languages as $code => $name ) {
+            printf(
+                '<tr><th style="padding:4px 10px 4px 0;font-weight:normal;width:80px;">%1$s <small>(%2$s)</small></th>'
+                . '<td><input type="text" name="%3$s[%4$s][%5$s]" value="%6$s" class="regular-text"></td></tr>',
+                esc_html( $name ),
+                esc_html( strtoupper( $code ) ),
+                esc_attr( $opt_key ),
+                esc_attr( $key ),
+                esc_attr( $code ),
+                esc_attr( $stored[ $code ] ?? '' )
+            );
+        }
+        echo '</tbody></table>';
+        echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+    }
+
     public function field_number( $args ) {
         $settings = mad_quotes_get_settings();
         $key      = $args['key'];
@@ -1273,6 +1397,13 @@ return new class( $core ) implements MAD_Suite_Module {
         } else {
             // Legacy plain string → keep as-is so resolve_button_text() can migrate it
             $clean['quote_button_text'] = sanitize_text_field( $raw_button );
+        }
+
+        foreach ( [ 'mini_cart_view_cart_text', 'mini_cart_checkout_text' ] as $field ) {
+            $raw = $input[ $field ] ?? [];
+            $clean[ $field ] = is_array( $raw )
+                ? array_map( 'sanitize_text_field', $raw )
+                : sanitize_text_field( $raw );
         }
 
         return $clean;
