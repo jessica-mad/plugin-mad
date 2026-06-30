@@ -127,6 +127,9 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
 
+        // ── WPML: registrar strings traducibles en cada carga ────────────────
+        add_action( 'init', [ $this, 'register_wpml_strings' ], 20 );
+
         // ── Rol: filtro de ocultación de precio de QWC (hook real del plugin original) ──
         add_filter( 'qwc_hide_prices', [ $this, 'filter_by_role' ], 10, 2 );
 
@@ -341,6 +344,14 @@ return new class( $core ) implements MAD_Suite_Module {
             return $this->price_cache[ $product->get_id() ] ?? $price;
         }
         return $price;
+    }
+
+    public function register_wpml_strings(): void {
+        $settings    = mad_quotes_get_settings();
+        $button_text = trim( $settings['quote_button_text'] ?? '' );
+        if ( $button_text !== '' ) {
+            do_action( 'wpml_register_single_string', 'MAD Quotes', 'quote_button_text', $button_text );
+        }
     }
 
     public function maybe_restore_button( $text ) {
