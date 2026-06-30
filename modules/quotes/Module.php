@@ -147,6 +147,12 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Carrito: redirigir directamente al checkout para usuarios de presupuesto ─
         add_action( 'template_redirect', [ $this, 'redirect_quote_cart_to_checkout' ] );
 
+        // ── Mini-carrito: ocultar botones y subtotal para usuarios de presupuesto ─
+        // El plugin QWC base solo lo hace por producto (cart_contains_quotable()),
+        // no por rol — aquí lo cubrimos con la lógica de rol de MAD Quotes.
+        add_action( 'woocommerce_widget_shopping_cart_buttons', [ $this, 'hide_mini_cart_buttons' ], 1 );
+        add_action( 'woocommerce_widget_shopping_cart_total',   [ $this, 'hide_mini_cart_total' ],   1 );
+
         // ── Checkout: ocultar precios y pagos para experiencia de presupuesto ─
         // PHP hooks: actúan en el origen, sin depender de selectores CSS del tema
         add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ],    10, 3 );
@@ -506,6 +512,31 @@ return new class( $core ) implements MAD_Suite_Module {
     public function hide_cart_totals_html_single( $value ) {
         if ( $this->cart_is_quote_experience() ) return '';
         return $value;
+    }
+
+    /** Elimina los botones "Ver carrito" y "Finalizar compra" del mini-carrito para usuarios de presupuesto. */
+    public function hide_mini_cart_buttons(): void {
+        if ( ! $this->current_user_is_quote_role() ) return;
+        // Elimina los botones estándar de WooCommerce del widget de carrito
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_button_view_cart', 10 );
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_proceed_to_checkout', 20 );
+        // Añade un único botón de solicitar presupuesto
+        $settings    = mad_quotes_get_settings();
+        $btn_label   = trim( $this->resolve_button_text( $settings ) );
+        if ( $btn_label === '' ) {
+            $btn_label = __( 'Solicitar presupuesto', 'mad-suite' );
+        }
+        printf(
+            '<a href="%s" class="button wc-forward mad-quote-mini-cart-btn">%s</a>',
+            esc_url( wc_get_checkout_url() ),
+            esc_html( $btn_label )
+        );
+    }
+
+    /** Elimina la línea de subtotal del mini-carrito para usuarios de presupuesto. */
+    public function hide_mini_cart_total(): void {
+        if ( ! $this->current_user_is_quote_role() ) return;
+        remove_action( 'woocommerce_widget_shopping_cart_total', 'woocommerce_widget_shopping_cart_subtotal', 10 );
     }
 
     /** Elimina el bloque de métodos de pago del checkout para usuarios de presupuesto. */
