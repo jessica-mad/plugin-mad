@@ -350,7 +350,10 @@ return new class( $core ) implements MAD_Suite_Module {
         // Para usuarios con rol de presupuesto: aplicar texto configurable si está definido
         $settings    = mad_quotes_get_settings();
         $custom_text = trim( $settings['quote_button_text'] ?? '' );
-        return $custom_text !== '' ? $custom_text : $text;
+        if ( $custom_text !== '' ) {
+            return apply_filters( 'wpml_translate_single_string', $custom_text, 'MAD Quotes', 'quote_button_text' );
+        }
+        return $text;
     }
 
     public function filter_by_role( $value, $product_id = null ) {
@@ -1143,6 +1146,11 @@ return new class( $core ) implements MAD_Suite_Module {
         $clean['quote_expiry_days'] = absint( $input['quote_expiry_days'] ?? 0 );
 
         $clean['quote_button_text'] = sanitize_text_field( $input['quote_button_text'] ?? '' );
+
+        // Register with WPML String Translation so it can be translated per language
+        if ( $clean['quote_button_text'] !== '' ) {
+            do_action( 'wpml_register_single_string', 'MAD Quotes', 'quote_button_text', $clean['quote_button_text'] );
+        }
 
         return $clean;
     }

@@ -13,7 +13,9 @@ defined( 'ABSPATH' ) || exit;
 
 $settings = mad_quotes_get_settings();
 $btn_text = trim( $settings['quote_button_text'] ?? '' );
-$btn_label = $btn_text !== '' ? $btn_text : __( 'Solicitar presupuesto', 'mad-suite' );
+$btn_label = $btn_text !== ''
+    ? apply_filters( 'wpml_translate_single_string', $btn_text, 'MAD Quotes', 'quote_button_text' )
+    : __( 'Solicitar presupuesto', 'mad-suite' );
 
 get_header( 'shop' );
 ?>
