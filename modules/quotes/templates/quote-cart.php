@@ -11,11 +11,21 @@
 
 defined( 'ABSPATH' ) || exit;
 
-$settings = mad_quotes_get_settings();
-$btn_text = trim( $settings['quote_button_text'] ?? '' );
-$btn_label = $btn_text !== ''
-    ? apply_filters( 'wpml_translate_single_string', $btn_text, 'MAD Quotes', 'quote_button_text' )
-    : __( 'Solicitar presupuesto', 'mad-suite' );
+$settings    = mad_quotes_get_settings();
+$_btn_stored = $settings['quote_button_text'] ?? [];
+$_lang       = apply_filters( 'wpml_current_language', null );
+$_def_lang   = apply_filters( 'wpml_default_language', null );
+if ( is_string( $_btn_stored ) ) {
+    $btn_text = $_btn_stored;
+} elseif ( is_array( $_btn_stored ) ) {
+    $btn_text = ( $_lang && isset( $_btn_stored[ $_lang ] ) && $_btn_stored[ $_lang ] !== '' )
+        ? $_btn_stored[ $_lang ]
+        : ( ( $_def_lang && isset( $_btn_stored[ $_def_lang ] ) ) ? $_btn_stored[ $_def_lang ] : ( reset( $_btn_stored ) ?: '' ) );
+} else {
+    $btn_text = '';
+}
+unset( $_btn_stored, $_lang, $_def_lang );
+$btn_label = trim( $btn_text ) !== '' ? $btn_text : __( 'Solicitar presupuesto', 'mad-suite' );
 
 get_header( 'shop' );
 ?>

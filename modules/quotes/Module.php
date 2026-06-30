@@ -228,7 +228,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $this->register_field(
             'quote_button_text',
             __( 'Texto del botón de solicitud', 'mad-suite' ),
-            'field_text',
+            'field_button_text',
             'mad_quotes_roles',
             __( 'Texto del botón en páginas de producto y carrito. Ej: "Solicitar presupuesto". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
         );
@@ -347,24 +347,51 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     public function register_wpml_strings(): void {
-        $settings    = mad_quotes_get_settings();
-        $button_text = trim( $settings['quote_button_text'] ?? '' );
-        if ( $button_text !== '' ) {
-            do_action( 'wpml_register_single_string', 'MAD Quotes', 'quote_button_text', $button_text );
-        }
+        // No-op: button text is now managed per-language directly in MAD Suite settings.
     }
 
     public function maybe_restore_button( $text ) {
         if ( ! $this->current_user_is_quote_role() ) {
             return __( 'Añadir al carrito', 'woocommerce' );
         }
-        // Para usuarios con rol de presupuesto: aplicar texto configurable si está definido
         $settings    = mad_quotes_get_settings();
-        $custom_text = trim( $settings['quote_button_text'] ?? '' );
-        if ( $custom_text !== '' ) {
-            return apply_filters( 'wpml_translate_single_string', $custom_text, 'MAD Quotes', 'quote_button_text' );
+        $custom_text = trim( $this->resolve_button_text( $settings ) );
+        return $custom_text !== '' ? $custom_text : $text;
+    }
+
+    /**
+     * Returns the button text for the current WPML language.
+     * Handles both the new array format and the legacy string format.
+     */
+    private function resolve_button_text( array $settings ): string {
+        $val = $settings['quote_button_text'] ?? [];
+
+        // Legacy: stored as plain string before multilang support
+        if ( is_string( $val ) ) {
+            return $val;
         }
-        return $text;
+
+        if ( empty( $val ) ) {
+            return '';
+        }
+
+        $current_lang = apply_filters( 'wpml_current_language', null );
+        if ( $current_lang && isset( $val[ $current_lang ] ) && $val[ $current_lang ] !== '' ) {
+            return $val[ $current_lang ];
+        }
+
+        // Fall back to default WPML language
+        $default_lang = apply_filters( 'wpml_default_language', null );
+        if ( $default_lang && isset( $val[ $default_lang ] ) && $val[ $default_lang ] !== '' ) {
+            return $val[ $default_lang ];
+        }
+
+        // Fall back to any non-empty entry
+        foreach ( $val as $entry ) {
+            if ( $entry !== '' ) return $entry;
+        }
+
+        return '';
     }
 
     public function filter_by_role( $value, $product_id = null ) {
@@ -1102,6 +1129,59 @@ return new class( $core ) implements MAD_Suite_Module {
         );
     }
 
+    public function field_button_text( $args ) {
+        $settings = mad_quotes_get_settings();
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $stored   = $settings['quote_button_text'] ?? [];
+
+        // Legacy: old installs stored a plain string — migrate on render
+        if ( is_string( $stored ) && $stored !== '' ) {
+            $default_lang = apply_filters( 'wpml_default_language', 'es' ) ?: 'es';
+            $stored = [ $default_lang => $stored ];
+        }
+        if ( ! is_array( $stored ) ) {
+            $stored = [];
+        }
+
+        // Detect active WPML languages; fall back to single field if WPML absent
+        $languages = [];
+        if ( function_exists( 'icl_get_languages' ) ) {
+            $raw = icl_get_languages( 'skip_missing=0' );
+            foreach ( $raw as $code => $info ) {
+                $languages[ $code ] = $info['native_name'];
+            }
+        }
+
+        if ( empty( $languages ) ) {
+            // No WPML — single input
+            $value = is_array( $stored ) ? ( reset( $stored ) ?: '' ) : $stored;
+            printf(
+                '<input type="text" name="%1$s[quote_button_text][default]" value="%2$s" class="regular-text"><br><span class="description">%3$s</span>',
+                esc_attr( $opt_key ),
+                esc_attr( $value ),
+                esc_html( $args['desc'] ?? '' )
+            );
+            return;
+        }
+
+        // One input per language
+        echo '<table class="form-table" style="margin:0;"><tbody>';
+        foreach ( $languages as $code => $name ) {
+            $value = $stored[ $code ] ?? '';
+            printf(
+                '<tr><th style="padding:4px 10px 4px 0;font-weight:normal;width:80px;">%1$s <small>(%2$s)</small></th>'
+                . '<td><input type="text" name="%3$s[quote_button_text][%4$s]" value="%5$s" class="regular-text"></td></tr>',
+                esc_html( $name ),
+                esc_html( strtoupper( $code ) ),
+                esc_attr( $opt_key ),
+                esc_attr( $code ),
+                esc_attr( $value )
+            );
+        }
+        echo '</tbody></table>';
+        echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+    }
+
     public function field_number( $args ) {
         $settings = mad_quotes_get_settings();
         $key      = $args['key'];
@@ -1156,11 +1236,12 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $clean['quote_expiry_days'] = absint( $input['quote_expiry_days'] ?? 0 );
 
-        $clean['quote_button_text'] = sanitize_text_field( $input['quote_button_text'] ?? '' );
-
-        // Register with WPML String Translation so it can be translated per language
-        if ( $clean['quote_button_text'] !== '' ) {
-            do_action( 'wpml_register_single_string', 'MAD Quotes', 'quote_button_text', $clean['quote_button_text'] );
+        $raw_button = $input['quote_button_text'] ?? [];
+        if ( is_array( $raw_button ) ) {
+            $clean['quote_button_text'] = array_map( 'sanitize_text_field', $raw_button );
+        } else {
+            // Legacy plain string → keep as-is so resolve_button_text() can migrate it
+            $clean['quote_button_text'] = sanitize_text_field( $raw_button );
         }
 
         return $clean;

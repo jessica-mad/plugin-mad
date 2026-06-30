@@ -110,7 +110,7 @@ function mad_quotes_get_settings() {
     $defaults = [
         'quote_roles'       => [],
         'quote_expiry_days' => 0,
-        'quote_button_text' => '',
+        'quote_button_text' => [],
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );
