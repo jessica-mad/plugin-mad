@@ -155,12 +155,39 @@ get_header( 'shop' );
 
         </form>
 
-        <!-- Acciones principales -->
+        <!-- Formulario de solicitud (email + notas) -->
         <div class="mad-quote-cart__actions">
-            <a href="<?php echo esc_url( wc_get_checkout_url() ); ?>"
-               class="button alt mad-quote-cart__proceed">
-                <?php echo esc_html( $btn_label ); ?>
-            </a>
+            <form method="post" class="mad-quote-submit-form">
+                <?php wp_nonce_field( 'mad_create_quote', 'mad_create_quote_nonce' ); ?>
+                <?php $current_user = wp_get_current_user(); ?>
+
+                <p class="mad-quote-cart__field">
+                    <label for="mad-quote-email">
+                        <?php esc_html_e( 'Email', 'mad-suite' ); ?>
+                    </label>
+                    <input type="email"
+                           id="mad-quote-email"
+                           name="olofane_email"
+                           value="<?php echo esc_attr( $current_user->user_email ); ?>"
+                           required>
+                </p>
+
+                <p class="mad-quote-cart__field">
+                    <label for="mad-quote-notas">
+                        <?php esc_html_e( 'Notas (opcional)', 'mad-suite' ); ?>
+                    </label>
+                    <textarea id="mad-quote-notas"
+                              name="olofane_notas"
+                              rows="4"></textarea>
+                </p>
+
+                <button type="submit"
+                        name="mad_submit_quote"
+                        class="button alt mad-quote-cart__proceed">
+                    <?php echo esc_html( $btn_label ); ?>
+                </button>
+            </form>
+
             <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
                class="button mad-quote-cart__back">
                 <?php esc_html_e( 'Seguir viendo productos', 'mad-suite' ); ?>

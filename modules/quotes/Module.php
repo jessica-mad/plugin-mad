@@ -144,8 +144,13 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Checkout presupuesto: cambiar texto del botón "Realizar pedido" ──────
         add_filter( 'woocommerce_order_button_text', [ $this, 'quote_checkout_button_text' ] );
 
-        // ── Carrito: redirigir directamente al checkout para usuarios de presupuesto ─
-        add_action( 'template_redirect', [ $this, 'redirect_quote_cart_to_checkout' ] );
+        // ── Carrito: formulario de presupuesto propio (NO Blocks checkout) ──────────
+        // Prioridad 1: interceptar el POST del formulario antes de que se cargue el template.
+        add_action( 'template_redirect', [ $this, 'maybe_handle_create_quote' ],      1 );
+        // Prioridad 10: si es la página de carrito de un usuario de presupuesto, cargar nuestro template.
+        add_action( 'template_redirect', [ $this, 'serve_quote_cart_template' ] );
+        // Prioridad 10: si un usuario de presupuesto llega al checkout de WC (no order-pay), redirigir al carrito.
+        add_action( 'template_redirect', [ $this, 'redirect_quote_checkout_to_cart' ] );
 
         // ── Mini-carrito: ocultar botones y subtotal para usuarios de presupuesto ─
         // El plugin QWC base solo lo hace por producto (cart_contains_quotable()),
@@ -467,16 +472,118 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Redirige la página de carrito directamente al checkout para usuarios de presupuesto.
-     * Esto omite la pantalla del carrito: el usuario pasa directamente a solicitar presupuesto.
-     * Los profesionales (rol no habilitado) siguen viendo el carrito normal de WooCommerce.
+     * Intercepta el POST del formulario de solicitud de presupuesto.
+     * Crea el pedido directamente (sin pasar por el checkout de WooCommerce Blocks),
+     * vacía el carrito y redirige a la página de confirmación del pedido.
+     * Debe correr con prioridad 1 en template_redirect para que el POST se procese
+     * antes de que serve_quote_cart_template() cargue el template.
      */
-    public function redirect_quote_cart_to_checkout() {
+    public function maybe_handle_create_quote(): void {
+        if ( empty( $_POST['mad_create_quote_nonce'] ) ) return;
+
+        if ( ! $this->current_user_is_quote_role() ) {
+            wp_safe_redirect( wc_get_cart_url() );
+            exit;
+        }
+
+        if ( ! wp_verify_nonce(
+            sanitize_text_field( wp_unslash( $_POST['mad_create_quote_nonce'] ) ),
+            'mad_create_quote'
+        ) ) {
+            wp_safe_redirect( wc_get_cart_url() );
+            exit;
+        }
+
+        if ( ! isset( WC()->cart ) || WC()->cart->is_empty() ) {
+            wp_safe_redirect( wc_get_cart_url() );
+            exit;
+        }
+
+        $email = sanitize_email( wp_unslash( $_POST['olofane_email'] ?? '' ) );
+        $notas = sanitize_textarea_field( wp_unslash( $_POST['olofane_notas'] ?? '' ) );
+
+        if ( ! is_email( $email ) ) {
+            wc_add_notice( __( 'Por favor, introduce un email válido.', 'mad-suite' ), 'error' );
+            wp_safe_redirect( wc_get_cart_url() );
+            exit;
+        }
+
+        $user  = wp_get_current_user();
+        $order = wc_create_order( [ 'customer_id' => $user->ID ] );
+
+        foreach ( WC()->cart->get_cart() as $item ) {
+            $order->add_product( $item['data'], $item['quantity'] );
+        }
+
+        // Precios a 0 — el admin los fijará antes de enviar el presupuesto.
+        foreach ( $order->get_items() as $line ) {
+            $line->set_subtotal( 0 );
+            $line->set_total( 0 );
+            $line->save();
+        }
+
+        $order->set_billing_email( $email );
+        $order->set_billing_first_name( $user->first_name ?: $user->display_name );
+        $order->set_billing_last_name( $user->last_name ?: '' );
+        $order->set_payment_method( 'quotes-gateway' );
+        $order->set_cart_tax( 0 );
+        $order->set_shipping_total( 0 );
+        $order->set_shipping_tax( 0 );
+        $order->set_total( 0 );
+        $order->update_meta_data( '_mad_qwc_quote', '1' );
+        $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
+
+        if ( $notas ) {
+            $order->add_order_note( esc_html( $notas ), true );
+        }
+
+        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+        $order->save();
+
+        WC()->cart->empty_cart();
+
+        // Emails: confirmación al cliente + aviso al admin (mismo guard que finalize_quote_order_status).
+        if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
+            $order->update_meta_data( '_mad_quote_emails_sent', '1' );
+            $order->save();
+            WC_Emails::instance();
+            do_action( 'mad_quotes_new_request', $order->get_id() );
+        }
+
+        wp_safe_redirect( $order->get_checkout_order_received_url() );
+        exit;
+    }
+
+    /**
+     * Carga el template de carrito de presupuesto (quote-cart.php) para usuarios con rol
+     * de presupuesto cuando visitan la página del carrito. El template incluye el formulario
+     * con email + notas que crea el pedido sin pasar por el checkout de Blocks.
+     * Los profesionales ven el carrito normal de WooCommerce sin cambios.
+     */
+    public function serve_quote_cart_template(): void {
         if ( ! is_cart() ) return;
         if ( ! $this->current_user_is_quote_role() ) return;
         if ( ! isset( WC()->cart ) || is_null( WC()->cart ) || WC()->cart->is_empty() ) return;
 
-        wp_safe_redirect( wc_get_checkout_url() );
+        $template = MAD_QUOTES_TEMPLATE_PATH . 'quote-cart.php';
+        if ( file_exists( $template ) ) {
+            include $template;
+            exit;
+        }
+    }
+
+    /**
+     * Redirige al carrito a los usuarios de presupuesto que lleguen al checkout de WooCommerce
+     * por cualquier vía (URL directa, enlace, mini-carrito). Solo aplica al checkout normal;
+     * el flujo order-pay (pago de presupuesto enviado) queda intacto.
+     */
+    public function redirect_quote_checkout_to_cart(): void {
+        if ( ! is_checkout() ) return;
+        if ( is_order_received_page() ) return;
+        if ( get_query_var( 'order-pay' ) ) return;
+        if ( ! $this->current_user_is_quote_role() ) return;
+
+        wp_safe_redirect( wc_get_cart_url() );
         exit;
     }
 
