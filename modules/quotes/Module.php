@@ -177,6 +177,11 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], PHP_INT_MAX );
         add_filter( 'woocommerce_cart_needs_shipping', [ $this, 'no_shipping_for_quotes' ] );
 
+        // ── Blocks checkout: quitar "required" de campos de dirección ─
+        // woocommerce_checkout_fields no afecta a Blocks; hay que actuar sobre
+        // woocommerce_billing_fields para que la validación React no bloquee el envío.
+        add_filter( 'woocommerce_billing_fields', [ $this, 'unrequire_billing_address_for_quotes' ], PHP_INT_MAX );
+
         // ── Ciclo de vida del pedido ───────────────────────────────────
         add_action( 'woocommerce_checkout_update_order_meta',   [ $this, 'save_quote_order_meta' ] );
         // Forzar estado "Presupuesto pendiente" DESPUÉS de que el gateway llame a process_payment()
@@ -661,12 +666,15 @@ return new class( $core ) implements MAD_Suite_Module {
             .woocommerce-checkout-review-order-table tfoot tr,
             .woocommerce-checkout-review-order-table .cart-subtotal,
             .woocommerce-checkout-review-order-table .order-total { display: none !important; }
-            /* Checkout en bloques (WooCommerce Blocks) */
+            /* Checkout en bloques (WooCommerce Blocks): precios */
             .wc-block-components-order-summary-item__individual-prices,
             .wc-block-components-order-summary-item__total-price,
             .wc-block-components-totals-item,
             .wc-block-components-totals-footer-item,
             .wc-block-order-summary-item__price { display: none !important; }
+            /* Checkout Blocks: ocultar sección completa de dirección de facturación */
+            .wc-block-checkout__billing-fields,
+            .wc-block-checkout__shipping-fields { display: none !important; }
         </style>';
     }
 
@@ -703,6 +711,26 @@ return new class( $core ) implements MAD_Suite_Module {
                 }
             }
         }
+
+        return $fields;
+    }
+
+    /**
+     * Removes the `required` flag from all billing fields except email for quote-role users.
+     * Necessary for WooCommerce Blocks checkout: `woocommerce_checkout_fields` is ignored by
+     * Blocks, but the REST API validation honours `required` set here.
+     */
+    public function unrequire_billing_address_for_quotes( array $fields ): array {
+        if ( is_order_received_page() )              return $fields;
+        if ( get_query_var( 'order-pay' ) )          return $fields;
+        if ( ! $this->current_user_is_quote_role() ) return $fields;
+
+        foreach ( $fields as $key => &$field ) {
+            if ( $key !== 'billing_email' ) {
+                $field['required'] = false;
+            }
+        }
+        unset( $field );
 
         return $fields;
     }
