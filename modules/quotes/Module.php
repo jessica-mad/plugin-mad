@@ -686,10 +686,9 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( get_query_var( 'order-pay' ) )   return $fields;
         if ( ! $this->current_user_is_quote_role() ) return $fields;
 
-        $keep = [ 'billing_first_name', 'billing_last_name', 'billing_email' ];
-
+        // Solo email — sin dirección de facturación ni nombre para la solicitud de presupuesto
         foreach ( array_keys( $fields['billing'] ?? [] ) as $key ) {
-            if ( ! in_array( $key, $keep, true ) ) {
+            if ( $key !== 'billing_email' ) {
                 unset( $fields['billing'][ $key ] );
             }
         }
