@@ -177,10 +177,22 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], PHP_INT_MAX );
         add_filter( 'woocommerce_cart_needs_shipping', [ $this, 'no_shipping_for_quotes' ] );
 
+        // ── Blocks checkout: eliminar bloque de dirección del DOM ────────
+        // CSS no es suficiente: React valida client-side los campos ocultos.
+        // render_block elimina el bloque por completo del HTML renderizado
+        // → sin DOM, sin validación React, sin campos requeridos visibles.
+        add_filter( 'render_block', [ $this, 'remove_billing_block_for_quote_role' ], 10, 2 );
+
         // ── Blocks checkout: quitar "required" de campos de dirección ─
         // woocommerce_checkout_fields no afecta a Blocks; hay que actuar sobre
-        // woocommerce_billing_fields para que la validación React no bloquee el envío.
+        // woocommerce_billing_fields para que la validación Store API no bloquee el envío.
         add_filter( 'woocommerce_billing_fields', [ $this, 'unrequire_billing_address_for_quotes' ], PHP_INT_MAX );
+
+        // ── Blocks checkout: rellenar datos de facturación mínimos ───────
+        // La Store API valida el pedido incluso con woocommerce_billing_fields.
+        // Rellenamos placeholders para campos que WC pueda exigir en la BD.
+        add_action( 'woocommerce_store_api_checkout_update_order_from_request',              [ $this, 'fill_quote_billing_defaults' ], PHP_INT_MAX, 2 );
+        add_action( '__experimental_woocommerce_blocks_checkout_update_order_from_request',  [ $this, 'fill_quote_billing_defaults' ], PHP_INT_MAX, 2 );
 
         // ── Ciclo de vida del pedido ───────────────────────────────────
         add_action( 'woocommerce_checkout_update_order_meta',   [ $this, 'save_quote_order_meta' ] );
@@ -733,6 +745,54 @@ return new class( $core ) implements MAD_Suite_Module {
         unset( $field );
 
         return $fields;
+    }
+
+    /**
+     * Removes the billing and shipping address blocks entirely from the rendered
+     * WooCommerce Blocks checkout for quote-role users.
+     * CSS alone is not enough: React validates client-side any field present in the DOM.
+     * With the block removed there is no DOM element → no React validation → no errors.
+     */
+    public function remove_billing_block_for_quote_role( string $content, array $block ): string {
+        if ( ! is_checkout() || is_order_received_page() || get_query_var( 'order-pay' ) ) {
+            return $content;
+        }
+        if ( ! $this->current_user_is_quote_role() ) {
+            return $content;
+        }
+        $hidden = [
+            'woocommerce/checkout-billing-address-block',
+            'woocommerce/checkout-shipping-address-block',
+        ];
+        return in_array( $block['blockName'], $hidden, true ) ? '' : $content;
+    }
+
+    /**
+     * Fills placeholder billing data for quote-role users after the Store API updates
+     * the order from the request. This runs before server-side validation, ensuring
+     * WooCommerce does not reject the order for missing address fields.
+     *
+     * @param \WC_Order                $order
+     * @param \WP_REST_Request         $request
+     */
+    public function fill_quote_billing_defaults( $order, $request ): void {
+        if ( ! $this->current_user_is_quote_role() ) return;
+
+        if ( ! $order->get_billing_first_name() ) {
+            $order->set_billing_first_name( 'Presupuesto' );
+        }
+        if ( ! $order->get_billing_last_name() ) {
+            $order->set_billing_last_name( '-' );
+        }
+        if ( ! $order->get_billing_address_1() ) {
+            $order->set_billing_address_1( '-' );
+        }
+        if ( ! $order->get_billing_city() ) {
+            $order->set_billing_city( '-' );
+        }
+        if ( ! $order->get_billing_postcode() ) {
+            $order->set_billing_postcode( '00000' );
+        }
     }
 
     public function no_shipping_for_quotes( $needs_shipping ) {
