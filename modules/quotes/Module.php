@@ -544,19 +544,33 @@ return new class( $core ) implements MAD_Suite_Module {
     /** Elimina los botones "Ver carrito" y "Finalizar compra" del mini-carrito para usuarios de presupuesto. */
     public function hide_mini_cart_buttons(): void {
         if ( ! $this->current_user_is_quote_role() ) return;
-        // Elimina los botones estándar de WooCommerce del widget de carrito
+
         remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_button_view_cart', 10 );
         remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_proceed_to_checkout', 20 );
-        // Añade un único botón de solicitar presupuesto
-        $settings    = mad_quotes_get_settings();
-        $btn_label   = trim( $this->resolve_button_text( $settings ) );
-        if ( $btn_label === '' ) {
-            $btn_label = __( 'Solicitar presupuesto', 'mad-suite' );
+
+        // Usa los mismos campos configurables que los usuarios normales,
+        // con fallbacks apropiados para la experiencia de presupuesto.
+        $settings = mad_quotes_get_settings();
+
+        $view_text = trim( $this->resolve_lang_text( $settings['mini_cart_view_cart_text'] ?? [] ) );
+        if ( $view_text === '' ) {
+            $view_text = __( 'Ver lista', 'mad-suite' );
         }
+
+        $checkout_text = trim( $this->resolve_lang_text( $settings['mini_cart_checkout_text'] ?? [] ) );
+        if ( $checkout_text === '' ) {
+            $checkout_text = __( 'Solicitar presupuesto', 'mad-suite' );
+        }
+
         printf(
-            '<a href="%s" class="button wc-forward mad-quote-mini-cart-btn">%s</a>',
+            '<a href="%s" class="button wc-forward">%s</a>',
+            esc_url( wc_get_cart_url() ),
+            esc_html( $view_text )
+        );
+        printf(
+            '<a href="%s" class="button checkout wc-forward">%s</a>',
             esc_url( wc_get_checkout_url() ),
-            esc_html( $btn_label )
+            esc_html( $checkout_text )
         );
     }
 
