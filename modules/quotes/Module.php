@@ -130,6 +130,12 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── WPML: registrar strings traducibles en cada carga ────────────────
         add_action( 'init', [ $this, 'register_wpml_strings' ], 20 );
 
+        // ── Shortcode del formulario de presupuesto ───────────────────────
+        add_shortcode( 'mad_quote_cart', [ $this, 'shortcode_quote_cart' ] );
+
+        // ── Logging de fallos de entrega de email ─────────────────────────
+        add_action( 'wp_mail_failed', [ $this, 'log_mail_failure' ] );
+
         // ── Rol: filtro de ocultación de precio de QWC (hook real del plugin original) ──
         add_filter( 'qwc_hide_prices', [ $this, 'filter_by_role' ], 10, 2 );
 
@@ -262,6 +268,13 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_button_text',
             'mad_quotes_roles',
             __( 'Texto del botón en páginas de producto y carrito. Ej: "Solicitar presupuesto". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
+        );
+        $this->register_field(
+            'quote_cart_page_id',
+            __( 'Página de solicitud de presupuesto', 'mad-suite' ),
+            'field_page_select',
+            'mad_quotes_roles',
+            __( 'Página que contiene el shortcode [mad_quote_cart]. Los usuarios de presupuesto serán redirigidos aquí en lugar del carrito de WooCommerce.', 'mad-suite' )
         );
 
         // ── Sección: Textos del mini-carrito ─────────────────────────
@@ -481,8 +494,10 @@ return new class( $core ) implements MAD_Suite_Module {
     public function maybe_handle_create_quote(): void {
         if ( empty( $_POST['mad_create_quote_nonce'] ) ) return;
 
+        $back_url = $this->get_quote_cart_url();
+
         if ( ! $this->current_user_is_quote_role() ) {
-            wp_safe_redirect( wc_get_cart_url() );
+            wp_safe_redirect( $back_url );
             exit;
         }
 
@@ -490,12 +505,12 @@ return new class( $core ) implements MAD_Suite_Module {
             sanitize_text_field( wp_unslash( $_POST['mad_create_quote_nonce'] ) ),
             'mad_create_quote'
         ) ) {
-            wp_safe_redirect( wc_get_cart_url() );
+            wp_safe_redirect( $back_url );
             exit;
         }
 
         if ( ! isset( WC()->cart ) || WC()->cart->is_empty() ) {
-            wp_safe_redirect( wc_get_cart_url() );
+            wp_safe_redirect( $back_url );
             exit;
         }
 
@@ -504,7 +519,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
         if ( ! is_email( $email ) ) {
             wc_add_notice( __( 'Por favor, introduce un email válido.', 'mad-suite' ), 'error' );
-            wp_safe_redirect( wc_get_cart_url() );
+            wp_safe_redirect( $back_url );
             exit;
         }
 
@@ -542,11 +557,15 @@ return new class( $core ) implements MAD_Suite_Module {
 
         WC()->cart->empty_cart();
 
-        // Emails: confirmación al cliente + aviso al admin (mismo guard que finalize_quote_order_status).
+        // Emails: confirmación al cliente + aviso al admin.
         if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
             $order->update_meta_data( '_mad_quote_emails_sent', '1' );
             $order->save();
             WC_Emails::instance();
+            wc_get_logger()->info(
+                sprintf( 'mad_quotes_new_request disparado — pedido #%d → destinatario: %s', $order->get_id(), $email ),
+                [ 'source' => 'mad-quotes-email' ]
+            );
             do_action( 'mad_quotes_new_request', $order->get_id() );
         }
 
@@ -563,8 +582,18 @@ return new class( $core ) implements MAD_Suite_Module {
     public function serve_quote_cart_template(): void {
         if ( ! is_cart() ) return;
         if ( ! $this->current_user_is_quote_role() ) return;
-        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) || WC()->cart->is_empty() ) return;
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return;
 
+        // Si hay una página configurada con el shortcode, redirigir allí.
+        $settings = mad_quotes_get_settings();
+        $page_id  = absint( $settings['quote_cart_page_id'] ?? 0 );
+        if ( $page_id && 'publish' === get_post_status( $page_id ) ) {
+            wp_safe_redirect( (string) get_permalink( $page_id ) );
+            exit;
+        }
+
+        // Fallback: cargar la plantilla standalone (solo si el carrito no está vacío).
+        if ( WC()->cart->is_empty() ) return;
         $template = MAD_QUOTES_TEMPLATE_PATH . 'quote-cart.php';
         if ( file_exists( $template ) ) {
             include $template;
@@ -573,9 +602,8 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Redirige al carrito a los usuarios de presupuesto que lleguen al checkout de WooCommerce
-     * por cualquier vía (URL directa, enlace, mini-carrito). Solo aplica al checkout normal;
-     * el flujo order-pay (pago de presupuesto enviado) queda intacto.
+     * Redirige al formulario de presupuesto a los usuarios de presupuesto que lleguen
+     * al checkout de WooCommerce por cualquier vía. El flujo order-pay queda intacto.
      */
     public function redirect_quote_checkout_to_cart(): void {
         if ( ! is_checkout() ) return;
@@ -583,8 +611,18 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( get_query_var( 'order-pay' ) ) return;
         if ( ! $this->current_user_is_quote_role() ) return;
 
-        wp_safe_redirect( wc_get_cart_url() );
+        wp_safe_redirect( $this->get_quote_cart_url() );
         exit;
+    }
+
+    /** URL de la página de solicitud de presupuesto, o carrito de WC como fallback. */
+    private function get_quote_cart_url(): string {
+        $settings = mad_quotes_get_settings();
+        $page_id  = absint( $settings['quote_cart_page_id'] ?? 0 );
+        if ( $page_id && 'publish' === get_post_status( $page_id ) ) {
+            return (string) get_permalink( $page_id );
+        }
+        return wc_get_cart_url();
     }
 
     /**
@@ -686,14 +724,15 @@ return new class( $core ) implements MAD_Suite_Module {
             $checkout_text = __( 'Solicitar presupuesto', 'mad-suite' );
         }
 
+        $quote_url = $this->get_quote_cart_url();
         printf(
             '<a href="%s" class="button wc-forward">%s</a>',
-            esc_url( wc_get_cart_url() ),
+            esc_url( $quote_url ),
             esc_html( $view_text )
         );
         printf(
             '<a href="%s" class="button checkout wc-forward">%s</a>',
-            esc_url( wc_get_checkout_url() ),
+            esc_url( $quote_url ),
             esc_html( $checkout_text )
         );
     }
@@ -1590,6 +1629,162 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<p class="description">' . esc_html( $args['desc'] ?? '' ) . '</p>';
     }
 
+    /** Renderiza el shortcode [mad_quote_cart] para incrustar en cualquier página. */
+    public function shortcode_quote_cart(): string {
+        if ( ! $this->current_user_is_quote_role() ) return '';
+        if ( ! function_exists( 'WC' ) || ! isset( WC()->cart ) ) return '';
+
+        $settings  = mad_quotes_get_settings();
+        $btn_label = trim( $this->resolve_lang_text( $settings['quote_button_text'] ?? [] ) );
+        if ( $btn_label === '' ) {
+            $btn_label = __( 'Solicitar presupuesto', 'mad-suite' );
+        }
+
+        ob_start();
+        wc_print_notices();
+
+        if ( WC()->cart->is_empty() ) : ?>
+            <p class="cart-empty woocommerce-info">
+                <?php esc_html_e( 'Tu solicitud de presupuesto está vacía.', 'mad-suite' ); ?>
+            </p>
+            <p>
+                <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
+                   class="button wc-backward">
+                    <?php esc_html_e( 'Ver productos', 'mad-suite' ); ?>
+                </a>
+            </p>
+        <?php else : ?>
+            <form class="mad-quote-cart__form woocommerce-cart-form"
+                  action="<?php echo esc_url( wc_get_cart_url() ); ?>"
+                  method="post">
+                <table class="mad-quote-cart__table shop_table shop_table_responsive">
+                    <thead>
+                        <tr>
+                            <th class="product-remove">&nbsp;</th>
+                            <th class="product-thumbnail">&nbsp;</th>
+                            <th class="product-name"><?php esc_html_e( 'Producto', 'mad-suite' ); ?></th>
+                            <th class="product-quantity"><?php esc_html_e( 'Cantidad', 'mad-suite' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ( WC()->cart->get_cart() as $cart_item_key => $cart_item ) :
+                        $product    = apply_filters( 'woocommerce_cart_item_product', $cart_item['data'], $cart_item, $cart_item_key );
+                        $product_id = apply_filters( 'woocommerce_cart_item_product_id', $cart_item['product_id'], $cart_item, $cart_item_key );
+                        if ( ! $product || ! $product->exists() || 0 === $cart_item['quantity'] ) continue;
+                        $product_permalink = apply_filters( 'woocommerce_cart_item_permalink', $product->is_visible() ? $product->get_permalink( $cart_item ) : '', $cart_item, $cart_item_key );
+                    ?>
+                        <tr class="woocommerce-cart-form__cart-item <?php echo esc_attr( apply_filters( 'woocommerce_cart_item_class', 'cart_item', $cart_item, $cart_item_key ) ); ?>">
+                            <td class="product-remove">
+                                <?php echo apply_filters( // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                                    'woocommerce_cart_item_remove_link',
+                                    sprintf(
+                                        '<a href="%s" class="remove" aria-label="%s" data-product_id="%s" data-product_sku="%s">&times;</a>',
+                                        esc_url( wc_get_cart_remove_url( $cart_item_key ) ),
+                                        esc_html__( 'Eliminar este artículo', 'mad-suite' ),
+                                        esc_attr( $product_id ),
+                                        esc_attr( $product->get_sku() )
+                                    ),
+                                    $cart_item_key
+                                ); ?>
+                            </td>
+                            <td class="product-thumbnail">
+                                <?php
+                                $thumbnail = apply_filters( 'woocommerce_cart_item_thumbnail', $product->get_image(), $cart_item, $cart_item_key );
+                                if ( $product_permalink ) {
+                                    printf( '<a href="%s">%s</a>', esc_url( $product_permalink ), $thumbnail ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                                } else {
+                                    echo $thumbnail; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                                }
+                                ?>
+                            </td>
+                            <td class="product-name" data-title="<?php esc_attr_e( 'Producto', 'mad-suite' ); ?>">
+                                <?php if ( $product_permalink ) : ?>
+                                    <a href="<?php echo esc_url( $product_permalink ); ?>"><?php echo wp_kses_post( apply_filters( 'woocommerce_cart_item_name', $product->get_name(), $cart_item, $cart_item_key ) ); ?></a>
+                                <?php else : ?>
+                                    <?php echo wp_kses_post( apply_filters( 'woocommerce_cart_item_name', $product->get_name(), $cart_item, $cart_item_key ) ); ?>
+                                <?php endif; ?>
+                                <?php do_action( 'woocommerce_after_cart_item_name', $cart_item, $cart_item_key ); ?>
+                                <?php echo wc_get_formatted_cart_item_data( $cart_item ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                            </td>
+                            <td class="product-quantity" data-title="<?php esc_attr_e( 'Cantidad', 'mad-suite' ); ?>">
+                                <?php if ( $product->is_sold_individually() ) {
+                                    echo '1';
+                                } else {
+                                    woocommerce_quantity_input( [
+                                        'input_name'   => "cart[{$cart_item_key}][qty]",
+                                        'input_value'  => $cart_item['quantity'],
+                                        'max_value'    => $product->get_max_purchase_quantity(),
+                                        'min_value'    => '0',
+                                        'product_name' => $product->get_name(),
+                                    ], $product );
+                                } ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <div class="mad-quote-cart__update">
+                    <button type="submit" class="button" name="update_cart"
+                            value="<?php esc_attr_e( 'Actualizar', 'mad-suite' ); ?>">
+                        <?php esc_html_e( 'Actualizar solicitud', 'mad-suite' ); ?>
+                    </button>
+                    <?php wp_nonce_field( 'woocommerce-cart', 'woocommerce-cart-nonce' ); ?>
+                </div>
+            </form>
+
+            <div class="mad-quote-cart__actions">
+                <form method="post" class="mad-quote-submit-form">
+                    <?php wp_nonce_field( 'mad_create_quote', 'mad_create_quote_nonce' ); ?>
+                    <?php $current_user = wp_get_current_user(); ?>
+                    <p class="mad-quote-cart__field">
+                        <label for="mad-quote-email"><?php esc_html_e( 'Email', 'mad-suite' ); ?></label>
+                        <input type="email" id="mad-quote-email" name="olofane_email"
+                               value="<?php echo esc_attr( $current_user->user_email ); ?>" required>
+                    </p>
+                    <p class="mad-quote-cart__field">
+                        <label for="mad-quote-notas"><?php esc_html_e( 'Notas (opcional)', 'mad-suite' ); ?></label>
+                        <textarea id="mad-quote-notas" name="olofane_notas" rows="4"></textarea>
+                    </p>
+                    <button type="submit" name="mad_submit_quote" class="button alt mad-quote-cart__proceed">
+                        <?php echo esc_html( $btn_label ); ?>
+                    </button>
+                </form>
+                <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
+                   class="button mad-quote-cart__back">
+                    <?php esc_html_e( 'Seguir viendo productos', 'mad-suite' ); ?>
+                </a>
+            </div>
+        <?php endif;
+
+        return ob_get_clean();
+    }
+
+    /** Registra en el log de WooCommerce los fallos de entrega de email. */
+    public function log_mail_failure( WP_Error $error ): void {
+        wc_get_logger()->error(
+            'wp_mail() falló: ' . $error->get_error_message(),
+            [ 'source' => 'mad-quotes-email' ]
+        );
+    }
+
+    /** Selector de página de WordPress para los ajustes del módulo. */
+    public function field_page_select( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $current  = absint( $settings[ $key ] ?? 0 );
+
+        wp_dropdown_pages( [
+            'name'              => $opt_key . '[' . $key . ']',
+            'id'                => 'mad_quotes_' . $key,
+            'selected'          => $current,
+            'show_option_none'  => __( '— Usar plantilla por defecto —', 'mad-suite' ),
+            'option_none_value' => 0,
+            'post_status'       => 'publish',
+        ] );
+        echo '<br><span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+    }
+
     public function sanitize_settings( $input ) {
         $clean = [];
 
@@ -1613,6 +1808,8 @@ return new class( $core ) implements MAD_Suite_Module {
                 ? array_map( 'sanitize_text_field', $raw )
                 : sanitize_text_field( $raw );
         }
+
+        $clean['quote_cart_page_id'] = absint( $input['quote_cart_page_id'] ?? 0 );
 
         return $clean;
     }
