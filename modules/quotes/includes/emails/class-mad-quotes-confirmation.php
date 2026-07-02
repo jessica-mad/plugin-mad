@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_Quotes_Email_Confirmation extends WC_Email {
 
+    use MAD_Email_WPML_Trait;
+
     public function __construct() {
         $this->id             = 'mad_quotes_confirmation';
         $this->title          = __( '[MAD Quotes] Confirmación de solicitud (cliente)', 'mad-suite' );
@@ -40,6 +42,8 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
         $this->placeholders['{order_date}']   = date_i18n( wc_date_format(), strtotime( $this->object->get_date_created() ) );
         $this->placeholders['{order_number}'] = $this->object->get_order_number();
 
+        $orig_lang = $this->switch_to_order_language( $this->object );
+
         $this->send(
             $this->get_recipient(),
             $this->get_subject(),
@@ -47,6 +51,8 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
             $this->get_headers(),
             $this->get_attachments()
         );
+
+        $this->restore_order_language( $orig_lang );
     }
 
     public function get_content_html() {
@@ -105,17 +111,11 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
 
     public function init_form_fields() {
         parent::init_form_fields();
-        $this->form_fields['body_text'] = [
-            'title'       => __( 'Cuerpo del email', 'mad-suite' ),
-            'type'        => 'textarea',
-            'description' => __( 'Texto principal del email. Usa {customer_name} para insertar el nombre del cliente.', 'mad-suite' ),
-            'default'     => $this->get_default_body_text(),
-            'css'         => 'width:400px;height:120px;',
-        ];
+        $this->add_body_text_form_fields( $this->form_fields );
     }
 
     private function get_body_text( $order ): string {
-        $text = $this->get_option( 'body_text', $this->get_default_body_text() );
+        $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
         return str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
     }
 

@@ -36,12 +36,11 @@ get_header( 'shop' );
 
     <?php if ( WC()->cart->is_empty() ) : ?>
 
-        <p class="cart-empty woocommerce-info">
+        <p class="cart-empty">
             <?php esc_html_e( 'Tu solicitud de presupuesto está vacía.', 'mad-suite' ); ?>
         </p>
         <p>
-            <a href="<?php echo esc_url( apply_filters( 'woocommerce_return_to_shop_redirect', wc_get_page_permalink( 'shop' ) ) ); ?>"
-               class="button wc-backward">
+            <a href="<?php echo esc_url( apply_filters( 'woocommerce_return_to_shop_redirect', wc_get_page_permalink( 'shop' ) ) ); ?>">
                 <?php esc_html_e( 'Ver productos', 'mad-suite' ); ?>
             </a>
         </p>
@@ -52,11 +51,11 @@ get_header( 'shop' );
             <?php esc_html_e( 'Tu solicitud de presupuesto', 'mad-suite' ); ?>
         </h1>
 
-        <form class="mad-quote-cart__form woocommerce-cart-form"
+        <form class="mad-quote-cart__form"
               action="<?php echo esc_url( wc_get_cart_url() ); ?>"
               method="post">
 
-            <table class="mad-quote-cart__table shop_table shop_table_responsive">
+            <table class="mad-quote-cart__table">
                 <thead>
                     <tr>
                         <th class="product-remove">&nbsp;</th>
@@ -145,7 +144,7 @@ get_header( 'shop' );
             <!-- Botones del formulario -->
             <div class="mad-quote-cart__update">
                 <button type="submit"
-                        class="button"
+                        class="mad-quote-cart__btn-update"
                         name="update_cart"
                         value="<?php esc_attr_e( 'Actualizar solicitud', 'mad-suite' ); ?>">
                     <?php esc_html_e( 'Actualizar solicitud', 'mad-suite' ); ?>
@@ -183,13 +182,13 @@ get_header( 'shop' );
 
                 <button type="submit"
                         name="mad_submit_quote"
-                        class="button alt mad-quote-cart__proceed">
+                        class="mad-quote-cart__proceed">
                     <?php echo esc_html( $btn_label ); ?>
                 </button>
             </form>
 
             <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
-               class="button mad-quote-cart__back">
+               class="mad-quote-cart__back">
                 <?php esc_html_e( 'Seguir viendo productos', 'mad-suite' ); ?>
             </a>
         </div>

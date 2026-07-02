@@ -11,6 +11,8 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_Quotes_Email_New_Request extends WC_Email {
 
+    use MAD_Email_WPML_Trait;
+
     public function __construct() {
         $this->id             = 'mad_quotes_new_request';
         $this->title          = __( '[MAD Quotes] Nueva solicitud (admin)', 'mad-suite' );
@@ -118,17 +120,14 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
             'placeholder' => get_option( 'admin_email' ),
             'default'     => get_option( 'admin_email' ),
         ];
-        $this->form_fields['body_text'] = [
-            'title'       => __( 'Cuerpo del email', 'mad-suite' ),
-            'type'        => 'textarea',
-            'description' => __( 'Texto principal del email. Usa {customer_name} para insertar el nombre completo del cliente.', 'mad-suite' ),
-            'default'     => $this->get_default_body_text(),
-            'css'         => 'width:400px;height:120px;',
-        ];
+        $this->add_body_text_form_fields(
+            $this->form_fields,
+            __( 'Texto principal del email. Usa {customer_name} para insertar el nombre completo del cliente.', 'mad-suite' )
+        );
     }
 
     private function get_body_text( $order ): string {
-        $text = $this->get_option( 'body_text', $this->get_default_body_text() );
+        $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
         return str_replace( '{customer_name}', $order->get_formatted_billing_full_name(), $text );
     }
 
