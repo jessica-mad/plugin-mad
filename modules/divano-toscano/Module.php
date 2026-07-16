@@ -136,7 +136,6 @@ return new class( $core ) implements MAD_Suite_Module {
     public function on_simple_product_save( int $product_id ): void {
         $product = wc_get_product( $product_id );
         if ( ! $product ) return;
-        if ( $product->is_type( 'variable' ) ) return; // las variaciones se gestionan por separado
 
         $settings = $this->get_settings();
         if ( ! $settings['overwrite'] && $product->get_sku() ) return;
@@ -171,10 +170,9 @@ return new class( $core ) implements MAD_Suite_Module {
         $product = wc_get_product( $post->ID );
         if ( ! $product ) return;
 
+        $preview = $this->generate_product_sku( $product );
         if ( $product->is_type( 'variable' ) ) {
-            $preview = __( 'Los SKUs se generan por variación. Usa el botón para regenerar todas.', 'mad-suite' );
-        } else {
-            $preview = $this->generate_product_sku( $product );
+            $preview .= ' ' . __( '(padre) + SKU individual por variación', 'mad-suite' );
         }
         ?>
         <p style="word-break:break-all;"><strong><?php esc_html_e( 'Vista previa:', 'mad-suite' ); ?></strong><br>
