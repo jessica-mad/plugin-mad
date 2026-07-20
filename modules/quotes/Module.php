@@ -111,6 +111,7 @@ return new class( $core ) implements MAD_Suite_Module {
         ] );
         add_filter( 'wc_order_statuses',                           [ $this, 'add_wc_order_statuses' ] );
         add_filter( 'woocommerce_valid_order_statuses_for_payment', [ $this, 'valid_payment_statuses' ] );
+        add_filter( 'woocommerce_order_needs_payment',             [ $this, 'quote_sent_needs_payment' ], 10, 2 );
         add_action( 'admin_head', [ $this, 'order_status_css' ] );
 
         // ── Rol: cachear precio HTML antes de que el plugin original lo modifique ──
@@ -357,6 +358,18 @@ return new class( $core ) implements MAD_Suite_Module {
     public function valid_payment_statuses( $statuses ) {
         $statuses[] = 'quote-sent';
         return $statuses;
+    }
+
+    /**
+     * WooCommerce moderno usa needs_payment() que requiere status válido Y total > 0.
+     * Para presupuestos en quote-sent el total lo fija el admin, y queremos que el
+     * pago sea posible aunque el total fuera 0 (ej. muestra / regalo).
+     */
+    public function quote_sent_needs_payment( bool $needs_payment, WC_Order $order ): bool {
+        if ( $needs_payment ) return true;
+        if ( $order->get_status() !== 'quote-sent' ) return $needs_payment;
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $needs_payment;
+        return true;
     }
 
     public function order_status_css() {
