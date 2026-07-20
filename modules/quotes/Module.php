@@ -396,7 +396,6 @@ return new class( $core ) implements MAD_Suite_Module {
         // Si ya tiene dirección completa, no mostrar el formulario.
         if ( $order->get_billing_first_name() && $order->get_billing_last_name() ) return;
 
-        $countries       = WC()->countries->get_countries();
         $default_country = wc_get_base_location()['country'] ?? 'ES';
         $nonce           = wp_create_nonce( 'mad_quote_billing_' . $order_id );
 
