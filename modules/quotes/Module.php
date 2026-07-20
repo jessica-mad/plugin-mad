@@ -159,6 +159,10 @@ return new class( $core ) implements MAD_Suite_Module {
         // Prioridad 10: si un usuario de presupuesto llega al checkout de WC (no order-pay), redirigir al carrito.
         add_action( 'template_redirect', [ $this, 'redirect_quote_checkout_to_cart' ] );
 
+        // Datos de facturación en la página order-pay de presupuestos enviados.
+        add_action( 'woocommerce_pay_order_before_payment', [ $this, 'inject_billing_fields_on_pay_page' ] );
+        add_action( 'woocommerce_before_pay_action',        [ $this, 'save_billing_fields_before_pay'   ], 1, 1 );
+
         // ── Mini-carrito: ocultar botones y subtotal para usuarios de presupuesto ─
         // El plugin QWC base solo lo hace por producto (cart_contains_quotable()),
         // no por rol — aquí lo cubrimos con la lógica de rol de MAD Quotes.
@@ -375,6 +379,52 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( $order->get_status() !== 'quote-sent' ) return $needs_payment;
         if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $needs_payment;
         return true;
+    }
+
+    /**
+     * Muestra campos de facturación en la página order-pay cuando el pedido
+     * es un presupuesto enviado y aún no tiene dirección de facturación.
+     */
+    public function inject_billing_fields_on_pay_page(): void {
+        $order_id = absint( get_query_var( 'order-pay' ) );
+        if ( ! $order_id ) return;
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( ! in_array( $order->get_status(), [ 'quote-sent', 'quote-complete' ], true ) ) return;
+
+        // Si ya tiene dirección completa, no mostrar el formulario.
+        if ( $order->get_billing_first_name() && $order->get_billing_last_name() ) return;
+
+        $countries       = WC()->countries->get_countries();
+        $default_country = wc_get_base_location()['country'] ?? 'ES';
+        $nonce           = wp_create_nonce( 'mad_quote_billing_' . $order_id );
+
+        include MAD_QUOTES_TEMPLATE_PATH . 'quote-billing-fields.php';
+    }
+
+    /**
+     * Guarda los campos de facturación enviados en la página order-pay antes
+     * de que WooCommerce procese el pago.
+     *
+     * @param WC_Order $order
+     */
+    public function save_billing_fields_before_pay( WC_Order $order ): void {
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( empty( $_POST['mad_billing_nonce'] ) ) return;
+
+        $nonce = sanitize_text_field( wp_unslash( $_POST['mad_billing_nonce'] ) );
+        if ( ! wp_verify_nonce( $nonce, 'mad_quote_billing_' . $order->get_id() ) ) return;
+
+        $fields = [ 'first_name', 'last_name', 'company', 'address_1', 'address_2', 'city', 'state', 'postcode', 'country', 'phone' ];
+        foreach ( $fields as $field ) {
+            $value  = sanitize_text_field( wp_unslash( $_POST[ 'billing_' . $field ] ?? '' ) );
+            $setter = 'set_billing_' . $field;
+            if ( method_exists( $order, $setter ) ) {
+                $order->$setter( $value );
+            }
+        }
+        $order->save();
     }
 
     public function order_status_css() {
