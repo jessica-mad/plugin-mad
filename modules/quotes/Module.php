@@ -1064,17 +1064,16 @@ return new class( $core ) implements MAD_Suite_Module {
      * Impide que WooCommerce reduzca el stock para pedidos de presupuesto.
      */
     public function prevent_stock_reduction( $can_reduce, $order ) {
-        // Comprobación primaria: payment method disponible sin depender del cache de metas.
-        if ( $order->get_payment_method() === 'quotes-gateway' ) {
-            return false;
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $can_reduce;
+
+        // Solo se reduce stock cuando el pago está confirmado.
+        // on-hold (transferencia pendiente de confirmar) no reduce stock.
+        $reduce_on = [ 'processing', 'completed' ];
+        if ( in_array( $order->get_status(), $reduce_on, true ) ) {
+            return $can_reduce;
         }
-        // Comprobación secundaria: estado o meta explícita (pedidos ya procesados).
-        if ( in_array( $order->get_status(), [ 'quote-pending', 'quote-sent' ], true )
-            || '1' === $order->get_meta( '_mad_qwc_quote' )
-        ) {
-            return false;
-        }
-        return $can_reduce;
+
+        return false;
     }
 
     /**
