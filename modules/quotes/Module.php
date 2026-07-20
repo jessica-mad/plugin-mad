@@ -218,6 +218,11 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_cancel_unpaid_order',          [ $this, 'prevent_cancel' ], 10, 2 );
         add_filter( 'woocommerce_my_account_my_orders_actions', [ $this, 'my_orders_actions' ], 10, 2 );
 
+        // Ocultar precios al cliente en pedidos de presupuesto pendiente de confirmación.
+        add_action( 'woocommerce_thankyou',                 [ $this, 'hide_prices_on_pending_quote_page' ] );
+        add_action( 'woocommerce_view_order',               [ $this, 'hide_prices_on_pending_quote_page' ] );
+        add_filter( 'woocommerce_get_order_item_totals',    [ $this, 'hide_totals_on_pending_quote' ], 10, 2 );
+
         // ── UI de admin (botones + tabla de precios en el pedido) ──────
         add_action( 'woocommerce_order_item_add_action_buttons', [ $this, 'add_order_buttons' ] );
         add_action( 'admin_enqueue_scripts',                     [ $this, 'enqueue_admin_js' ] );
@@ -1108,6 +1113,47 @@ return new class( $core ) implements MAD_Suite_Module {
         $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
         $order->save();
         self::$enforcing_status = false;
+    }
+
+    /**
+     * Inyecta CSS en la página de confirmación / vista de pedido del cliente
+     * para ocultar precios mientras el presupuesto aún no ha sido enviado.
+     * El admin ve los precios correctamente desde el panel de administración.
+     */
+    public function hide_prices_on_pending_quote_page( int $order_id ): void {
+        if ( is_admin() ) return;
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( $order->get_status() !== 'quote-pending' ) return;
+
+        echo '<style>
+            /* Ocultar columna de precio en la tabla de ítems del pedido */
+            .woocommerce-order .product-total,
+            .woocommerce-table--order-details .product-total { display:none!important; }
+            /* Ocultar el pie de totales (subtotal, total, método de pago) */
+            .woocommerce-order .woocommerce-table--order-details tfoot,
+            .woocommerce-order .woocommerce-order-overview__total { display:none!important; }
+        </style>';
+    }
+
+    /**
+     * Elimina las filas financieras (subtotal, total) del resumen de pedido
+     * en las vistas del cliente para presupuestos pendientes de confirmación.
+     *
+     * @param  array    $totals  Filas de totales generadas por WooCommerce.
+     * @param  WC_Order $order
+     * @return array
+     */
+    public function hide_totals_on_pending_quote( array $totals, WC_Order $order ): array {
+        if ( is_admin() ) return $totals;
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $totals;
+        if ( $order->get_status() !== 'quote-pending' ) return $totals;
+
+        $financial_keys = [ 'cart_subtotal', 'order_total', 'cart_tax', 'shipping', 'shipping_tax', 'fee', 'discount' ];
+        foreach ( $financial_keys as $key ) {
+            unset( $totals[ $key ] );
+        }
+        return $totals;
     }
 
     /**
