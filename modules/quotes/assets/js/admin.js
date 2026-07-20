@@ -62,8 +62,8 @@
         } )
         .done( function ( response ) {
             if ( response === 'quote-sent' ) {
-                $btn.text( params.i18n_resend || 'Reenviar presupuesto' ).prop( 'disabled', false );
                 $msg.text( params.i18n_sent || '✔ Presupuesto enviado' );
+                setTimeout( function () { location.reload(); }, 3000 );
             } else {
                 $btn.prop( 'disabled', false );
                 alert( params.i18n_error || 'Error. Inténtalo de nuevo.' );
