@@ -1135,9 +1135,18 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function enforce_quote_status( $order_id, $from_status, $to_status ) {
         if ( self::$enforcing_status ) return;
-        // Estas transiciones están permitidas
-        $allowed = [ 'quote-pending', 'quote-sent', 'cancelled', 'completed', 'refunded', 'failed', 'trash' ];
-        if ( in_array( $to_status, $allowed, true ) ) return;
+
+        // Siempre permitidos.
+        $always_allowed = [ 'quote-pending', 'quote-sent', 'cancelled', 'completed', 'refunded', 'failed', 'trash' ];
+        if ( in_array( $to_status, $always_allowed, true ) ) return;
+
+        // on-hold / processing están permitidos solo si el cliente viene del flujo de pago
+        // (transición desde quote-sent o quote-complete). En cualquier otro caso se bloquean.
+        $payment_statuses = [ 'on-hold', 'processing' ];
+        $payment_origins  = [ 'quote-sent', 'quote-complete' ];
+        if ( in_array( $to_status, $payment_statuses, true ) && in_array( $from_status, $payment_origins, true ) ) {
+            return;
+        }
 
         $order = wc_get_order( $order_id );
         if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
@@ -1149,14 +1158,17 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Red de seguridad: asegura el estado correcto en la página de confirmación,
-     * después de que todo el procesamiento de pago ha terminado.
+     * Red de seguridad en la página de confirmación: solo fuerza quote-pending
+     * si el pedido no ha pasado por el flujo de pago real (on-hold, processing…).
      */
     public function enforce_quote_status_thankyou( $order_id ) {
         if ( self::$enforcing_status ) return;
         $order = wc_get_order( $order_id );
         if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
-        if ( $order->get_status() === 'quote-pending' ) return;
+
+        // Si el pedido ya está en un estado de pago legítimo, no tocarlo.
+        $paid_statuses = [ 'on-hold', 'processing', 'completed', 'quote-pending', 'cancelled', 'refunded', 'failed' ];
+        if ( in_array( $order->get_status(), $paid_statuses, true ) ) return;
 
         self::$enforcing_status = true;
         $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
