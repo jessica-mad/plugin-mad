@@ -544,11 +544,18 @@ return new class( $core ) implements MAD_Suite_Module {
             $order->add_product( $item['data'], $item['quantity'] );
         }
 
-        // Precios a 0 — el admin los fijará antes de enviar el presupuesto.
+        // Pre-poblar con precio regular de cada producto como punto de partida.
+        // El admin puede modificarlos en el meta box antes de enviar el presupuesto.
+        $order_total = 0.0;
         foreach ( $order->get_items() as $line ) {
-            $line->set_subtotal( 0 );
-            $line->set_total( 0 );
+            $quote_price = mad_quotes_get_product_quote_price( $line->get_product_id() );
+            $qty         = $line->get_quantity();
+            $line_total  = $quote_price * $qty;
+            $line->update_meta_data( '_mad_quote_line_price', (string) $quote_price );
+            $line->set_subtotal( $line_total );
+            $line->set_total( $line_total );
             $line->save();
+            $order_total += $line_total;
         }
 
         $order->set_billing_email( $email );
@@ -558,7 +565,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $order->set_cart_tax( 0 );
         $order->set_shipping_total( 0 );
         $order->set_shipping_tax( 0 );
-        $order->set_total( 0 );
+        $order->set_total( $order_total );
         $order->update_meta_data( '_mad_qwc_quote', '1' );
         $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
         $lang = apply_filters( 'wpml_current_language', null );
