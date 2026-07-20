@@ -1339,7 +1339,7 @@ return new class( $core ) implements MAD_Suite_Module {
             }
         }
 
-        wp_die();
+        wp_send_json_success();
     }
 
     public function ajax_send_quote() {
@@ -1385,8 +1385,11 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         $result = $this->send_quote_email( $order_id, $admin_note );
-        echo $result ? 'quote-sent' : 'error';
-        wp_die();
+        if ( $result ) {
+            wp_send_json_success( 'quote-sent' );
+        } else {
+            wp_send_json_error( 'error' );
+        }
     }
 
     /* ================================================================ */

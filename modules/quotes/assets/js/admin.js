@@ -61,7 +61,7 @@
             nonce       : params.nonce_send_quote,
         } )
         .done( function ( response ) {
-            if ( response === 'quote-sent' ) {
+            if ( response && response.success ) {
                 $msg.text( params.i18n_sent || '✔ Presupuesto enviado' );
                 setTimeout( function () { location.reload(); }, 3000 );
             } else {
