@@ -1166,7 +1166,7 @@ return new class( $core ) implements MAD_Suite_Module {
         // on-hold / processing están permitidos solo si el cliente viene del flujo de pago
         // (transición desde quote-sent o quote-complete). En cualquier otro caso se bloquean.
         $payment_statuses = [ 'on-hold', 'processing' ];
-        $payment_origins  = [ 'quote-sent', 'quote-complete' ];
+        $payment_origins  = [ 'quote-sent', 'quote-complete', 'on-hold' ];
         if ( in_array( $to_status, $payment_statuses, true ) && in_array( $from_status, $payment_origins, true ) ) {
             return;
         }
