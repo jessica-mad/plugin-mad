@@ -347,8 +347,9 @@ return new class( $core ) implements MAD_Suite_Module {
         );
 
         // ── AJAX ───────────────────────────────────────────────────────
-        add_action( 'wp_ajax_mad_quotes_update_status', [ $this, 'ajax_update_status' ] );
-        add_action( 'wp_ajax_mad_quotes_send_quote',    [ $this, 'ajax_send_quote' ] );
+        add_action( 'wp_ajax_mad_quotes_update_status',       [ $this, 'ajax_update_status' ] );
+        add_action( 'wp_ajax_mad_quotes_send_quote',          [ $this, 'ajax_send_quote' ] );
+        add_action( 'wp_ajax_mad_admin_upload_payment_proof', [ $this, 'ajax_admin_upload_payment_proof' ] );
 
         // ── Panel de producto ──────────────────────────────────────────
         add_action( 'woocommerce_product_data_tabs',    [ $this, 'product_data_tab' ] );
@@ -1389,12 +1390,15 @@ return new class( $core ) implements MAD_Suite_Module {
             'order_id'            => $order_id,
             'nonce_update_status' => wp_create_nonce( 'mad-quotes-update-status' ),
             'nonce_send_quote'    => wp_create_nonce( 'mad-quotes-send-quote' ),
+            'nonce_proof'         => wp_create_nonce( 'mad_admin_proof_' . $order_id ),
             'i18n_sending'        => __( 'Enviando…', 'mad-suite' ),
             'i18n_updating'       => __( 'Actualizando…', 'mad-suite' ),
             'i18n_sent'           => __( '✔ Presupuesto enviado', 'mad-suite' ),
             'i18n_resend'         => __( 'Reenviar presupuesto', 'mad-suite' ),
             'i18n_complete'       => __( 'Presupuesto completo', 'mad-suite' ),
             'i18n_error'          => __( 'Error. Inténtalo de nuevo.', 'mad-suite' ),
+            'i18n_uploading'      => __( 'Verificando…', 'mad-suite' ),
+            'i18n_file_error'     => __( 'Tipo de archivo no permitido.', 'mad-suite' ),
         ] );
         wp_enqueue_script( 'mad-quotes-admin' );
     }
@@ -1413,27 +1417,38 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function render_payment_proof_admin( WC_Order $order ): void {
         if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
-        // Mostrar siempre que haya comprobante subido, o si el pedido está en espera (aún sin comprobante).
         $proof_url = $order->get_meta( '_mad_payment_proof_url' );
         if ( ! $proof_url && $order->get_status() !== 'on-hold' ) return;
 
-        $verified  = $order->get_meta( '_mad_payment_proof_verified' );
-        $ai_json   = $order->get_meta( '_mad_payment_proof_ai_result' );
-        $ai        = $ai_json ? json_decode( (string) $ai_json, true ) : null;
+        $verified = $order->get_meta( '_mad_payment_proof_verified' );
+        $ai_json  = $order->get_meta( '_mad_payment_proof_ai_result' );
+        $ai       = $ai_json ? json_decode( (string) $ai_json, true ) : null;
+        $is_pdf   = $proof_url && 'pdf' === strtolower( pathinfo( $proof_url, PATHINFO_EXTENSION ) );
+        $nonce    = wp_create_nonce( 'mad_admin_proof_' . $order->get_id() );
         ?>
-        <div style="margin-top:12px;padding:10px;background:#f8f8f8;border:1px solid #ddd;border-radius:3px;">
+        <div id="mad-proof-admin-box" style="margin-top:12px;padding:10px;background:#f8f8f8;border:1px solid #ddd;border-radius:3px;">
             <h4 style="margin:0 0 8px;"><?php esc_html_e( 'Comprobante de transferencia', 'mad-suite' ); ?></h4>
+
             <?php if ( $proof_url ) : ?>
-                <p style="margin:0 0 6px;">
-                    <a href="<?php echo esc_url( $proof_url ); ?>" target="_blank">
-                        <?php esc_html_e( '📎 Ver comprobante', 'mad-suite' ); ?>
+                <div id="mad-proof-preview" style="margin-bottom:8px;">
+                    <?php if ( $is_pdf ) : ?>
+                        <embed src="<?php echo esc_url( $proof_url ); ?>" type="application/pdf"
+                               width="100%" height="260" style="display:block;border:1px solid #ddd;margin-bottom:4px;">
+                    <?php else : ?>
+                        <img src="<?php echo esc_url( $proof_url ); ?>"
+                             alt="<?php esc_attr_e( 'Comprobante', 'mad-suite' ); ?>"
+                             style="max-width:100%;max-height:260px;border:1px solid #ddd;display:block;margin-bottom:4px;">
+                    <?php endif; ?>
+                    <a href="<?php echo esc_url( $proof_url ); ?>" target="_blank" style="font-size:12px;">
+                        <?php esc_html_e( '↗ Abrir en pestaña nueva', 'mad-suite' ); ?>
                     </a>
                     <?php if ( $verified ) : ?>
-                        <span style="color:green;margin-left:8px;">✔ <?php esc_html_e( 'Verificado por IA', 'mad-suite' ); ?></span>
+                        <span style="color:green;margin-left:10px;font-size:12px;">✔ <?php esc_html_e( 'Verificado por IA', 'mad-suite' ); ?></span>
                     <?php endif; ?>
-                </p>
+                </div>
+
                 <?php if ( is_array( $ai ) ) : ?>
-                <ul style="margin:4px 0 0;padding-left:16px;font-size:12px;color:#444;">
+                <ul style="margin:0 0 8px;padding-left:16px;font-size:12px;color:#444;">
                     <?php if ( isset( $ai['detected_amount'] ) && $ai['detected_amount'] !== null ) : ?>
                         <li><?php esc_html_e( 'Importe detectado:', 'mad-suite' ); ?> <strong><?php echo wp_kses_post( wc_price( (float) $ai['detected_amount'] ) ); ?></strong></li>
                     <?php endif; ?>
@@ -1444,20 +1459,139 @@ return new class( $core ) implements MAD_Suite_Module {
                         <li><?php esc_html_e( 'Fecha:', 'mad-suite' ); ?> <?php echo esc_html( $ai['date'] ); ?></li>
                     <?php endif; ?>
                     <?php if ( isset( $ai['legitimate'] ) ) :
-                        $color = $ai['legitimate'] ? 'green' : 'red';
-                        $label = $ai['legitimate']
-                            ? esc_html__( 'Parece legítimo', 'mad-suite' )
-                            : esc_html__( 'Posiblemente falso', 'mad-suite' );
+                        $leg_color = $ai['legitimate'] ? 'green' : 'red';
+                        $leg_label = $ai['legitimate'] ? __( 'Parece legítimo', 'mad-suite' ) : __( 'Posiblemente falso', 'mad-suite' );
                     ?>
-                        <li style="color:<?php echo esc_attr( $color ); ?>;"><?php echo esc_html( $label ); ?></li>
+                        <li style="color:<?php echo esc_attr( $leg_color ); ?>;"><?php echo esc_html( $leg_label ); ?></li>
                     <?php endif; ?>
                 </ul>
                 <?php endif; ?>
+
+                <button type="button" id="mad-proof-replace-btn" class="button button-small">
+                    <?php esc_html_e( 'Reemplazar comprobante', 'mad-suite' ); ?>
+                </button>
+
             <?php else : ?>
-                <p style="margin:0;color:#888;"><?php esc_html_e( 'El cliente aún no ha subido el comprobante.', 'mad-suite' ); ?></p>
+                <p style="margin:0 0 8px;color:#888;"><?php esc_html_e( 'Sin comprobante aún.', 'mad-suite' ); ?></p>
             <?php endif; ?>
+
+            <div id="mad-proof-admin-upload" style="margin-top:8px;<?php echo $proof_url ? 'display:none;' : ''; ?>">
+                <input type="file" id="mad-proof-admin-file"
+                       accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+                       style="display:block;margin-bottom:6px;">
+                <button type="button" id="mad-proof-admin-submit" class="button button-primary button-small">
+                    <?php $proof_url ? esc_html_e( 'Subir nuevo comprobante', 'mad-suite' ) : esc_html_e( 'Subir comprobante', 'mad-suite' ); ?>
+                </button>
+                <span id="mad-proof-admin-msg" style="margin-left:8px;font-size:12px;"></span>
+                <input type="hidden" id="mad-proof-admin-nonce"    value="<?php echo esc_attr( $nonce ); ?>">
+                <input type="hidden" id="mad-proof-admin-order-id" value="<?php echo esc_attr( (string) $order->get_id() ); ?>">
+            </div>
         </div>
         <?php
+    }
+
+    /**
+     * AJAX: el admin sube o reemplaza el comprobante desde el backoffice.
+     */
+    public function ajax_admin_upload_payment_proof(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Permiso denegado.', 'mad-suite' ) ] );
+        }
+
+        $order_id = absint( $_POST['order_id'] ?? 0 );
+        $nonce    = sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) );
+
+        if ( ! wp_verify_nonce( $nonce, 'mad_admin_proof_' . $order_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Pedido no válido.', 'mad-suite' ) ] );
+        }
+
+        if ( empty( $_FILES['proof_file'] ) || UPLOAD_ERR_OK !== $_FILES['proof_file']['error'] ) {
+            wp_send_json_error( [ 'message' => __( 'Error al subir el archivo.', 'mad-suite' ) ] );
+        }
+
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+        $file     = $_FILES['proof_file'];
+        $filetype = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
+        $mime     = $filetype['type'] ?? '';
+        $allowed  = [ 'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf' ];
+
+        if ( ! in_array( $mime, $allowed, true ) ) {
+            wp_send_json_error( [ 'message' => __( 'Tipo de archivo no permitido.', 'mad-suite' ) ] );
+        }
+
+        if ( $file['size'] > 10 * 1024 * 1024 ) {
+            wp_send_json_error( [ 'message' => __( 'El archivo no puede superar 10 MB.', 'mad-suite' ) ] );
+        }
+
+        $upload_dir = wp_upload_dir();
+        $sub_dir    = '/mad-payment-proofs/' . gmdate( 'Y/m' );
+        $target_dir = $upload_dir['basedir'] . $sub_dir;
+        wp_mkdir_p( $target_dir );
+
+        $ext      = strtolower( pathinfo( sanitize_file_name( $file['name'] ), PATHINFO_EXTENSION ) );
+        $filename = 'proof-' . $order_id . '-' . time() . '.' . $ext;
+        $target   = $target_dir . '/' . $filename;
+
+        if ( ! move_uploaded_file( $file['tmp_name'], $target ) ) {
+            wp_send_json_error( [ 'message' => __( 'No se pudo guardar el archivo.', 'mad-suite' ) ] );
+        }
+
+        $file_url = $upload_dir['baseurl'] . $sub_dir . '/' . $filename;
+        $order->update_meta_data( '_mad_payment_proof_path', $target );
+        $order->update_meta_data( '_mad_payment_proof_url', $file_url );
+        $order->update_meta_data( '_mad_payment_proof_verified', '' );
+        $order->update_meta_data( '_mad_payment_proof_ai_result', '' );
+        $order->save();
+
+        $result = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_success( [
+                'message'   => __( 'Comprobante guardado. No se pudo verificar con IA: ', 'mad-suite' ) . $result->get_error_message(),
+                'proof_url' => $file_url,
+                'is_pdf'    => 'application/pdf' === $mime,
+            ] );
+        }
+
+        $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
+
+        if ( $result['amount_matches'] ) {
+            $order->update_meta_data( '_mad_payment_proof_verified', '1' );
+            $order->save();
+            if ( $order->get_status() === 'on-hold' ) {
+                $order->update_status( 'processing', __( 'Comprobante verificado por admin + IA. Importe coincide.', 'mad-suite' ) );
+            } else {
+                $order->add_order_note( __( 'Admin subió nuevo comprobante. Verificado por IA — importe coincide.', 'mad-suite' ) );
+            }
+            $message = __( '✔ Verificado. El importe coincide.', 'mad-suite' );
+        } else {
+            $order->save();
+            $detected = isset( $result['detected_amount'] ) && $result['detected_amount'] !== null
+                ? wc_price( (float) $result['detected_amount'] )
+                : __( 'no detectado', 'mad-suite' );
+            $order->add_order_note( sprintf(
+                __( 'Admin subió comprobante. Importe detectado: %s — Esperado: %s.', 'mad-suite' ),
+                wp_strip_all_tags( $detected ),
+                wc_price( (float) $order->get_total() )
+            ) );
+            $message = sprintf(
+                __( 'Guardado. Importe detectado: %s (esperado: %s).', 'mad-suite' ),
+                wp_strip_all_tags( $detected ),
+                wp_strip_all_tags( wc_price( (float) $order->get_total() ) )
+            );
+        }
+
+        wp_send_json_success( [
+            'message'   => $message,
+            'proof_url' => $file_url,
+            'is_pdf'    => 'application/pdf' === $mime,
+            'verified'  => $result['amount_matches'],
+        ] );
     }
 
     /**
