@@ -114,6 +114,7 @@ function mad_quotes_get_settings() {
         'mini_cart_view_cart_text' => [],
         'mini_cart_checkout_text'  => [],
         'quote_cart_page_id'       => 0,
+        'payment_proof_strict'     => false,
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );

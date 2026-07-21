@@ -229,7 +229,14 @@ return new class( $core ) implements MAD_Suite_Module {
 
         // ── UI de admin (botones + tabla de precios en el pedido) ──────
         add_action( 'woocommerce_order_item_add_action_buttons', [ $this, 'add_order_buttons' ] );
+        add_action( 'woocommerce_order_item_add_action_buttons', [ $this, 'render_payment_proof_admin' ] );
         add_action( 'admin_enqueue_scripts',                     [ $this, 'enqueue_admin_js' ] );
+
+        // ── Comprobante de transferencia bancaria ─────────────────────
+        add_action( 'woocommerce_view_order',        [ $this, 'inject_payment_proof_upload' ] );
+        add_action( 'wp_enqueue_scripts',            [ $this, 'enqueue_proof_scripts' ] );
+        add_action( 'wp_ajax_mad_upload_payment_proof',        [ $this, 'ajax_upload_payment_proof' ] );
+        add_action( 'wp_ajax_nopriv_mad_upload_payment_proof', [ $this, 'ajax_upload_payment_proof' ] );
 
         // ── Email exclusivo MAD: presupuesto con precios y nota ────────
         add_filter( 'woocommerce_email_classes', [ $this, 'register_emails' ] );
@@ -1378,6 +1385,309 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
     /*  AJAX handlers                                                     */
     /* ================================================================ */
+
+    /* ================================================================ */
+    /*  Comprobante de transferencia bancaria                             */
+    /* ================================================================ */
+
+    /**
+     * Muestra en el admin el comprobante subido y el resultado del análisis IA
+     * para pedidos de presupuesto en estado on-hold.
+     */
+    public function render_payment_proof_admin( WC_Order $order ): void {
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( $order->get_status() !== 'on-hold' ) return;
+
+        $proof_url = $order->get_meta( '_mad_payment_proof_url' );
+        $verified  = $order->get_meta( '_mad_payment_proof_verified' );
+        $ai_json   = $order->get_meta( '_mad_payment_proof_ai_result' );
+        $ai        = $ai_json ? json_decode( (string) $ai_json, true ) : null;
+        ?>
+        <div style="margin-top:12px;padding:10px;background:#f8f8f8;border:1px solid #ddd;border-radius:3px;">
+            <h4 style="margin:0 0 8px;"><?php esc_html_e( 'Comprobante de transferencia', 'mad-suite' ); ?></h4>
+            <?php if ( $proof_url ) : ?>
+                <p style="margin:0 0 6px;">
+                    <a href="<?php echo esc_url( $proof_url ); ?>" target="_blank">
+                        <?php esc_html_e( '📎 Ver comprobante', 'mad-suite' ); ?>
+                    </a>
+                    <?php if ( $verified ) : ?>
+                        <span style="color:green;margin-left:8px;">✔ <?php esc_html_e( 'Verificado por IA', 'mad-suite' ); ?></span>
+                    <?php endif; ?>
+                </p>
+                <?php if ( is_array( $ai ) ) : ?>
+                <ul style="margin:4px 0 0;padding-left:16px;font-size:12px;color:#444;">
+                    <?php if ( isset( $ai['detected_amount'] ) && $ai['detected_amount'] !== null ) : ?>
+                        <li><?php esc_html_e( 'Importe detectado:', 'mad-suite' ); ?> <strong><?php echo wp_kses_post( wc_price( (float) $ai['detected_amount'] ) ); ?></strong></li>
+                    <?php endif; ?>
+                    <?php if ( ! empty( $ai['bank'] ) ) : ?>
+                        <li><?php esc_html_e( 'Banco:', 'mad-suite' ); ?> <?php echo esc_html( $ai['bank'] ); ?></li>
+                    <?php endif; ?>
+                    <?php if ( ! empty( $ai['date'] ) ) : ?>
+                        <li><?php esc_html_e( 'Fecha:', 'mad-suite' ); ?> <?php echo esc_html( $ai['date'] ); ?></li>
+                    <?php endif; ?>
+                    <?php if ( isset( $ai['legitimate'] ) ) :
+                        $color = $ai['legitimate'] ? 'green' : 'red';
+                        $label = $ai['legitimate']
+                            ? esc_html__( 'Parece legítimo', 'mad-suite' )
+                            : esc_html__( 'Posiblemente falso', 'mad-suite' );
+                    ?>
+                        <li style="color:<?php echo esc_attr( $color ); ?>;"><?php echo esc_html( $label ); ?></li>
+                    <?php endif; ?>
+                </ul>
+                <?php endif; ?>
+            <?php else : ?>
+                <p style="margin:0;color:#888;"><?php esc_html_e( 'El cliente aún no ha subido el comprobante.', 'mad-suite' ); ?></p>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+
+    /**
+     * Encola el JS de subida de comprobante en la página de detalle de pedido
+     * del cliente (Mi Cuenta → Pedidos → Ver pedido).
+     */
+    public function enqueue_proof_scripts(): void {
+        if ( ! is_wc_endpoint_url( 'view-order' ) ) return;
+
+        $order_id = absint( get_query_var( 'view-order' ) );
+        if ( ! $order_id ) return;
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( $order->get_meta( '_mad_payment_proof_url' ) ) return;
+
+        wp_enqueue_script(
+            'mad-payment-proof',
+            MAD_QUOTES_URL . 'assets/js/payment-proof.js',
+            [ 'jquery' ],
+            '1.0',
+            true
+        );
+        wp_localize_script( 'mad-payment-proof', 'mad_proof_params', [
+            'ajax_url' => admin_url( 'admin-ajax.php' ),
+            'nonce'    => wp_create_nonce( 'mad_payment_proof_' . $order_id ),
+            'order_id' => $order_id,
+            'i18n'     => [
+                'uploading'    => __( 'Verificando comprobante…', 'mad-suite' ),
+                'success'      => __( 'Comprobante verificado. Tu pedido está siendo procesado.', 'mad-suite' ),
+                'amount_error' => __( 'El importe del comprobante no coincide con el total del pedido.', 'mad-suite' ),
+                'error'        => __( 'Error al procesar el comprobante. Inténtalo de nuevo.', 'mad-suite' ),
+                'file_error'   => __( 'Tipo de archivo no permitido. Sube una imagen o PDF.', 'mad-suite' ),
+            ],
+        ] );
+    }
+
+    /**
+     * Inyecta el formulario de subida de comprobante en la página de detalle
+     * de pedido del cliente.
+     */
+    public function inject_payment_proof_upload( int $order_id ): void {
+        $order = wc_get_order( $order_id );
+        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+
+        $existing_proof = $order->get_meta( '_mad_payment_proof_url' );
+        $template = MAD_QUOTES_TEMPLATE_PATH . 'payment-proof-upload.php';
+        if ( file_exists( $template ) ) {
+            include $template;
+        }
+    }
+
+    /**
+     * AJAX: recibe el archivo, lo guarda y lo verifica con la IA de Claude.
+     */
+    public function ajax_upload_payment_proof(): void {
+        $order_id = absint( $_POST['order_id'] ?? 0 );
+        $nonce    = sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) );
+
+        if ( ! wp_verify_nonce( $nonce, 'mad_payment_proof_' . $order_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Pedido no válido.', 'mad-suite' ) ] );
+        }
+
+        // Verificar que el usuario tiene acceso al pedido.
+        if ( is_user_logged_in() && $order->get_customer_id() && (int) $order->get_customer_id() !== get_current_user_id() ) {
+            wp_send_json_error( [ 'message' => __( 'Acceso denegado.', 'mad-suite' ) ] );
+        }
+
+        if ( empty( $_FILES['proof_file'] ) || UPLOAD_ERR_OK !== $_FILES['proof_file']['error'] ) {
+            wp_send_json_error( [ 'message' => __( 'Error al subir el archivo.', 'mad-suite' ) ] );
+        }
+
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+        $file = $_FILES['proof_file'];
+
+        // Validar tipo MIME en el servidor (no confiar solo en el cliente).
+        $filetype = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
+        $mime     = $filetype['type'] ?? '';
+        $allowed  = [ 'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf' ];
+        if ( ! in_array( $mime, $allowed, true ) ) {
+            wp_send_json_error( [ 'message' => __( 'Tipo de archivo no permitido. Sube una imagen o PDF.', 'mad-suite' ) ] );
+        }
+
+        if ( $file['size'] > 10 * 1024 * 1024 ) {
+            wp_send_json_error( [ 'message' => __( 'El archivo no puede superar 10 MB.', 'mad-suite' ) ] );
+        }
+
+        // Guardar archivo en directorio protegido.
+        $upload_dir = wp_upload_dir();
+        $sub_dir    = '/mad-payment-proofs/' . gmdate( 'Y/m' );
+        $target_dir = $upload_dir['basedir'] . $sub_dir;
+        wp_mkdir_p( $target_dir );
+
+        // Crear .htaccess para bloquear acceso directo si no existe.
+        $htaccess = $target_dir . '/../.htaccess';
+        if ( ! file_exists( $htaccess ) ) {
+            file_put_contents( $htaccess, "Options -Indexes\n" ); // phpcs:ignore
+        }
+
+        $ext      = strtolower( pathinfo( sanitize_file_name( $file['name'] ), PATHINFO_EXTENSION ) );
+        $filename = 'proof-' . $order_id . '-' . time() . '.' . $ext;
+        $target   = $target_dir . '/' . $filename;
+
+        if ( ! move_uploaded_file( $file['tmp_name'], $target ) ) {
+            wp_send_json_error( [ 'message' => __( 'No se pudo guardar el archivo.', 'mad-suite' ) ] );
+        }
+
+        $file_url = $upload_dir['baseurl'] . $sub_dir . '/' . $filename;
+        $order->update_meta_data( '_mad_payment_proof_path', $target );
+        $order->update_meta_data( '_mad_payment_proof_url', $file_url );
+        $order->save();
+
+        // Verificar con IA.
+        $result = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+
+        if ( is_wp_error( $result ) ) {
+            $order->add_order_note( sprintf(
+                __( 'Comprobante subido pero no se pudo verificar con IA: %s', 'mad-suite' ),
+                $result->get_error_message()
+            ) );
+            wp_send_json_error( [ 'message' => $result->get_error_message(), 'proof_url' => $file_url ] );
+        }
+
+        $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
+
+        if ( $result['amount_matches'] ) {
+            $order->update_meta_data( '_mad_payment_proof_verified', '1' );
+            $order->save();
+            $order->update_status( 'processing', sprintf(
+                __( 'Comprobante verificado por IA. Importe detectado: %s. Pendiente de revisión por el administrador.', 'mad-suite' ),
+                wc_price( (float) $result['detected_amount'] )
+            ) );
+
+            wp_send_json_success( [
+                'message' => __( 'Comprobante verificado. Tu pedido está siendo procesado.', 'mad-suite' ),
+                'reload'  => true,
+            ] );
+        } else {
+            $order->save();
+            $order->add_order_note( sprintf(
+                __( 'Comprobante subido pero el importe no coincide. Detectado: %s — Esperado: %s.', 'mad-suite' ),
+                wc_price( (float) ( $result['detected_amount'] ?? 0 ) ),
+                wc_price( (float) $order->get_total() )
+            ) );
+
+            $message = isset( $result['detected_amount'] ) && $result['detected_amount'] !== null
+                ? sprintf(
+                    __( 'El importe detectado (%s) no coincide con el total del pedido (%s). Revisa el comprobante.', 'mad-suite' ),
+                    wc_price( (float) $result['detected_amount'] ),
+                    wc_price( (float) $order->get_total() )
+                )
+                : __( 'No se pudo detectar el importe en el comprobante.', 'mad-suite' );
+
+            wp_send_json_error( [ 'message' => $message ] );
+        }
+    }
+
+    /**
+     * Llama a Claude para verificar el comprobante de pago.
+     *
+     * Modo test (payment_proof_strict = false): solo extrae el importe.
+     * Modo producción (payment_proof_strict = true): verifica legitimidad + datos bancarios.
+     *
+     * @return array|WP_Error
+     */
+    private function verify_payment_proof_with_ai( string $file_path, string $mime, float $expected_amount ) {
+        $olofane  = get_option( 'madsuite_olofane_settings', [] );
+        $api_key  = $olofane['ai_api_key_claude'] ?? '';
+        if ( empty( $api_key ) ) {
+            return new WP_Error( 'no_api_key', __( 'No hay API key de Claude configurada en el módulo Olofane.', 'mad-suite' ) );
+        }
+
+        $file_data = file_get_contents( $file_path ); // phpcs:ignore
+        if ( false === $file_data ) {
+            return new WP_Error( 'file_read', __( 'No se pudo leer el archivo subido.', 'mad-suite' ) );
+        }
+        $base64 = base64_encode( $file_data ); // phpcs:ignore
+
+        $settings = mad_quotes_get_settings();
+        $strict   = ! empty( $settings['payment_proof_strict'] );
+
+        if ( $strict ) {
+            $prompt = 'Analiza este comprobante de transferencia bancaria. Responde ÚNICAMENTE con un JSON válido con esta estructura: {"legitimate":true,"legitimacy_reason":"...","bank":"...","amount":1234.56,"date":"...","beneficiary":"..."}. El campo "legitimate" debe ser false si el documento parece fabricado artificialmente, es un simple texto con un número, o no tiene las características visuales de un comprobante bancario real (logo, IBAN, número de operación, etc.). Si no detectas el importe usa "amount":null.';
+        } else {
+            $prompt = 'En este documento, ¿cuál es el importe total de la transferencia? Responde ÚNICAMENTE con JSON válido con esta estructura: {"amount":1234.56}. Si no detectas el importe usa {"amount":null}.';
+        }
+
+        $is_pdf = 'application/pdf' === $mime;
+
+        $content_block = $is_pdf
+            ? [ 'type' => 'document', 'source' => [ 'type' => 'base64', 'media_type' => 'application/pdf', 'data' => $base64 ] ]
+            : [ 'type' => 'image',    'source' => [ 'type' => 'base64', 'media_type' => $mime,              'data' => $base64 ] ];
+
+        $headers = [
+            'Content-Type'      => 'application/json',
+            'x-api-key'         => $api_key,
+            'anthropic-version' => '2023-06-01',
+        ];
+        if ( $is_pdf ) {
+            $headers['anthropic-beta'] = 'pdfs-2024-09-25';
+        }
+
+        $response = wp_remote_post( 'https://api.anthropic.com/v1/messages', [
+            'timeout' => 60,
+            'headers' => $headers,
+            'body'    => wp_json_encode( [
+                'model'      => 'claude-haiku-4-5-20251001',
+                'max_tokens' => 400,
+                'messages'   => [
+                    [
+                        'role'    => 'user',
+                        'content' => [ $content_block, [ 'type' => 'text', 'text' => $prompt ] ],
+                    ],
+                ],
+            ] ),
+        ] );
+
+        if ( is_wp_error( $response ) ) {
+            return new WP_Error( 'api_error', $response->get_error_message() );
+        }
+
+        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        $text = trim( $body['content'][0]['text'] ?? '' );
+
+        // Limpiar posibles bloques markdown que el modelo incluya.
+        $text = preg_replace( '/^```(?:json)?\s*/m', '', $text );
+        $text = preg_replace( '/\s*```\s*$/m', '', $text );
+
+        $parsed = json_decode( $text, true );
+        if ( ! is_array( $parsed ) || ! array_key_exists( 'amount', $parsed ) ) {
+            return new WP_Error( 'parse_error', __( 'No se pudo leer el importe del comprobante.', 'mad-suite' ) );
+        }
+
+        $detected    = $parsed['amount'] !== null ? (float) $parsed['amount'] : null;
+        $legitimate  = $strict ? (bool) ( $parsed['legitimate'] ?? false ) : true;
+        $matches     = $detected !== null && abs( $detected - $expected_amount ) <= 0.02 && $legitimate;
+
+        return array_merge( $parsed, [
+            'detected_amount' => $detected,
+            'amount_matches'  => $matches,
+            'legitimate'      => $legitimate,
+        ] );
+    }
 
     public function ajax_update_status() {
         if ( ! current_user_can( 'manage_woocommerce' )
