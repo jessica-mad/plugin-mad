@@ -125,6 +125,9 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Rol: restaurar precio/botón para roles no habilitados (prioridad 999 para sobreescribir al plugin original) ──
         add_filter( 'woocommerce_get_price_html',                  [ $this, 'maybe_restore_price' ],  999, 2 );
         add_filter( 'woocommerce_variable_price_html',             [ $this, 'maybe_restore_price' ],  999, 2 );
+        add_filter( 'woocommerce_get_price_html',                  [ $this, 'add_b2b_price_labels' ], 1000, 2 );
+        add_filter( 'woocommerce_variable_price_html',             [ $this, 'add_b2b_price_labels' ], 1000, 2 );
+        add_action( 'wp_head',                                     [ $this, 'b2b_price_labels_css' ] );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
 
@@ -505,6 +508,57 @@ return new class( $core ) implements MAD_Suite_Module {
             return $this->price_cache[ $product->get_id() ] ?? $price;
         }
         return $price;
+    }
+
+    /**
+     * Añade etiquetas explicativas a los precios para usuarios B2B (no rol presupuesto)
+     * cuando el producto tiene precio de venta activo.
+     */
+    public function add_b2b_price_labels( string $price_html, $product ): string {
+        if ( is_admin() ) return $price_html;
+        if ( $this->current_user_is_quote_role() ) return $price_html;
+
+        // Solo cuando hay precio tachado (precio regular > precio de venta).
+        if ( strpos( $price_html, '<del' ) === false ) return $price_html;
+
+        $label_public = '<small class="mad-b2b-label mad-b2b-label--public">'
+            . esc_html__( 'Precio público', 'mad-suite' )
+            . '</small>';
+
+        $label_pro = '<small class="mad-b2b-label mad-b2b-label--pro">'
+            . esc_html__( 'Tu precio profesional', 'mad-suite' )
+            . '</small>';
+
+        // Insertar "Precio público" justo después del cierre de <del>.
+        $price_html = preg_replace( '/(<\/del>)/i', '$1' . $label_public, $price_html, 1 );
+
+        // Insertar "Tu precio profesional" justo después del cierre de <ins>.
+        $price_html = preg_replace( '/(<\/ins>)/i', '$1' . $label_pro, $price_html, 1 );
+
+        return $price_html;
+    }
+
+    /** CSS para las etiquetas de precio B2B. */
+    public function b2b_price_labels_css(): void {
+        if ( $this->current_user_is_quote_role() ) return;
+        echo '<style>
+.mad-b2b-label {
+    display: block;
+    font-size: 0.72em;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1.2;
+}
+.mad-b2b-label--public {
+    color: #999;
+    margin-bottom: 2px;
+}
+.mad-b2b-label--pro {
+    color: #2e7d32;
+    margin-top: 2px;
+}
+</style>';
     }
 
     public function register_wpml_strings(): void {
