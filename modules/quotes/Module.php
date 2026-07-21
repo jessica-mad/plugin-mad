@@ -1416,17 +1416,18 @@ return new class( $core ) implements MAD_Suite_Module {
      * para pedidos de presupuesto en estado on-hold.
      */
     public function register_payment_proof_meta_box(): void {
-        // Soporta tanto post-type clásico como HPOS (wc-orders).
-        foreach ( [ 'shop_order', 'woocommerce_page_wc-orders' ] as $screen ) {
-            add_meta_box(
-                'mad-payment-proof',
-                __( 'Comprobante de transferencia', 'mad-suite' ),
-                [ $this, 'render_payment_proof_admin' ],
-                $screen,
-                'side',
-                'default'
-            );
-        }
+        $screen = function_exists( 'wc_get_page_screen_id' )
+            ? wc_get_page_screen_id( 'shop-order' )
+            : 'shop_order';
+
+        add_meta_box(
+            'mad-payment-proof',
+            __( 'Comprobante de transferencia', 'mad-suite' ),
+            [ $this, 'render_payment_proof_admin' ],
+            $screen,
+            'side',
+            'default'
+        );
     }
 
     /** Callback del meta box — acepta WP_Post o WC_Order según HPOS. */
@@ -1435,12 +1436,8 @@ return new class( $core ) implements MAD_Suite_Module {
             ? $post_or_order
             : wc_get_order( $post_or_order->ID );
 
-        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
-            echo '<p style="color:#888;margin:0;">' . esc_html__( 'No es un pedido de presupuesto MAD.', 'mad-suite' ) . '</p>';
-            return;
-        }
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
 
-        // Reutiliza el bloque de render real.
         $this->render_proof_block( $order );
     }
 
