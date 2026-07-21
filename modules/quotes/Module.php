@@ -229,8 +229,8 @@ return new class( $core ) implements MAD_Suite_Module {
 
         // ── UI de admin (botones + tabla de precios en el pedido) ──────
         add_action( 'woocommerce_order_item_add_action_buttons', [ $this, 'add_order_buttons' ] );
-        add_action( 'woocommerce_order_item_add_action_buttons', [ $this, 'render_payment_proof_admin' ] );
         add_action( 'admin_enqueue_scripts',                     [ $this, 'enqueue_admin_js' ] );
+        add_action( 'add_meta_boxes',                            [ $this, 'register_payment_proof_meta_box' ] );
 
         // ── Comprobante de transferencia bancaria ─────────────────────
         add_action( 'woocommerce_view_order',        [ $this, 'inject_payment_proof_upload' ] );
@@ -1384,7 +1384,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $order_id = $this->get_current_order_id();
         if ( ! $order_id ) return;
 
-        wp_register_script( 'mad-quotes-admin', MAD_QUOTES_URL . 'assets/js/admin.js', [ 'jquery' ], '2.0', false );
+        wp_register_script( 'mad-quotes-admin', MAD_QUOTES_URL . 'assets/js/admin.js', [ 'jquery' ], '2.1', true );
         wp_localize_script( 'mad-quotes-admin', 'mad_quotes_admin_params', [
             'ajax_url'            => admin_url( 'admin-ajax.php' ),
             'order_id'            => $order_id,
@@ -1415,77 +1415,99 @@ return new class( $core ) implements MAD_Suite_Module {
      * Muestra en el admin el comprobante subido y el resultado del análisis IA
      * para pedidos de presupuesto en estado on-hold.
      */
-    public function render_payment_proof_admin( WC_Order $order ): void {
-        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+    public function register_payment_proof_meta_box(): void {
+        // Soporta tanto post-type clásico como HPOS (wc-orders).
+        foreach ( [ 'shop_order', 'woocommerce_page_wc-orders' ] as $screen ) {
+            add_meta_box(
+                'mad-payment-proof',
+                __( 'Comprobante de transferencia', 'mad-suite' ),
+                [ $this, 'render_payment_proof_admin' ],
+                $screen,
+                'side',
+                'default'
+            );
+        }
+    }
+
+    /** Callback del meta box — acepta WP_Post o WC_Order según HPOS. */
+    public function render_payment_proof_admin( $post_or_order ): void {
+        $order = $post_or_order instanceof WC_Order
+            ? $post_or_order
+            : wc_get_order( $post_or_order->ID );
+
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
+            echo '<p style="color:#888;margin:0;">' . esc_html__( 'No es un pedido de presupuesto MAD.', 'mad-suite' ) . '</p>';
+            return;
+        }
+
+        // Reutiliza el bloque de render real.
+        $this->render_proof_block( $order );
+    }
+
+    private function render_proof_block( WC_Order $order ): void {
         $proof_url = $order->get_meta( '_mad_payment_proof_url' );
-        if ( ! $proof_url && $order->get_status() !== 'on-hold' ) return;
-
-        $verified = $order->get_meta( '_mad_payment_proof_verified' );
-        $ai_json  = $order->get_meta( '_mad_payment_proof_ai_result' );
-        $ai       = $ai_json ? json_decode( (string) $ai_json, true ) : null;
-        $is_pdf   = $proof_url && 'pdf' === strtolower( pathinfo( $proof_url, PATHINFO_EXTENSION ) );
-        $nonce    = wp_create_nonce( 'mad_admin_proof_' . $order->get_id() );
+        $verified  = $order->get_meta( '_mad_payment_proof_verified' );
+        $ai_json   = $order->get_meta( '_mad_payment_proof_ai_result' );
+        $ai        = $ai_json ? json_decode( (string) $ai_json, true ) : null;
+        $is_pdf    = $proof_url && 'pdf' === strtolower( pathinfo( $proof_url, PATHINFO_EXTENSION ) );
+        $nonce     = wp_create_nonce( 'mad_admin_proof_' . $order->get_id() );
         ?>
-        <div id="mad-proof-admin-box" style="margin-top:12px;padding:10px;background:#f8f8f8;border:1px solid #ddd;border-radius:3px;">
-            <h4 style="margin:0 0 8px;"><?php esc_html_e( 'Comprobante de transferencia', 'mad-suite' ); ?></h4>
-
-            <?php if ( $proof_url ) : ?>
-                <div id="mad-proof-preview" style="margin-bottom:8px;">
-                    <?php if ( $is_pdf ) : ?>
-                        <embed src="<?php echo esc_url( $proof_url ); ?>" type="application/pdf"
-                               width="100%" height="260" style="display:block;border:1px solid #ddd;margin-bottom:4px;">
-                    <?php else : ?>
-                        <img src="<?php echo esc_url( $proof_url ); ?>"
-                             alt="<?php esc_attr_e( 'Comprobante', 'mad-suite' ); ?>"
-                             style="max-width:100%;max-height:260px;border:1px solid #ddd;display:block;margin-bottom:4px;">
-                    <?php endif; ?>
-                    <a href="<?php echo esc_url( $proof_url ); ?>" target="_blank" style="font-size:12px;">
-                        <?php esc_html_e( '↗ Abrir en pestaña nueva', 'mad-suite' ); ?>
-                    </a>
-                    <?php if ( $verified ) : ?>
-                        <span style="color:green;margin-left:10px;font-size:12px;">✔ <?php esc_html_e( 'Verificado por IA', 'mad-suite' ); ?></span>
-                    <?php endif; ?>
-                </div>
-
-                <?php if ( is_array( $ai ) ) : ?>
-                <ul style="margin:0 0 8px;padding-left:16px;font-size:12px;color:#444;">
-                    <?php if ( isset( $ai['detected_amount'] ) && $ai['detected_amount'] !== null ) : ?>
-                        <li><?php esc_html_e( 'Importe detectado:', 'mad-suite' ); ?> <strong><?php echo wp_kses_post( wc_price( (float) $ai['detected_amount'] ) ); ?></strong></li>
-                    <?php endif; ?>
-                    <?php if ( ! empty( $ai['bank'] ) ) : ?>
-                        <li><?php esc_html_e( 'Banco:', 'mad-suite' ); ?> <?php echo esc_html( $ai['bank'] ); ?></li>
-                    <?php endif; ?>
-                    <?php if ( ! empty( $ai['date'] ) ) : ?>
-                        <li><?php esc_html_e( 'Fecha:', 'mad-suite' ); ?> <?php echo esc_html( $ai['date'] ); ?></li>
-                    <?php endif; ?>
-                    <?php if ( isset( $ai['legitimate'] ) ) :
-                        $leg_color = $ai['legitimate'] ? 'green' : 'red';
-                        $leg_label = $ai['legitimate'] ? __( 'Parece legítimo', 'mad-suite' ) : __( 'Posiblemente falso', 'mad-suite' );
-                    ?>
-                        <li style="color:<?php echo esc_attr( $leg_color ); ?>;"><?php echo esc_html( $leg_label ); ?></li>
-                    <?php endif; ?>
-                </ul>
+        <?php if ( $proof_url ) : ?>
+            <div id="mad-proof-preview" style="margin-bottom:8px;">
+                <?php if ( $is_pdf ) : ?>
+                    <embed src="<?php echo esc_url( $proof_url ); ?>" type="application/pdf"
+                           width="100%" height="260" style="display:block;border:1px solid #ddd;margin-bottom:4px;">
+                <?php else : ?>
+                    <img src="<?php echo esc_url( $proof_url ); ?>"
+                         alt="<?php esc_attr_e( 'Comprobante', 'mad-suite' ); ?>"
+                         style="max-width:100%;max-height:260px;border:1px solid #ddd;display:block;margin-bottom:4px;">
                 <?php endif; ?>
+                <a href="<?php echo esc_url( $proof_url ); ?>" target="_blank" style="font-size:12px;">
+                    <?php esc_html_e( '↗ Abrir en pestaña nueva', 'mad-suite' ); ?>
+                </a>
+                <?php if ( $verified ) : ?>
+                    <span style="color:green;margin-left:10px;font-size:12px;">✔ <?php esc_html_e( 'Verificado por IA', 'mad-suite' ); ?></span>
+                <?php endif; ?>
+            </div>
 
-                <button type="button" id="mad-proof-replace-btn" class="button button-small">
-                    <?php esc_html_e( 'Reemplazar comprobante', 'mad-suite' ); ?>
-                </button>
-
-            <?php else : ?>
-                <p style="margin:0 0 8px;color:#888;"><?php esc_html_e( 'Sin comprobante aún.', 'mad-suite' ); ?></p>
+            <?php if ( is_array( $ai ) ) : ?>
+            <ul style="margin:0 0 8px;padding-left:16px;font-size:12px;color:#444;">
+                <?php if ( isset( $ai['detected_amount'] ) && $ai['detected_amount'] !== null ) : ?>
+                    <li><?php esc_html_e( 'Importe detectado:', 'mad-suite' ); ?> <strong><?php echo wp_kses_post( wc_price( (float) $ai['detected_amount'] ) ); ?></strong></li>
+                <?php endif; ?>
+                <?php if ( ! empty( $ai['bank'] ) ) : ?>
+                    <li><?php esc_html_e( 'Banco:', 'mad-suite' ); ?> <?php echo esc_html( $ai['bank'] ); ?></li>
+                <?php endif; ?>
+                <?php if ( ! empty( $ai['date'] ) ) : ?>
+                    <li><?php esc_html_e( 'Fecha:', 'mad-suite' ); ?> <?php echo esc_html( $ai['date'] ); ?></li>
+                <?php endif; ?>
+                <?php if ( isset( $ai['legitimate'] ) ) :
+                    $leg_color = $ai['legitimate'] ? 'green' : 'red';
+                    $leg_label = $ai['legitimate'] ? __( 'Parece legítimo', 'mad-suite' ) : __( 'Posiblemente falso', 'mad-suite' );
+                ?>
+                    <li style="color:<?php echo esc_attr( $leg_color ); ?>;"><?php echo esc_html( $leg_label ); ?></li>
+                <?php endif; ?>
+            </ul>
             <?php endif; ?>
 
-            <div id="mad-proof-admin-upload" style="margin-top:8px;<?php echo $proof_url ? 'display:none;' : ''; ?>">
-                <input type="file" id="mad-proof-admin-file"
-                       accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
-                       style="display:block;margin-bottom:6px;">
-                <button type="button" id="mad-proof-admin-submit" class="button button-primary button-small">
-                    <?php $proof_url ? esc_html_e( 'Subir nuevo comprobante', 'mad-suite' ) : esc_html_e( 'Subir comprobante', 'mad-suite' ); ?>
-                </button>
-                <span id="mad-proof-admin-msg" style="margin-left:8px;font-size:12px;"></span>
-                <input type="hidden" id="mad-proof-admin-nonce"    value="<?php echo esc_attr( $nonce ); ?>">
-                <input type="hidden" id="mad-proof-admin-order-id" value="<?php echo esc_attr( (string) $order->get_id() ); ?>">
-            </div>
+            <button type="button" id="mad-proof-replace-btn" class="button button-small" style="margin-bottom:6px;">
+                <?php esc_html_e( 'Reemplazar comprobante', 'mad-suite' ); ?>
+            </button>
+
+        <?php else : ?>
+            <p style="margin:0 0 8px;color:#888;"><?php esc_html_e( 'Sin comprobante aún.', 'mad-suite' ); ?></p>
+        <?php endif; ?>
+
+        <div id="mad-proof-admin-upload" style="<?php echo $proof_url ? 'display:none;' : ''; ?>">
+            <input type="file" id="mad-proof-admin-file"
+                   accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+                   style="display:block;margin-bottom:6px;">
+            <button type="button" id="mad-proof-admin-submit" class="button button-primary button-small">
+                <?php $proof_url ? esc_html_e( 'Subir nuevo comprobante', 'mad-suite' ) : esc_html_e( 'Subir comprobante', 'mad-suite' ); ?>
+            </button>
+            <span id="mad-proof-admin-msg" style="margin-left:8px;font-size:12px;"></span>
+            <input type="hidden" id="mad-proof-admin-nonce"    value="<?php echo esc_attr( $nonce ); ?>">
+            <input type="hidden" id="mad-proof-admin-order-id" value="<?php echo esc_attr( (string) $order->get_id() ); ?>">
         </div>
         <?php
     }
