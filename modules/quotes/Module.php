@@ -329,6 +329,23 @@ return new class( $core ) implements MAD_Suite_Module {
         );
         $this->register_field( 'quote_expiry_days', __( 'Días hasta caducidad', 'mad-suite' ), 'field_number', 'mad_quotes_expiry' );
 
+        // ── Sección: Verificación de comprobante de pago ───────────────
+        add_settings_section(
+            'mad_quotes_payment_proof',
+            __( 'Verificación de comprobante de transferencia', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Cuando un cliente paga por transferencia, puede subir el comprobante desde su pedido. Claude analiza el documento y, si el importe coincide, pasa el pedido a "Procesando" automáticamente.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'payment_proof_strict',
+            __( 'Modo de verificación', 'mad-suite' ),
+            'field_checkbox',
+            'mad_quotes_payment_proof',
+            __( 'Modo estricto (producción): Claude verifica además que el documento parezca un comprobante bancario real (logo, IBAN, número de operación…). Desactivado = modo prueba: solo comprueba el importe.', 'mad-suite' )
+        );
+
         // ── AJAX ───────────────────────────────────────────────────────
         add_action( 'wp_ajax_mad_quotes_update_status', [ $this, 'ajax_update_status' ] );
         add_action( 'wp_ajax_mad_quotes_send_quote',    [ $this, 'ajax_send_quote' ] );
@@ -2028,6 +2045,20 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
     }
 
+    public function field_checkbox( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $checked  = ! empty( $settings[ $key ] );
+        printf(
+            '<label><input type="checkbox" name="%1$s[%2$s]" value="1" %3$s> %4$s</label>',
+            esc_attr( $opt_key ),
+            esc_attr( $key ),
+            checked( $checked, true, false ),
+            esc_html( $args['desc'] ?? '' )
+        );
+    }
+
     public function field_number( $args ) {
         $settings = mad_quotes_get_settings();
         $key      = $args['key'];
@@ -2252,7 +2283,8 @@ return new class( $core ) implements MAD_Suite_Module {
                 : sanitize_text_field( $raw );
         }
 
-        $clean['quote_cart_page_id'] = absint( $input['quote_cart_page_id'] ?? 0 );
+        $clean['quote_cart_page_id']   = absint( $input['quote_cart_page_id'] ?? 0 );
+        $clean['payment_proof_strict'] = ! empty( $input['payment_proof_strict'] );
 
         return $clean;
     }
