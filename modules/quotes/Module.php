@@ -1413,9 +1413,10 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function render_payment_proof_admin( WC_Order $order ): void {
         if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
-        if ( $order->get_status() !== 'on-hold' ) return;
-
+        // Mostrar siempre que haya comprobante subido, o si el pedido está en espera (aún sin comprobante).
         $proof_url = $order->get_meta( '_mad_payment_proof_url' );
+        if ( ! $proof_url && $order->get_status() !== 'on-hold' ) return;
+
         $verified  = $order->get_meta( '_mad_payment_proof_verified' );
         $ai_json   = $order->get_meta( '_mad_payment_proof_ai_result' );
         $ai        = $ai_json ? json_decode( (string) $ai_json, true ) : null;
