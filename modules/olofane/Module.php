@@ -113,6 +113,12 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             $wpml = new MAD_Olofane_WPML_Quotes( $s );
             $wpml->init();
         }
+
+        // Feature 7 – Post author selector meta box
+        if ( is_admin() ) {
+            add_action( 'add_meta_boxes', [ $this, 'register_post_author_meta_box' ] );
+            add_action( 'save_post',      [ $this, 'save_post_author_meta_box' ], 10, 2 );
+        }
     }
 
     public function admin_init(): void {
@@ -496,6 +502,63 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( ! isset( $_POST['mad_billing_vat'] ) ) return;
         $val = sanitize_text_field( wp_unslash( $_POST['mad_billing_vat'] ) );
         update_user_meta( $user_id, 'billing_vat', $val );
+    }
+
+    // ── Feature 7: Post author selector ──────────────────────────────────────
+
+    public function register_post_author_meta_box(): void {
+        foreach ( [ 'post', 'page' ] as $post_type ) {
+            add_meta_box(
+                'mad-olofane-post-author',
+                __( 'Autor de la entrada', 'mad-suite' ),
+                [ $this, 'render_post_author_meta_box' ],
+                $post_type,
+                'side',
+                'high'
+            );
+        }
+    }
+
+    public function render_post_author_meta_box( WP_Post $post ): void {
+        if ( ! current_user_can( 'edit_others_posts' ) ) {
+            echo '<p>' . esc_html__( 'Sin permisos para cambiar el autor.', 'mad-suite' ) . '</p>';
+            return;
+        }
+
+        wp_nonce_field( 'mad_olofane_post_author_' . $post->ID, 'mad_olofane_post_author_nonce' );
+
+        echo '<label for="mad-olofane-post-author-select" style="display:block;margin-bottom:4px;">';
+        echo esc_html__( 'Selecciona el autor:', 'mad-suite' );
+        echo '</label>';
+
+        wp_dropdown_users( [
+            'name'             => 'mad_olofane_post_author_id',
+            'id'               => 'mad-olofane-post-author-select',
+            'selected'         => $post->post_author,
+            'who'              => 'authors',
+            'show'             => 'display_name_with_login',
+            'style'            => 'width:100%;',
+            'show_option_none' => false,
+        ] );
+    }
+
+    public function save_post_author_meta_box( int $post_id, WP_Post $post ): void {
+        if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) return;
+        if ( ! isset( $_POST['mad_olofane_post_author_nonce'] ) ) return;
+        if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['mad_olofane_post_author_nonce'] ) ), 'mad_olofane_post_author_' . $post_id ) ) return;
+        if ( ! current_user_can( 'edit_others_posts' ) ) return;
+        if ( ! isset( $_POST['mad_olofane_post_author_id'] ) ) return;
+
+        $new_author = absint( $_POST['mad_olofane_post_author_id'] );
+        if ( ! $new_author ) return;
+
+        // Prevent recursive save_post loop
+        remove_action( 'save_post', [ $this, 'save_post_author_meta_box' ], 10 );
+        wp_update_post( [
+            'ID'          => $post_id,
+            'post_author' => $new_author,
+        ] );
+        add_action( 'save_post', [ $this, 'save_post_author_meta_box' ], 10, 2 );
     }
 
     // ── Settings save ────────────────────────────────────────────────────────
