@@ -851,7 +851,11 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( strpos( $tax, 'pa_' ) !== 0 ) return;
 
         wp_enqueue_media();
-        wp_add_inline_script( 'media-upload', $this->attr_image_admin_js() );
+
+        // Register a dummy handle that runs after jQuery + media-editor are ready
+        wp_register_script( 'mad-dt-attr-image', false, [ 'jquery', 'media-editor' ], null, true );
+        wp_enqueue_script( 'mad-dt-attr-image' );
+        wp_add_inline_script( 'mad-dt-attr-image', $this->attr_image_admin_js() );
     }
 
     private function attr_image_admin_js(): string {
