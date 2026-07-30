@@ -50,18 +50,23 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! class_exists( 'WooCommerce' ) ) return;
 
         $settings = $this->get_settings();
-        if ( empty( $settings['auto_generate'] ) ) return;
+        if ( ! empty( $settings['auto_generate'] ) ) {
+            // Variaciones: se dispara cuando se guarda cada variación.
+            add_action( 'woocommerce_save_product_variation', [ $this, 'on_variation_save' ], 20, 2 );
 
-        // Variaciones: se dispara cuando se guarda cada variación.
-        add_action( 'woocommerce_save_product_variation', [ $this, 'on_variation_save' ], 20, 2 );
+            // Productos simples: se dispara al guardar el meta del producto.
+            add_action( 'woocommerce_process_product_meta', [ $this, 'on_simple_product_save' ], 20 );
 
-        // Productos simples: se dispara al guardar el meta del producto.
-        add_action( 'woocommerce_process_product_meta', [ $this, 'on_simple_product_save' ], 20 );
+            // Meta box "Regenerar SKU" en el editor de producto.
+            add_action( 'add_meta_boxes', [ $this, 'add_regenerate_meta_box' ] );
+            add_action( 'wp_ajax_mad_dt_regenerate_sku', [ $this, 'ajax_regenerate_single' ] );
+            add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_meta_box_js' ] );
+        }
 
-        // Meta box "Regenerar SKU" en el editor de producto.
-        add_action( 'add_meta_boxes', [ $this, 'add_regenerate_meta_box' ] );
-        add_action( 'wp_ajax_mad_dt_regenerate_sku', [ $this, 'ajax_regenerate_single' ] );
-        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_meta_box_js' ] );
+        // Feature: Attribute image swatches (frontend)
+        add_filter( 'woocommerce_dropdown_variation_attribute_options_html', [ $this, 'render_attribute_swatches' ], 10, 2 );
+        add_action( 'wp_head',   [ $this, 'swatch_frontend_css' ] );
+        add_action( 'wp_footer', [ $this, 'swatch_frontend_js' ] );
     }
 
     /* ================================================================ */
@@ -101,6 +106,18 @@ return new class( $core ) implements MAD_Suite_Module {
         ) {
             $this->bulk_regenerate();
         }
+
+        // Feature: Attribute image swatches — term image fields for all pa_* taxonomies
+        if ( function_exists( 'wc_get_attribute_taxonomies' ) ) {
+            foreach ( wc_get_attribute_taxonomies() as $attr ) {
+                $tax = wc_attribute_taxonomy_name( $attr->attribute_name );
+                add_action( $tax . '_add_form_fields',  [ $this, 'render_term_image_add_field' ] );
+                add_action( $tax . '_edit_form_fields', [ $this, 'render_term_image_edit_field' ] );
+                add_action( 'created_' . $tax, [ $this, 'save_term_image' ] );
+                add_action( 'edited_' . $tax,  [ $this, 'save_term_image' ] );
+            }
+        }
+        add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_attr_image_admin_js' ] );
     }
 
     /* ================================================================ */
@@ -604,4 +621,279 @@ return new class( $core ) implements MAD_Suite_Module {
     private function settings_url(): string {
         return admin_url( 'admin.php?page=' . $this->menu_slug() );
     }
+
+    /* ================================================================ */
+    /*  Feature: Attribute image swatches — frontend                     */
+    /* ================================================================ */
+
+    /**
+     * Replace the default <select> for a variation attribute with image swatches
+     * when at least one term in that attribute has an image assigned.
+     * The hidden <select> is kept so WooCommerce's variation JS still works.
+     */
+    public function render_attribute_swatches( string $html, array $args ): string {
+        $product   = $args['product']   ?? null;
+        $attribute = $args['attribute'] ?? '';
+        $options   = $args['options']   ?? [];
+        $selected  = $args['selected']  ?? '';
+        $name      = $args['name']      ?? '';
+        $id        = $args['id']        ?? '';
+
+        if ( ! $product || ! taxonomy_exists( $attribute ) || empty( $options ) ) {
+            return $html;
+        }
+
+        // Only replace when at least one term in this attribute has an image
+        $has_images = false;
+        foreach ( $options as $opt ) {
+            $term = get_term_by( 'slug', $opt, $attribute );
+            if ( $term && get_term_meta( $term->term_id, '_mad_dt_attr_image_id', true ) ) {
+                $has_images = true;
+                break;
+            }
+        }
+        if ( ! $has_images ) return $html;
+
+        ob_start();
+        ?>
+        <div class="mad-dt-swatches" data-attribute-name="<?php echo esc_attr( $name ); ?>">
+            <?php foreach ( $options as $opt ) :
+                $term = get_term_by( 'slug', $opt, $attribute );
+                if ( ! $term ) continue;
+                $label     = $term->name;
+                $image_id  = (int) get_term_meta( $term->term_id, '_mad_dt_attr_image_id', true );
+                $image_url = $image_id ? wp_get_attachment_image_url( $image_id, [ 70, 70 ] ) : '';
+                $is_sel    = ( $selected === $opt );
+            ?>
+            <button type="button"
+                    class="mad-dt-swatch<?php echo $image_url ? ' mad-dt-swatch--image' : ' mad-dt-swatch--text'; ?><?php echo $is_sel ? ' selected' : ''; ?>"
+                    data-value="<?php echo esc_attr( $opt ); ?>"
+                    title="<?php echo esc_attr( $label ); ?>"
+                    aria-pressed="<?php echo $is_sel ? 'true' : 'false'; ?>">
+                <?php if ( $image_url ) : ?>
+                    <img src="<?php echo esc_url( $image_url ); ?>" alt="<?php echo esc_attr( $label ); ?>">
+                    <span class="mad-dt-swatch-label"><?php echo esc_html( $label ); ?></span>
+                <?php else : ?>
+                    <?php echo esc_html( $label ); ?>
+                <?php endif; ?>
+            </button>
+            <?php endforeach; ?>
+        </div>
+        <select class="mad-dt-hidden-select"
+                id="<?php echo esc_attr( $id ); ?>"
+                name="<?php echo esc_attr( $name ); ?>"
+                style="display:none!important;"
+                aria-hidden="true">
+            <option value=""><?php esc_html_e( 'Selecciona una opción', 'mad-suite' ); ?></option>
+            <?php foreach ( $options as $opt ) :
+                $term  = get_term_by( 'slug', $opt, $attribute );
+                $label = $term ? $term->name : $opt;
+            ?>
+            <option value="<?php echo esc_attr( $opt ); ?>"<?php selected( $selected, $opt ); ?>>
+                <?php echo esc_html( $label ); ?>
+            </option>
+            <?php endforeach; ?>
+        </select>
+        <?php
+        return ob_get_clean();
+    }
+
+    public function swatch_frontend_css(): void {
+        if ( ! is_product() ) return;
+        ?>
+        <style id="mad-dt-swatches-css">
+        .mad-dt-swatches {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+            align-items: flex-start;
+        }
+        .mad-dt-swatch {
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            cursor: pointer;
+            background: #fff;
+            transition: border-color .15s, box-shadow .15s;
+            text-align: center;
+            padding: 4px;
+            line-height: 1;
+        }
+        .mad-dt-swatch:hover { border-color: #555; }
+        .mad-dt-swatch.selected {
+            border-color: #222;
+            box-shadow: 0 0 0 1px #222;
+        }
+        .mad-dt-swatch--image img {
+            display: block;
+            width: 70px;
+            height: 70px;
+            object-fit: cover;
+            border-radius: 3px;
+        }
+        .mad-dt-swatch-label {
+            display: block;
+            font-size: 11px;
+            margin-top: 4px;
+            color: #555;
+            max-width: 70px;
+            word-break: break-word;
+        }
+        .mad-dt-swatch--text {
+            padding: 8px 14px;
+            font-size: 13px;
+            font-weight: 500;
+            min-width: 50px;
+        }
+        </style>
+        <?php
+    }
+
+    public function swatch_frontend_js(): void {
+        if ( ! is_product() ) return;
+        ?>
+        <script id="mad-dt-swatches-js">
+        (function($) {
+            'use strict';
+
+            $(document).on('click', '.mad-dt-swatch', function() {
+                var $swatch   = $(this);
+                var $swatches = $swatch.closest('.mad-dt-swatches');
+                var $select   = $swatches.next('select.mad-dt-hidden-select');
+                var value     = $swatch.data('value');
+
+                if ( $swatch.hasClass('selected') ) {
+                    $swatch.removeClass('selected').attr('aria-pressed', 'false');
+                    $select.val('').trigger('change');
+                } else {
+                    $swatches.find('.mad-dt-swatch').removeClass('selected').attr('aria-pressed', 'false');
+                    $swatch.addClass('selected').attr('aria-pressed', 'true');
+                    $select.val(value).trigger('change');
+                }
+            });
+
+            // When WC resets the variation form, clear all swatch selections
+            $(document).on('reset_data', '.variations_form', function() {
+                $(this).find('.mad-dt-swatch').removeClass('selected').attr('aria-pressed', 'false');
+            });
+
+        })(jQuery);
+        </script>
+        <?php
+    }
+
+    /* ================================================================ */
+    /*  Feature: Attribute image swatches — admin term fields            */
+    /* ================================================================ */
+
+    public function render_term_image_add_field(): void {
+        ?>
+        <div class="form-field">
+            <label><?php esc_html_e( 'Imagen del atributo', 'mad-suite' ); ?></label>
+            <div class="mad-dt-term-image-wrap">
+                <input type="hidden" name="mad_dt_attr_image_id" value="">
+                <div class="mad-dt-term-image-preview" style="margin-bottom:8px;"></div>
+                <button type="button" class="button mad-dt-upload-image">
+                    <?php esc_html_e( 'Seleccionar imagen', 'mad-suite' ); ?>
+                </button>
+                <button type="button" class="button mad-dt-remove-image" style="display:none;margin-left:6px;">
+                    <?php esc_html_e( 'Quitar imagen', 'mad-suite' ); ?>
+                </button>
+            </div>
+            <p class="description"><?php esc_html_e( 'Imagen visual (swatch) para mostrar en la ficha de producto.', 'mad-suite' ); ?></p>
+        </div>
+        <?php
+    }
+
+    public function render_term_image_edit_field( WP_Term $term ): void {
+        $image_id  = (int) get_term_meta( $term->term_id, '_mad_dt_attr_image_id', true );
+        $image_url = $image_id ? wp_get_attachment_image_url( $image_id, 'thumbnail' ) : '';
+        ?>
+        <tr class="form-field">
+            <th><label><?php esc_html_e( 'Imagen del atributo', 'mad-suite' ); ?></label></th>
+            <td>
+                <div class="mad-dt-term-image-wrap">
+                    <input type="hidden" name="mad_dt_attr_image_id" value="<?php echo esc_attr( $image_id ?: '' ); ?>">
+                    <div class="mad-dt-term-image-preview" style="margin-bottom:8px;">
+                        <?php if ( $image_url ) : ?>
+                            <img src="<?php echo esc_url( $image_url ); ?>"
+                                 style="max-width:80px;max-height:80px;border:1px solid #ddd;border-radius:4px;display:block;">
+                        <?php endif; ?>
+                    </div>
+                    <button type="button" class="button mad-dt-upload-image">
+                        <?php esc_html_e( $image_id ? 'Cambiar imagen' : 'Seleccionar imagen', 'mad-suite' ); ?>
+                    </button>
+                    <button type="button" class="button mad-dt-remove-image"
+                            style="<?php echo $image_id ? '' : 'display:none;'; ?>margin-left:6px;">
+                        <?php esc_html_e( 'Quitar imagen', 'mad-suite' ); ?>
+                    </button>
+                </div>
+                <p class="description"><?php esc_html_e( 'Imagen visual (swatch) para mostrar en la ficha de producto.', 'mad-suite' ); ?></p>
+            </td>
+        </tr>
+        <?php
+    }
+
+    public function save_term_image( int $term_id ): void {
+        if ( ! isset( $_POST['mad_dt_attr_image_id'] ) ) return;
+        $image_id = absint( $_POST['mad_dt_attr_image_id'] );
+        if ( $image_id ) {
+            update_term_meta( $term_id, '_mad_dt_attr_image_id', $image_id );
+        } else {
+            delete_term_meta( $term_id, '_mad_dt_attr_image_id' );
+        }
+    }
+
+    public function enqueue_attr_image_admin_js( string $hook ): void {
+        // Only load on taxonomy term list/edit pages for pa_* attributes
+        if ( ! in_array( $hook, [ 'edit-tags.php', 'term.php' ], true ) ) return;
+        $tax = isset( $_GET['taxonomy'] ) ? sanitize_key( $_GET['taxonomy'] ) : '';
+        if ( strpos( $tax, 'pa_' ) !== 0 ) return;
+
+        wp_enqueue_media();
+        wp_add_inline_script( 'media-upload', $this->attr_image_admin_js() );
+    }
+
+    private function attr_image_admin_js(): string {
+        return <<<'JS'
+(function($) {
+    'use strict';
+    var frame;
+
+    $(document).on('click', '.mad-dt-upload-image', function(e) {
+        e.preventDefault();
+        var $wrap = $(this).closest('.mad-dt-term-image-wrap');
+
+        frame = wp.media({
+            title  : 'Seleccionar imagen del atributo',
+            button : { text: 'Usar esta imagen' },
+            multiple: false
+        });
+
+        frame.on('select', function() {
+            var att = frame.state().get('selection').first().toJSON();
+            var thumb = att.sizes && att.sizes.thumbnail ? att.sizes.thumbnail.url : att.url;
+            $wrap.find('input[name="mad_dt_attr_image_id"]').val(att.id);
+            $wrap.find('.mad-dt-term-image-preview').html(
+                '<img src="' + thumb + '" style="max-width:80px;max-height:80px;border:1px solid #ddd;border-radius:4px;display:block;">'
+            );
+            $wrap.find('.mad-dt-upload-image').text('Cambiar imagen');
+            $wrap.find('.mad-dt-remove-image').show();
+        });
+
+        frame.open();
+    });
+
+    $(document).on('click', '.mad-dt-remove-image', function(e) {
+        e.preventDefault();
+        var $wrap = $(this).closest('.mad-dt-term-image-wrap');
+        $wrap.find('input[name="mad_dt_attr_image_id"]').val('');
+        $wrap.find('.mad-dt-term-image-preview').empty();
+        $wrap.find('.mad-dt-upload-image').text('Seleccionar imagen');
+        $(this).hide();
+    });
+})(jQuery);
+JS;
+    }
+
 };
