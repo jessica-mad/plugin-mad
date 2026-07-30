@@ -682,8 +682,7 @@ return new class( $core ) implements MAD_Suite_Module {
         <select class="mad-dt-hidden-select"
                 id="<?php echo esc_attr( $id ); ?>"
                 name="<?php echo esc_attr( $name ); ?>"
-                style="display:none!important;"
-                aria-hidden="true">
+                style="display:none!important;">
             <option value=""><?php esc_html_e( 'Selecciona una opción', 'mad-suite' ); ?></option>
             <?php foreach ( $options as $opt ) :
                 $term  = get_term_by( 'slug', $opt, $attribute );
@@ -759,7 +758,7 @@ return new class( $core ) implements MAD_Suite_Module {
             $(document).on('click', '.mad-dt-swatch', function() {
                 var $swatch   = $(this);
                 var $swatches = $swatch.closest('.mad-dt-swatches');
-                var $select   = $swatches.next('select.mad-dt-hidden-select');
+                var $select   = $swatches.siblings('select.mad-dt-hidden-select');
                 var value     = $swatch.data('value');
 
                 if ( $swatch.hasClass('selected') ) {
