@@ -656,7 +656,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
         ob_start();
         ?>
-        <div class="mad-dt-swatches" data-attribute-name="<?php echo esc_attr( $name ); ?>">
+        <div class="mad-dt-swatches" data-attribute-name="<?php echo esc_attr( $name ); ?>" data-select-id="<?php echo esc_attr( $id ); ?>">
             <?php foreach ( $options as $opt ) :
                 $term = get_term_by( 'slug', $opt, $attribute );
                 if ( ! $term ) continue;
@@ -682,7 +682,9 @@ return new class( $core ) implements MAD_Suite_Module {
         <select class="mad-dt-hidden-select"
                 id="<?php echo esc_attr( $id ); ?>"
                 name="<?php echo esc_attr( $name ); ?>"
-                style="display:none!important;">
+                data-attribute_name="<?php echo esc_attr( $name ); ?>"
+                data-mad-swatch-id="<?php echo esc_attr( $id ); ?>"
+                style="opacity:0;position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;">
             <option value=""><?php esc_html_e( 'Selecciona una opción', 'mad-suite' ); ?></option>
             <?php foreach ( $options as $opt ) :
                 $term  = get_term_by( 'slug', $opt, $attribute );
@@ -758,7 +760,8 @@ return new class( $core ) implements MAD_Suite_Module {
             $(document).on('click', '.mad-dt-swatch', function() {
                 var $swatch   = $(this);
                 var $swatches = $swatch.closest('.mad-dt-swatches');
-                var $select   = $swatches.siblings('select.mad-dt-hidden-select');
+                var selectId  = $swatches.data('select-id');
+                var $select   = selectId ? $( '#' + selectId ) : $swatches.siblings('select.mad-dt-hidden-select');
                 var value     = $swatch.data('value');
 
                 if ( $swatch.hasClass('selected') ) {
