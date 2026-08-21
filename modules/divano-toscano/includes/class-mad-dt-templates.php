@@ -69,7 +69,14 @@ class MAD_DT_Templates {
             ],
             'public'              => false,
             'show_ui'             => true,
-            'show_in_menu'        => MAD_Suite_Core::MENU_SLUG_ROOT,
+            // OJO: no usar aquí el slug del menú raíz de MAD Suite. WordPress añade
+            // el submenú de los CPT (_add_post_type_submenus) al hook 'admin_menu'
+            // antes que los submenús de los módulos (que se registran durante
+            // 'init'), así que el CPT quedaría primero en el submenú y WordPress
+            // usaría esa URL como destino del enlace del menú padre "MAD Plugins",
+            // rompiendo el acceso al editor de módulos. Se accede a esta pantalla
+            // solo mediante el enlace de la página de ajustes de Divano Toscano.
+            'show_in_menu'        => false,
             'exclude_from_search' => true,
             'capability_type'     => 'page',
             'supports'            => [ 'title' ],
