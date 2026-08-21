@@ -99,6 +99,32 @@ function mad_quotes_order_display_price( $order ) {
 }
 
 /**
+ * Whether the current visitor should get the "quote" experience (hidden
+ * prices, request-by-email flow) instead of the normal shop.
+ *
+ * Mirrors the private logic in the Quotes module so other modules (e.g.
+ * Divano Toscano's configurador) can reuse the exact same rule without
+ * depending on the module's internals.
+ *
+ * @return bool
+ */
+function mad_quotes_current_user_is_quote_role() {
+    $settings    = mad_quotes_get_settings();
+    $quote_roles = array_filter( (array) ( $settings['quote_roles'] ?? [] ) );
+
+    if ( empty( $quote_roles ) ) {
+        return true;
+    }
+
+    $user = wp_get_current_user();
+    if ( ! $user->ID ) {
+        return in_array( 'guest', $quote_roles, true );
+    }
+
+    return (bool) array_intersect( $quote_roles, (array) $user->roles );
+}
+
+/**
  * Get module settings with defaults applied.
  *
  * @return array

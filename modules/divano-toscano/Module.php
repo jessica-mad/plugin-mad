@@ -14,6 +14,8 @@
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+require_once __DIR__ . '/includes/class-mad-dt-templates.php';
+
 /** @var MAD_Suite_Core $core */
 
 return new class( $core ) implements MAD_Suite_Module {
@@ -23,8 +25,12 @@ return new class( $core ) implements MAD_Suite_Module {
     private $opt_key  = 'madsuite_divano_toscano';
     private $nonce    = 'mads_divano_save';
 
+    /** @var MAD_DT_Templates Gestiona las plantillas de configurador (CPT, meta boxes, frontend, carrito). */
+    private $templates;
+
     public function __construct( $core ) {
-        $this->core = $core;
+        $this->core      = $core;
+        $this->templates = new MAD_DT_Templates();
     }
 
     /* ================================================================ */
@@ -67,6 +73,11 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_dropdown_variation_attribute_options_html', [ $this, 'render_attribute_swatches' ], 10, 2 );
         add_action( 'wp_head',   [ $this, 'swatch_frontend_css' ] );
         add_action( 'wp_footer', [ $this, 'swatch_frontend_js' ] );
+
+        // Feature: Configurador de opciones por árbol de decisión (plantillas reutilizables).
+        if ( ! empty( $settings['enable_configurator'] ) ) {
+            $this->templates->init();
+        }
     }
 
     /* ================================================================ */
@@ -98,6 +109,18 @@ return new class( $core ) implements MAD_Suite_Module {
             $this->opt_key,
             'mad_dt_main'
         );
+
+        add_settings_field(
+            'enable_configurator',
+            __( 'Configurador de opciones por decisión', 'mad-suite' ),
+            [ $this, 'field_enable_configurator' ],
+            $this->opt_key,
+            'mad_dt_main'
+        );
+
+        if ( ! empty( $this->get_settings()['enable_configurator'] ) ) {
+            $this->templates->admin_init();
+        }
 
         // Acción para regenerar en bulk desde la página de ajustes.
         if (
@@ -520,6 +543,14 @@ return new class( $core ) implements MAD_Suite_Module {
                 </p></div>
             <?php endif; ?>
 
+            <?php if ( ! empty( $this->get_settings()['enable_configurator'] ) ) : ?>
+                <p>
+                    <a href="<?php echo esc_url( admin_url( 'edit.php?post_type=' . MAD_DT_Templates::CPT ) ); ?>" class="button button-secondary">
+                        <?php esc_html_e( 'Gestionar plantillas de configurador →', 'mad-suite' ); ?>
+                    </a>
+                </p>
+            <?php endif; ?>
+
             <!-- Ajustes generales -->
             <form method="post" action="options.php">
                 <?php
@@ -601,19 +632,26 @@ return new class( $core ) implements MAD_Suite_Module {
              esc_html__( 'Sobreescribir el SKU aunque ya exista uno asignado', 'mad-suite' ) . '</label>';
     }
 
+    public function field_enable_configurator(): void {
+        $v = $this->get_settings()['enable_configurator'];
+        echo '<label><input type="checkbox" name="' . esc_attr( $this->opt_key ) . '[enable_configurator]" value="1" ' . checked( 1, $v, false ) . '> ' .
+             esc_html__( 'Activar el configurador de opciones (material, medida, tela, costura…) en productos simples marcados individualmente. Nunca muestra precios: solo captura la selección del cliente para el presupuesto.', 'mad-suite' ) . '</label>';
+    }
+
     /* ================================================================ */
     /*  Helpers                                                          */
     /* ================================================================ */
 
     public function sanitize_settings( $input ): array {
         return [
-            'auto_generate' => ! empty( $input['auto_generate'] ) ? 1 : 0,
-            'overwrite'     => ! empty( $input['overwrite'] ) ? 1 : 0,
+            'auto_generate'       => ! empty( $input['auto_generate'] ) ? 1 : 0,
+            'overwrite'           => ! empty( $input['overwrite'] ) ? 1 : 0,
+            'enable_configurator' => ! empty( $input['enable_configurator'] ) ? 1 : 0,
         ];
     }
 
     private function get_settings(): array {
-        $defaults = [ 'auto_generate' => 1, 'overwrite' => 0 ];
+        $defaults = [ 'auto_generate' => 1, 'overwrite' => 0, 'enable_configurator' => 0 ];
         $saved    = get_option( $this->opt_key, [] );
         return wp_parse_args( is_array( $saved ) ? $saved : [], $defaults );
     }

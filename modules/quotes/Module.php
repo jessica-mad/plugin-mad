@@ -483,19 +483,7 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     private function current_user_is_quote_role(): bool {
-        $settings    = mad_quotes_get_settings();
-        $quote_roles = array_filter( (array) ( $settings['quote_roles'] ?? [] ) );
-
-        if ( empty( $quote_roles ) ) {
-            return true;
-        }
-
-        $user = wp_get_current_user();
-        if ( ! $user->ID ) {
-            return in_array( 'guest', $quote_roles, true );
-        }
-
-        return (bool) array_intersect( $quote_roles, (array) $user->roles );
+        return mad_quotes_current_user_is_quote_role();
     }
 
     public function cache_original_price( $price, $product ) {
@@ -674,14 +662,23 @@ return new class( $core ) implements MAD_Suite_Module {
         $order = wc_create_order( [ 'customer_id' => $user->ID ] );
 
         foreach ( WC()->cart->get_cart() as $item ) {
-            $order->add_product( $item['data'], $item['quantity'] );
+            $item_id = $order->add_product( $item['data'], $item['quantity'] );
+            if ( $item_id ) {
+                // Otros módulos (ej. Divano Toscano) escuchan esta acción para copiar
+                // la selección de opciones del cliente + un precio sugerido a la línea.
+                do_action( 'mad_quotes_order_item_created', $order->get_item( $item_id ), $item, $order );
+            }
         }
 
-        // Pre-poblar con precio regular de cada producto como punto de partida.
+        // Pre-poblar con precio regular de cada producto (o el sugerido por un
+        // configurador de opciones, si lo hay) como punto de partida.
         // El admin puede modificarlos en el meta box antes de enviar el presupuesto.
         $order_total = 0.0;
         foreach ( $order->get_items() as $line ) {
-            $quote_price = mad_quotes_get_product_quote_price( $line->get_product_id() );
+            $suggested   = $line->get_meta( '_mad_dt_suggested_price' );
+            $quote_price = ( '' !== $suggested && false !== $suggested )
+                ? (float) $suggested
+                : mad_quotes_get_product_quote_price( $line->get_product_id() );
             $qty         = $line->get_quantity();
             $line_total  = $quote_price * $qty;
             $line->update_meta_data( '_mad_quote_line_price', (string) $quote_price );
@@ -1396,6 +1393,7 @@ return new class( $core ) implements MAD_Suite_Module {
                     <?php foreach ( $order->get_items() as $item_id => $item ) :
                         $product_id  = $item->get_product_id();
                         $saved_price = $item->get_meta( '_mad_quote_line_price' );
+                        $suggested   = $item->get_meta( '_mad_dt_suggested_price' );
                         $default     = ( $saved_price !== '' && false !== $saved_price )
                             ? $saved_price
                             : mad_quotes_get_product_quote_price( $product_id );
@@ -1411,6 +1409,17 @@ return new class( $core ) implements MAD_Suite_Module {
                                        data-item-id="<?php echo esc_attr( $item_id ); ?>"
                                        value="<?php echo esc_attr( $default ); ?>"
                                        style="width:110px;">
+                                <?php if ( '' !== $suggested && false !== $suggested ) : ?>
+                                    <br><small style="color:#666;">
+                                        <?php
+                                        printf(
+                                            /* translators: suggested price from the options configurator */
+                                            esc_html__( 'Sugerido por el configurador: %s', 'mad-suite' ),
+                                            wp_kses_post( wc_price( (float) $suggested ) )
+                                        );
+                                        ?>
+                                    </small>
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>
