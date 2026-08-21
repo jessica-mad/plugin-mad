@@ -4,6 +4,8 @@
  *
  * @var WC_Order $order
  * @var string   $email_heading
+ * @var string   $body_text
+ * @var string   $additional_content
  * @var string   $admin_note
  */
 
@@ -11,10 +13,7 @@ defined( 'ABSPATH' ) || exit;
 
 echo esc_html( $email_heading ) . "\n\n";
 
-printf(
-    esc_html__( 'Hola %s, tu presupuesto está listo. Puedes revisarlo a continuación.', 'mad-suite' ),
-    esc_html( $order->get_billing_first_name() )
-);
+echo wp_strip_all_tags( $body_text );
 
 echo "\n\n";
 
@@ -56,3 +55,7 @@ printf(
 
 echo "\n";
 echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";
+
+if ( $additional_content ) {
+    echo "\n" . wp_strip_all_tags( wptexturize( $additional_content ) ) . "\n";
+}

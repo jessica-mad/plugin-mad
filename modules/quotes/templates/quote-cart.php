@@ -11,9 +11,21 @@
 
 defined( 'ABSPATH' ) || exit;
 
-$settings = mad_quotes_get_settings();
-$btn_text = trim( $settings['quote_button_text'] ?? '' );
-$btn_label = $btn_text !== '' ? $btn_text : __( 'Solicitar presupuesto', 'mad-suite' );
+$settings    = mad_quotes_get_settings();
+$_btn_stored = $settings['quote_button_text'] ?? [];
+$_lang       = apply_filters( 'wpml_current_language', null );
+$_def_lang   = apply_filters( 'wpml_default_language', null );
+if ( is_string( $_btn_stored ) ) {
+    $btn_text = $_btn_stored;
+} elseif ( is_array( $_btn_stored ) ) {
+    $btn_text = ( $_lang && isset( $_btn_stored[ $_lang ] ) && $_btn_stored[ $_lang ] !== '' )
+        ? $_btn_stored[ $_lang ]
+        : ( ( $_def_lang && isset( $_btn_stored[ $_def_lang ] ) ) ? $_btn_stored[ $_def_lang ] : ( reset( $_btn_stored ) ?: '' ) );
+} else {
+    $btn_text = '';
+}
+unset( $_btn_stored, $_lang, $_def_lang );
+$btn_label = trim( $btn_text ) !== '' ? $btn_text : __( 'Solicitar presupuesto', 'mad-suite' );
 
 get_header( 'shop' );
 ?>
@@ -24,12 +36,11 @@ get_header( 'shop' );
 
     <?php if ( WC()->cart->is_empty() ) : ?>
 
-        <p class="cart-empty woocommerce-info">
+        <p class="cart-empty">
             <?php esc_html_e( 'Tu solicitud de presupuesto está vacía.', 'mad-suite' ); ?>
         </p>
         <p>
-            <a href="<?php echo esc_url( apply_filters( 'woocommerce_return_to_shop_redirect', wc_get_page_permalink( 'shop' ) ) ); ?>"
-               class="button wc-backward">
+            <a href="<?php echo esc_url( apply_filters( 'woocommerce_return_to_shop_redirect', wc_get_page_permalink( 'shop' ) ) ); ?>">
                 <?php esc_html_e( 'Ver productos', 'mad-suite' ); ?>
             </a>
         </p>
@@ -40,11 +51,11 @@ get_header( 'shop' );
             <?php esc_html_e( 'Tu solicitud de presupuesto', 'mad-suite' ); ?>
         </h1>
 
-        <form class="mad-quote-cart__form woocommerce-cart-form"
+        <form class="mad-quote-cart__form"
               action="<?php echo esc_url( wc_get_cart_url() ); ?>"
               method="post">
 
-            <table class="mad-quote-cart__table shop_table shop_table_responsive">
+            <table class="mad-quote-cart__table">
                 <thead>
                     <tr>
                         <th class="product-remove">&nbsp;</th>
@@ -133,7 +144,7 @@ get_header( 'shop' );
             <!-- Botones del formulario -->
             <div class="mad-quote-cart__update">
                 <button type="submit"
-                        class="button"
+                        class="mad-quote-cart__btn-update"
                         name="update_cart"
                         value="<?php esc_attr_e( 'Actualizar solicitud', 'mad-suite' ); ?>">
                     <?php esc_html_e( 'Actualizar solicitud', 'mad-suite' ); ?>
@@ -143,14 +154,41 @@ get_header( 'shop' );
 
         </form>
 
-        <!-- Acciones principales -->
+        <!-- Formulario de solicitud (email + notas) -->
         <div class="mad-quote-cart__actions">
-            <a href="<?php echo esc_url( wc_get_checkout_url() ); ?>"
-               class="button alt mad-quote-cart__proceed">
-                <?php echo esc_html( $btn_label ); ?>
-            </a>
+            <form method="post" class="mad-quote-submit-form">
+                <?php wp_nonce_field( 'mad_create_quote', 'mad_create_quote_nonce' ); ?>
+                <?php $current_user = wp_get_current_user(); ?>
+
+                <p class="mad-quote-cart__field">
+                    <label for="mad-quote-email">
+                        <?php esc_html_e( 'Email', 'mad-suite' ); ?>
+                    </label>
+                    <input type="email"
+                           id="mad-quote-email"
+                           name="olofane_email"
+                           value="<?php echo esc_attr( $current_user->user_email ); ?>"
+                           required>
+                </p>
+
+                <p class="mad-quote-cart__field">
+                    <label for="mad-quote-notas">
+                        <?php esc_html_e( 'Notas (opcional)', 'mad-suite' ); ?>
+                    </label>
+                    <textarea id="mad-quote-notas"
+                              name="olofane_notas"
+                              rows="4"></textarea>
+                </p>
+
+                <button type="submit"
+                        name="mad_submit_quote"
+                        class="mad-quote-cart__proceed">
+                    <?php echo esc_html( $btn_label ); ?>
+                </button>
+            </form>
+
             <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
-               class="button mad-quote-cart__back">
+               class="mad-quote-cart__back">
                 <?php esc_html_e( 'Seguir viendo productos', 'mad-suite' ); ?>
             </a>
         </div>

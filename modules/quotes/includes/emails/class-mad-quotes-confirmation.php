@@ -1,60 +1,46 @@
 <?php
 /**
- * Customer email: quote ready / send quote.
- *
- * The admin triggers this manually from the order edit screen once prices
- * have been set. Includes an optional admin note.
+ * WC_Email: customer confirmation when a quote request is received.
  *
  * @package MAD_Suite/Quotes/Emails
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-class MAD_Quotes_Email_Send_Quote extends WC_Email {
+class MAD_Quotes_Email_Confirmation extends WC_Email {
 
     use MAD_Email_WPML_Trait;
 
     public function __construct() {
-        $this->id             = 'mad_quotes_send_quote';
-        $this->title          = __( '[MAD Quotes] Presupuesto enviado al cliente', 'mad-suite' );
-        $this->description    = __( 'Se envía al cliente cuando el administrador envía el presupuesto finalizado.', 'mad-suite' );
+        $this->id             = 'mad_quotes_confirmation';
+        $this->title          = __( '[MAD Quotes] Confirmación de solicitud (cliente)', 'mad-suite' );
+        $this->description    = __( 'Se envía al cliente cuando recibimos su solicitud de presupuesto.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Tu presupuesto está listo', 'mad-suite' );
-        $this->subject = __( '[{blogname}] Tu presupuesto (Pedido #{order_number})', 'mad-suite' );
+        $this->heading = __( 'Hemos recibido tu solicitud', 'mad-suite' );
+        $this->subject = __( '[{blogname}] Solicitud de presupuesto recibida (#{order_number})', 'mad-suite' );
 
-        $this->template_html  = 'emails/mad-quote-send.php';
-        $this->template_plain = 'emails/plain/mad-quote-send.php';
+        $this->template_html  = 'emails/mad-quote-confirmation.php';
+        $this->template_plain = 'emails/plain/mad-quote-confirmation.php';
         $this->template_base  = MAD_QUOTES_TEMPLATE_PATH;
 
-        add_action( 'mad_quotes_send_quote_notification', [ $this, 'trigger' ] );
+        add_action( 'mad_quotes_new_request', [ $this, 'trigger' ] );
 
         parent::__construct();
     }
 
-    /**
-     * Fire the email.
-     *
-     * @param int    $order_id
-     * @param string $admin_note  Optional note from admin shown in the email body.
-     */
-    public function trigger( $order_id, $admin_note = '' ) {
+    public function trigger( $order_id ) {
         if ( ! $order_id ) return;
-
-        $send = apply_filters( 'mad_quotes_send_quote_email', true, $order_id );
-        if ( ! $send ) return;
+        if ( ! $this->is_enabled() ) return;
 
         $this->object = wc_get_order( $order_id );
         if ( ! $this->object ) return;
-
-        if ( ! $this->is_enabled() ) return;
 
         $this->recipient = $this->object->get_billing_email();
         if ( ! $this->get_recipient() ) return;
 
         $this->placeholders['{order_date}']   = date_i18n( wc_date_format(), strtotime( $this->object->get_date_created() ) );
         $this->placeholders['{order_number}'] = $this->object->get_order_number();
-        $this->admin_note = sanitize_textarea_field( $admin_note );
 
         $orig_lang = $this->switch_to_order_language( $this->object );
 
@@ -84,7 +70,6 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
                 'sent_to_admin'      => false,
                 'plain_text'         => false,
                 'email'              => $this,
-                'admin_note'         => $this->admin_note ?? '',
             ],
             '',
             $this->template_base
@@ -106,7 +91,6 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
                 'sent_to_admin'      => false,
                 'plain_text'         => true,
                 'email'              => $this,
-                'admin_note'         => $this->admin_note ?? '',
             ],
             '',
             $this->template_base
@@ -114,15 +98,15 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( '[{blogname}] Tu presupuesto (Pedido #{order_number})', 'mad-suite' );
+        return __( '[{blogname}] Solicitud de presupuesto recibida (#{order_number})', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Tu presupuesto está listo', 'mad-suite' );
+        return __( 'Hemos recibido tu solicitud', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, tu presupuesto está listo. Puedes revisarlo a continuación.', 'mad-suite' );
+        return __( 'Hola {customer_name}, hemos recibido tu solicitud de presupuesto correctamente. Te responderemos lo antes posible.', 'mad-suite' );
     }
 
     public function init_form_fields() {

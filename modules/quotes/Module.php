@@ -111,45 +111,107 @@ return new class( $core ) implements MAD_Suite_Module {
         ] );
         add_filter( 'wc_order_statuses',                           [ $this, 'add_wc_order_statuses' ] );
         add_filter( 'woocommerce_valid_order_statuses_for_payment', [ $this, 'valid_payment_statuses' ] );
+        add_filter( 'woocommerce_order_needs_payment',             [ $this, 'quote_sent_needs_payment' ], 10, 2 );
         add_action( 'admin_head', [ $this, 'order_status_css' ] );
 
         // ── Rol: cachear precio HTML antes de que el plugin original lo modifique ──
         add_filter( 'woocommerce_get_price_html',      [ $this, 'cache_original_price' ], 1, 2 );
         add_filter( 'woocommerce_variable_price_html', [ $this, 'cache_original_price' ], 1, 2 );
 
+        // ── Rol: ocultar precio para usuarios de presupuesto independientemente de la config por producto ──
+        add_filter( 'woocommerce_get_price_html',      [ $this, 'hide_price_for_quote_role' ], 50, 2 );
+        add_filter( 'woocommerce_variable_price_html', [ $this, 'hide_price_for_quote_role' ], 50, 2 );
+
         // ── Rol: restaurar precio/botón para roles no habilitados (prioridad 999 para sobreescribir al plugin original) ──
         add_filter( 'woocommerce_get_price_html',                  [ $this, 'maybe_restore_price' ],  999, 2 );
         add_filter( 'woocommerce_variable_price_html',             [ $this, 'maybe_restore_price' ],  999, 2 );
+        add_filter( 'woocommerce_get_price_html',                  [ $this, 'add_b2b_price_labels' ], 1000, 2 );
+        add_filter( 'woocommerce_variable_price_html',             [ $this, 'add_b2b_price_labels' ], 1000, 2 );
+        add_action( 'wp_head',                                     [ $this, 'b2b_price_labels_css' ] );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
 
-        // ── Rol: filtros nativos del plugin original (si los expone) ─────────────
-        add_filter( 'qwc_hide_price_html',     [ $this, 'filter_by_role' ] );
-        add_filter( 'qwc_disable_add_to_cart', [ $this, 'filter_by_role' ] );
+        // ── WPML: registrar strings traducibles en cada carga ────────────────
+        add_action( 'init', [ $this, 'register_wpml_strings' ], 20 );
+
+        // ── Shortcode del formulario de presupuesto ───────────────────────
+        add_shortcode( 'mad_quote_cart', [ $this, 'shortcode_quote_cart' ] );
+
+        // ── Logging de fallos de entrega de email ─────────────────────────
+        add_action( 'wp_mail_failed', [ $this, 'log_mail_failure' ] );
+
+        // ── Rol: filtro de ocultación de precio de QWC (hook real del plugin original) ──
+        add_filter( 'qwc_hide_prices', [ $this, 'filter_by_role' ], 10, 2 );
 
         // ── Gateways: capturar los originales antes de que el plugin de presupuestos los filtre ──
         add_filter( 'woocommerce_available_payment_gateways', [ $this, 'capture_original_gateways' ], 1 );
-        // Para usuarios con rol de presupuesto: dejar experiencia de presupuesto.
-        // Para el resto: restaurar gateways originales y quitar quotes-wc.
+        // Asegurar que quotes-gateway esté disponible para usuarios de presupuesto aunque QWC no lo inyecte ──
+        add_filter( 'woocommerce_available_payment_gateways', [ $this, 'inject_quotes_gateway_for_role' ], 5 );
+        // Para usuarios con rol de presupuesto: solo quotes-gateway.
+        // Para el resto (profesionales / order-pay): restaurar gateways originales y quitar quotes-gateway.
         add_filter( 'woocommerce_available_payment_gateways', [ $this, 'filter_quote_gateway' ], 999 );
 
         // ── Checkout presupuesto: cambiar texto del botón "Realizar pedido" ──────
         add_filter( 'woocommerce_order_button_text', [ $this, 'quote_checkout_button_text' ] );
 
-        // ── Carrito: plantilla propia para la experiencia de presupuesto ─
-        add_filter( 'template_include', [ $this, 'quote_cart_template_override' ], 100 );
+        // ── Carrito: formulario de presupuesto propio (NO Blocks checkout) ──────────
+        // Prioridad 1: interceptar el POST del formulario antes de que se cargue el template.
+        add_action( 'template_redirect', [ $this, 'maybe_handle_create_quote' ],      1 );
+        // Prioridad 10: si es la página de carrito de un usuario de presupuesto, cargar nuestro template.
+        add_action( 'template_redirect', [ $this, 'serve_quote_cart_template' ] );
+        // Prioridad 10: si un usuario de presupuesto llega al checkout de WC (no order-pay), redirigir al carrito.
+        add_action( 'template_redirect', [ $this, 'redirect_quote_checkout_to_cart' ] );
+
+        // Datos de facturación en la página order-pay de presupuestos enviados.
+        add_action( 'woocommerce_pay_order_before_payment', [ $this, 'inject_billing_fields_on_pay_page' ] );
+        add_action( 'woocommerce_before_pay_action',        [ $this, 'save_billing_fields_before_pay'   ], 1, 1 );
+
+        // ── Mini-carrito: ocultar botones y subtotal para usuarios de presupuesto ─
+        // El plugin QWC base solo lo hace por producto (cart_contains_quotable()),
+        // no por rol — aquí lo cubrimos con la lógica de rol de MAD Quotes.
+        add_action( 'woocommerce_widget_shopping_cart_buttons', [ $this, 'hide_mini_cart_buttons' ],    1 );
+        add_action( 'woocommerce_widget_shopping_cart_total',   [ $this, 'hide_mini_cart_total' ],      1 );
+
+        // ── Mini-carrito: textos personalizables para usuarios normales ──
+        add_action( 'woocommerce_widget_shopping_cart_buttons', [ $this, 'override_mini_cart_buttons' ], 5 );
 
         // ── Checkout: ocultar precios y pagos para experiencia de presupuesto ─
         // PHP hooks: actúan en el origen, sin depender de selectores CSS del tema
-        add_filter( 'woocommerce_cart_item_price',       [ $this, 'hide_cart_item_price' ],    10, 3 );
-        add_filter( 'woocommerce_cart_item_subtotal',    [ $this, 'hide_cart_item_subtotal' ], 10, 3 );
+        add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ],    10, 3 );
+        add_filter( 'woocommerce_cart_item_subtotal', [ $this, 'hide_cart_item_subtotal' ], 10, 3 );
         add_filter( 'woocommerce_checkout_show_payment', [ $this, 'hide_checkout_payment' ] );
-        // CSS mínimo solo para columna "Total" y tfoot de la tabla de revisión (sin PHP hook equivalente)
+        // Ocultar los totales del footer (subtotal, total) vía PHP para el checkout clásico
+        add_filter( 'woocommerce_cart_subtotal',                [ $this, 'hide_cart_totals_html' ], 10, 3 );
+        add_filter( 'woocommerce_cart_totals_order_total_html', [ $this, 'hide_cart_totals_html_single' ] );
+        // CSS temprano (wp_head): evita flash si el carrito ya está disponible
         add_action( 'wp_head', [ $this, 'inject_checkout_css' ] );
+        // CSS inline antes de la tabla de revisión: timing garantizado dentro del template
+        add_action( 'woocommerce_checkout_before_order_review_heading', [ $this, 'inject_checkout_css' ] );
+        // CSS de seguridad DESPUÉS de la tabla: dispara con el carrito definitivamente renderizado;
+        // usa current_user_is_quote_role() sin depender del estado del carrito.
+        add_action( 'woocommerce_checkout_after_order_review', [ $this, 'inject_checkout_css_after_review' ] );
 
         // ── Checkout: simplificar campos y deshabilitar envío ─────────
-        add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], 9999 );
+        // PHP_INT_MAX garantiza que nuestro filtro sea el último en ejecutarse
+        add_filter( 'woocommerce_checkout_fields',     [ $this, 'simplify_quote_checkout_fields' ], PHP_INT_MAX );
         add_filter( 'woocommerce_cart_needs_shipping', [ $this, 'no_shipping_for_quotes' ] );
+
+        // ── Blocks checkout: eliminar bloque de dirección del DOM ────────
+        // CSS no es suficiente: React valida client-side los campos ocultos.
+        // render_block elimina el bloque por completo del HTML renderizado
+        // → sin DOM, sin validación React, sin campos requeridos visibles.
+        add_filter( 'render_block', [ $this, 'remove_billing_block_for_quote_role' ], 10, 2 );
+
+        // ── Blocks checkout: quitar "required" de campos de dirección ─
+        // woocommerce_checkout_fields no afecta a Blocks; hay que actuar sobre
+        // woocommerce_billing_fields para que la validación Store API no bloquee el envío.
+        add_filter( 'woocommerce_billing_fields', [ $this, 'unrequire_billing_address_for_quotes' ], PHP_INT_MAX );
+
+        // ── Blocks checkout: rellenar datos de facturación mínimos ───────
+        // La Store API valida el pedido incluso con woocommerce_billing_fields.
+        // Rellenamos placeholders para campos que WC pueda exigir en la BD.
+        add_action( 'woocommerce_store_api_checkout_update_order_from_request',              [ $this, 'fill_quote_billing_defaults' ], PHP_INT_MAX, 2 );
+        add_action( '__experimental_woocommerce_blocks_checkout_update_order_from_request',  [ $this, 'fill_quote_billing_defaults' ], PHP_INT_MAX, 2 );
 
         // ── Ciclo de vida del pedido ───────────────────────────────────
         add_action( 'woocommerce_checkout_update_order_meta',   [ $this, 'save_quote_order_meta' ] );
@@ -163,9 +225,21 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_cancel_unpaid_order',          [ $this, 'prevent_cancel' ], 10, 2 );
         add_filter( 'woocommerce_my_account_my_orders_actions', [ $this, 'my_orders_actions' ], 10, 2 );
 
+        // Ocultar precios al cliente en pedidos de presupuesto pendiente de confirmación.
+        add_action( 'woocommerce_thankyou',                 [ $this, 'hide_prices_on_pending_quote_page' ] );
+        add_action( 'woocommerce_view_order',               [ $this, 'hide_prices_on_pending_quote_page' ] );
+        add_filter( 'woocommerce_get_order_item_totals',    [ $this, 'hide_totals_on_pending_quote' ], 10, 2 );
+
         // ── UI de admin (botones + tabla de precios en el pedido) ──────
         add_action( 'woocommerce_order_item_add_action_buttons', [ $this, 'add_order_buttons' ] );
         add_action( 'admin_enqueue_scripts',                     [ $this, 'enqueue_admin_js' ] );
+        add_action( 'add_meta_boxes',                            [ $this, 'register_payment_proof_meta_box' ] );
+
+        // ── Comprobante de transferencia bancaria ─────────────────────
+        add_action( 'woocommerce_view_order',        [ $this, 'inject_payment_proof_upload' ] );
+        add_action( 'wp_enqueue_scripts',            [ $this, 'enqueue_proof_scripts' ] );
+        add_action( 'wp_ajax_mad_upload_payment_proof',        [ $this, 'ajax_upload_payment_proof' ] );
+        add_action( 'wp_ajax_nopriv_mad_upload_payment_proof', [ $this, 'ajax_upload_payment_proof' ] );
 
         // ── Email exclusivo MAD: presupuesto con precios y nota ────────
         add_filter( 'woocommerce_email_classes', [ $this, 'register_emails' ] );
@@ -211,9 +285,40 @@ return new class( $core ) implements MAD_Suite_Module {
         $this->register_field(
             'quote_button_text',
             __( 'Texto del botón de solicitud', 'mad-suite' ),
-            'field_text',
+            'field_button_text',
             'mad_quotes_roles',
             __( 'Texto del botón en páginas de producto y carrito. Ej: "Solicitar presupuesto". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
+        );
+        $this->register_field(
+            'quote_cart_page_id',
+            __( 'Página de solicitud de presupuesto', 'mad-suite' ),
+            'field_page_select',
+            'mad_quotes_roles',
+            __( 'Página que contiene el shortcode [mad_quote_cart]. Los usuarios de presupuesto serán redirigidos aquí en lugar del carrito de WooCommerce.', 'mad-suite' )
+        );
+
+        // ── Sección: Textos del mini-carrito ─────────────────────────
+        add_settings_section(
+            'mad_quotes_mini_cart',
+            __( 'Textos del mini-carrito', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Personaliza los botones del mini-carrito flotante. Si WPML está activo puedes definir el texto en cada idioma.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'mini_cart_view_cart_text',
+            __( 'Botón "Ver carrito"', 'mad-suite' ),
+            'field_multilang_text',
+            'mad_quotes_mini_cart',
+            __( 'Texto del botón que lleva al carrito. Por defecto: "Ver carrito".', 'mad-suite' )
+        );
+        $this->register_field(
+            'mini_cart_checkout_text',
+            __( 'Botón "Finalizar compra"', 'mad-suite' ),
+            'field_multilang_text',
+            'mad_quotes_mini_cart',
+            __( 'Texto del botón que lleva al checkout. Por defecto: "Finalizar compra".', 'mad-suite' )
         );
 
         // ── Sección: Caducidad ─────────────────────────────────────────
@@ -227,9 +332,27 @@ return new class( $core ) implements MAD_Suite_Module {
         );
         $this->register_field( 'quote_expiry_days', __( 'Días hasta caducidad', 'mad-suite' ), 'field_number', 'mad_quotes_expiry' );
 
+        // ── Sección: Verificación de comprobante de pago ───────────────
+        add_settings_section(
+            'mad_quotes_payment_proof',
+            __( 'Verificación de comprobante de transferencia', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Cuando un cliente paga por transferencia, puede subir el comprobante desde su pedido. Claude analiza el documento y, si el importe coincide, pasa el pedido a "Procesando" automáticamente.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'payment_proof_strict',
+            __( 'Modo de verificación', 'mad-suite' ),
+            'field_checkbox',
+            'mad_quotes_payment_proof',
+            __( 'Modo estricto (producción): Claude verifica además que el documento parezca un comprobante bancario real (logo, IBAN, número de operación…). Desactivado = modo prueba: solo comprueba el importe.', 'mad-suite' )
+        );
+
         // ── AJAX ───────────────────────────────────────────────────────
-        add_action( 'wp_ajax_mad_quotes_update_status', [ $this, 'ajax_update_status' ] );
-        add_action( 'wp_ajax_mad_quotes_send_quote',    [ $this, 'ajax_send_quote' ] );
+        add_action( 'wp_ajax_mad_quotes_update_status',       [ $this, 'ajax_update_status' ] );
+        add_action( 'wp_ajax_mad_quotes_send_quote',          [ $this, 'ajax_send_quote' ] );
+        add_action( 'wp_ajax_mad_admin_upload_payment_proof', [ $this, 'ajax_admin_upload_payment_proof' ] );
 
         // ── Panel de producto ──────────────────────────────────────────
         add_action( 'woocommerce_product_data_tabs',    [ $this, 'product_data_tab' ] );
@@ -274,6 +397,63 @@ return new class( $core ) implements MAD_Suite_Module {
         return $statuses;
     }
 
+    /**
+     * WooCommerce moderno usa needs_payment() que requiere status válido Y total > 0.
+     * Para presupuestos en quote-sent el total lo fija el admin, y queremos que el
+     * pago sea posible aunque el total fuera 0 (ej. muestra / regalo).
+     */
+    public function quote_sent_needs_payment( bool $needs_payment, WC_Order $order ): bool {
+        if ( $needs_payment ) return true;
+        if ( $order->get_status() !== 'quote-sent' ) return $needs_payment;
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $needs_payment;
+        return true;
+    }
+
+    /**
+     * Muestra campos de facturación en la página order-pay cuando el pedido
+     * es un presupuesto enviado y aún no tiene dirección de facturación.
+     */
+    public function inject_billing_fields_on_pay_page(): void {
+        $order_id = absint( get_query_var( 'order-pay' ) );
+        if ( ! $order_id ) return;
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( ! in_array( $order->get_status(), [ 'quote-sent', 'quote-complete' ], true ) ) return;
+
+        // Si ya tiene dirección completa, no mostrar el formulario.
+        if ( $order->get_billing_first_name() && $order->get_billing_last_name() ) return;
+
+        $default_country = wc_get_base_location()['country'] ?? 'ES';
+        $nonce           = wp_create_nonce( 'mad_quote_billing_' . $order_id );
+
+        include MAD_QUOTES_TEMPLATE_PATH . 'quote-billing-fields.php';
+    }
+
+    /**
+     * Guarda los campos de facturación enviados en la página order-pay antes
+     * de que WooCommerce procese el pago.
+     *
+     * @param WC_Order $order
+     */
+    public function save_billing_fields_before_pay( WC_Order $order ): void {
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( empty( $_POST['mad_billing_nonce'] ) ) return;
+
+        $nonce = sanitize_text_field( wp_unslash( $_POST['mad_billing_nonce'] ) );
+        if ( ! wp_verify_nonce( $nonce, 'mad_quote_billing_' . $order->get_id() ) ) return;
+
+        $fields = [ 'first_name', 'last_name', 'company', 'address_1', 'address_2', 'city', 'state', 'postcode', 'country', 'phone' ];
+        foreach ( $fields as $field ) {
+            $value  = sanitize_text_field( wp_unslash( $_POST[ 'billing_' . $field ] ?? '' ) );
+            $setter = 'set_billing_' . $field;
+            if ( method_exists( $order, $setter ) ) {
+                $order->$setter( $value );
+            }
+        }
+        $order->save();
+    }
+
     public function order_status_css() {
         echo '<style>
             .order-status.status-quote-pending { background: #c0392b !important; color: #fff !important; }
@@ -286,8 +466,15 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function register_emails( $email_classes ) {
+        require_once MAD_QUOTES_DIR . 'includes/emails/trait-mad-email-wpml.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-confirmation.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-request.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-send-quote.php';
-        $email_classes['MAD_Quotes_Email_Send_Quote'] = new MAD_Quotes_Email_Send_Quote();
+
+        $email_classes['MAD_Quotes_Email_Confirmation'] = new MAD_Quotes_Email_Confirmation();
+        $email_classes['MAD_Quotes_Email_New_Request']  = new MAD_Quotes_Email_New_Request();
+        $email_classes['MAD_Quotes_Email_Send_Quote']   = new MAD_Quotes_Email_Send_Quote();
+
         return $email_classes;
     }
 
@@ -323,17 +510,106 @@ return new class( $core ) implements MAD_Suite_Module {
         return $price;
     }
 
+    /**
+     * Añade etiquetas explicativas a los precios para usuarios B2B (no rol presupuesto)
+     * cuando el producto tiene precio de venta activo.
+     */
+    public function add_b2b_price_labels( string $price_html, $product ): string {
+        if ( is_admin() ) return $price_html;
+        if ( $this->current_user_is_quote_role() ) return $price_html;
+
+        // Solo cuando hay precio tachado (precio regular > precio de venta).
+        if ( strpos( $price_html, '<del' ) === false ) return $price_html;
+
+        $label_public = '<small class="mad-b2b-label mad-b2b-label--public">'
+            . esc_html__( 'Precio público', 'mad-suite' )
+            . '</small>';
+
+        $label_pro = '<small class="mad-b2b-label mad-b2b-label--pro">'
+            . esc_html__( 'Tu precio profesional', 'mad-suite' )
+            . '</small>';
+
+        // Insertar "Precio público" justo después del cierre de <del>.
+        $price_html = preg_replace( '/(<\/del>)/i', '$1' . $label_public, $price_html, 1 );
+
+        // Insertar "Tu precio profesional" justo después del cierre de <ins>.
+        $price_html = preg_replace( '/(<\/ins>)/i', '$1' . $label_pro, $price_html, 1 );
+
+        return $price_html;
+    }
+
+    /** CSS para las etiquetas de precio B2B. */
+    public function b2b_price_labels_css(): void {
+        if ( $this->current_user_is_quote_role() ) return;
+        echo '<style>
+.mad-b2b-label {
+    display: block;
+    font-size: 0.72em;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1.2;
+}
+.mad-b2b-label--public {
+    color: #999;
+    margin-bottom: 2px;
+}
+.mad-b2b-label--pro {
+    color: #2e7d32;
+    margin-top: 2px;
+}
+</style>';
+    }
+
+    public function register_wpml_strings(): void {
+        // No-op: button text is now managed per-language directly in MAD Suite settings.
+    }
+
     public function maybe_restore_button( $text ) {
         if ( ! $this->current_user_is_quote_role() ) {
             return __( 'Añadir al carrito', 'woocommerce' );
         }
-        // Para usuarios con rol de presupuesto: aplicar texto configurable si está definido
         $settings    = mad_quotes_get_settings();
-        $custom_text = trim( $settings['quote_button_text'] ?? '' );
+        $custom_text = trim( $this->resolve_button_text( $settings ) );
         return $custom_text !== '' ? $custom_text : $text;
     }
 
-    public function filter_by_role( $value ) {
+    /**
+     * Returns the button text for the current WPML language.
+     * Handles both the new array format and the legacy string format.
+     */
+    private function resolve_button_text( array $settings ): string {
+        $val = $settings['quote_button_text'] ?? [];
+
+        // Legacy: stored as plain string before multilang support
+        if ( is_string( $val ) ) {
+            return $val;
+        }
+
+        if ( empty( $val ) ) {
+            return '';
+        }
+
+        $current_lang = apply_filters( 'wpml_current_language', null );
+        if ( $current_lang && isset( $val[ $current_lang ] ) && $val[ $current_lang ] !== '' ) {
+            return $val[ $current_lang ];
+        }
+
+        // Fall back to default WPML language
+        $default_lang = apply_filters( 'wpml_default_language', null );
+        if ( $default_lang && isset( $val[ $default_lang ] ) && $val[ $default_lang ] !== '' ) {
+            return $val[ $default_lang ];
+        }
+
+        // Fall back to any non-empty entry
+        foreach ( $val as $entry ) {
+            if ( $entry !== '' ) return $entry;
+        }
+
+        return '';
+    }
+
+    public function filter_by_role( $value, $product_id = null ) {
         if ( ! $this->current_user_is_quote_role() ) {
             return false;
         }
@@ -345,55 +621,214 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     /**
-     * Devuelve true si el carrito contiene artículos del plugin original de presupuestos.
-     * El plugin "Quotes for WooCommerce" usa el meta 'qwc_quote_status' = 'on' en el producto.
-     */
-    private function cart_contains_quote_items(): bool {
-        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return false;
-
-        foreach ( WC()->cart->get_cart() as $item ) {
-            if ( get_post_meta( $item['product_id'], 'qwc_quote_status', true ) === 'on' ) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * True si el usuario tiene rol de presupuesto Y el carrito tiene artículos de presupuesto.
+     * True si el usuario tiene rol de presupuesto y tiene productos en el carrito.
+     * No depende de la configuración por producto de QWC; cualquier producto en el carrito
+     * de un usuario de presupuesto activa la experiencia de solicitud.
      */
     private function cart_is_quote_experience(): bool {
-        return $this->current_user_is_quote_role() && $this->cart_contains_quote_items();
+        if ( ! $this->current_user_is_quote_role() ) return false;
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return false;
+        return ! WC()->cart->is_empty();
     }
 
     /**
-     * Reemplaza la plantilla de carrito de WooCommerce con la plantilla propia
-     * de presupuesto para usuarios con rol habilitado.
-     * Los usuarios normales siguen viendo el carrito estándar de WooCommerce.
+     * Intercepta el POST del formulario de solicitud de presupuesto.
+     * Crea el pedido directamente (sin pasar por el checkout de WooCommerce Blocks),
+     * vacía el carrito y redirige a la página de confirmación del pedido.
+     * Debe correr con prioridad 1 en template_redirect para que el POST se procese
+     * antes de que serve_quote_cart_template() cargue el template.
      */
-    public function quote_cart_template_override( $template ) {
-        if ( ! is_cart() ) return $template;
-        if ( ! $this->cart_is_quote_experience() ) return $template;
+    public function maybe_handle_create_quote(): void {
+        if ( empty( $_POST['mad_create_quote_nonce'] ) ) return;
 
-        $custom = MAD_QUOTES_TEMPLATE_PATH . 'quote-cart.php';
-        return file_exists( $custom ) ? $custom : $template;
+        $back_url = $this->get_quote_cart_url();
+
+        if ( ! $this->current_user_is_quote_role() ) {
+            wp_safe_redirect( $back_url );
+            exit;
+        }
+
+        if ( ! wp_verify_nonce(
+            sanitize_text_field( wp_unslash( $_POST['mad_create_quote_nonce'] ) ),
+            'mad_create_quote'
+        ) ) {
+            wp_safe_redirect( $back_url );
+            exit;
+        }
+
+        if ( ! isset( WC()->cart ) || WC()->cart->is_empty() ) {
+            wp_safe_redirect( $back_url );
+            exit;
+        }
+
+        $email = sanitize_email( wp_unslash( $_POST['olofane_email'] ?? '' ) );
+        $notas = sanitize_textarea_field( wp_unslash( $_POST['olofane_notas'] ?? '' ) );
+
+        if ( ! is_email( $email ) ) {
+            wc_add_notice( __( 'Por favor, introduce un email válido.', 'mad-suite' ), 'error' );
+            wp_safe_redirect( $back_url );
+            exit;
+        }
+
+        $user  = wp_get_current_user();
+        $order = wc_create_order( [ 'customer_id' => $user->ID ] );
+
+        foreach ( WC()->cart->get_cart() as $item ) {
+            $order->add_product( $item['data'], $item['quantity'] );
+        }
+
+        // Pre-poblar con precio regular de cada producto como punto de partida.
+        // El admin puede modificarlos en el meta box antes de enviar el presupuesto.
+        $order_total = 0.0;
+        foreach ( $order->get_items() as $line ) {
+            $quote_price = mad_quotes_get_product_quote_price( $line->get_product_id() );
+            $qty         = $line->get_quantity();
+            $line_total  = $quote_price * $qty;
+            $line->update_meta_data( '_mad_quote_line_price', (string) $quote_price );
+            $line->set_subtotal( $line_total );
+            $line->set_total( $line_total );
+            $line->save();
+            $order_total += $line_total;
+        }
+
+        $order->set_billing_email( $email );
+        $order->set_billing_first_name( $user->first_name ?: $user->display_name );
+        $order->set_billing_last_name( $user->last_name ?: '' );
+        $order->set_payment_method( 'quotes-gateway' );
+        $order->set_cart_tax( 0 );
+        $order->set_shipping_total( 0 );
+        $order->set_shipping_tax( 0 );
+        $order->set_total( $order_total );
+        $order->update_meta_data( '_mad_qwc_quote', '1' );
+        $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
+        $lang = apply_filters( 'wpml_current_language', null );
+        if ( $lang ) {
+            $order->update_meta_data( '_mad_quote_lang', sanitize_key( $lang ) );
+        }
+
+        if ( $notas ) {
+            $order->add_order_note( esc_html( $notas ), true );
+        }
+
+        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+        $order->save();
+
+        WC()->cart->empty_cart();
+
+        // Emails: confirmación al cliente + aviso al admin.
+        if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
+            $order->update_meta_data( '_mad_quote_emails_sent', '1' );
+            $order->save();
+            WC_Emails::instance();
+            wc_get_logger()->info(
+                sprintf( 'mad_quotes_new_request disparado — pedido #%d → destinatario: %s', $order->get_id(), $email ),
+                [ 'source' => 'mad-quotes-email' ]
+            );
+            do_action( 'mad_quotes_new_request', $order->get_id() );
+        }
+
+        wp_safe_redirect( $order->get_checkout_order_received_url() );
+        exit;
     }
 
     /**
-     * Inyecta CSS mínimo en el checkout de presupuesto para ocultar la columna
-     * "Total" y el tfoot de la tabla de revisión — elementos estructurales de WC
-     * clásico para los que no existe un filtro PHP equivalente.
-     * Los precios de línea y el bloque de pago se eliminan vía PHP hooks.
+     * Carga el template de carrito de presupuesto (quote-cart.php) para usuarios con rol
+     * de presupuesto cuando visitan la página del carrito. El template incluye el formulario
+     * con email + notas que crea el pedido sin pasar por el checkout de Blocks.
+     * Los profesionales ven el carrito normal de WooCommerce sin cambios.
+     */
+    public function serve_quote_cart_template(): void {
+        if ( ! is_cart() ) return;
+        if ( ! $this->current_user_is_quote_role() ) return;
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return;
+
+        // Si hay una página configurada con el shortcode, redirigir allí.
+        $settings = mad_quotes_get_settings();
+        $page_id  = absint( $settings['quote_cart_page_id'] ?? 0 );
+        if ( $page_id && 'publish' === get_post_status( $page_id ) ) {
+            wp_safe_redirect( (string) get_permalink( $page_id ) );
+            exit;
+        }
+
+        // Fallback: cargar la plantilla standalone (solo si el carrito no está vacío).
+        if ( WC()->cart->is_empty() ) return;
+        $template = MAD_QUOTES_TEMPLATE_PATH . 'quote-cart.php';
+        if ( file_exists( $template ) ) {
+            include $template;
+            exit;
+        }
+    }
+
+    /**
+     * Redirige al formulario de presupuesto a los usuarios de presupuesto que lleguen
+     * al checkout de WooCommerce por cualquier vía. El flujo order-pay queda intacto.
+     */
+    public function redirect_quote_checkout_to_cart(): void {
+        if ( ! is_checkout() ) return;
+        if ( is_order_received_page() ) return;
+        if ( get_query_var( 'order-pay' ) ) return;
+        if ( ! $this->current_user_is_quote_role() ) return;
+
+        wp_safe_redirect( $this->get_quote_cart_url() );
+        exit;
+    }
+
+    /** URL de la página de solicitud de presupuesto, o carrito de WC como fallback. */
+    private function get_quote_cart_url(): string {
+        $settings = mad_quotes_get_settings();
+        $page_id  = absint( $settings['quote_cart_page_id'] ?? 0 );
+        if ( $page_id && 'publish' === get_post_status( $page_id ) ) {
+            return (string) get_permalink( $page_id );
+        }
+        return wc_get_cart_url();
+    }
+
+    /**
+     * Oculta el precio HTML para todos los usuarios con rol de presupuesto,
+     * independientemente de la configuración por producto del plugin QWC.
+     * Se ejecuta en prioridad 50: después de que QWC oculta precios (10)
+     * y antes de que maybe_restore_price los restaure para profesionales (999).
+     */
+    public function hide_price_for_quote_role( $price, $product ) {
+        if ( $this->current_user_is_quote_role() ) {
+            return '';
+        }
+        return $price;
+    }
+
+    /**
+     * Inyecta quotes-gateway en los gateways disponibles para usuarios de presupuesto
+     * antes de que QWC pueda haberlo eliminado (prioridad 5).
+     * Garantiza que el gateway esté disponible aunque el carrito no tenga productos
+     * marcados individualmente como "quote" en la configuración de QWC.
+     */
+    public function inject_quotes_gateway_for_role( $gateways ) {
+        if ( ! $this->current_user_is_quote_role() ) return $gateways;
+        if ( isset( $gateways['quotes-gateway'] ) ) return $gateways;
+
+        $all = WC()->payment_gateways()->payment_gateways();
+        if ( isset( $all['quotes-gateway'] ) ) {
+            $gateways['quotes-gateway'] = $all['quotes-gateway'];
+        }
+        return $gateways;
+    }
+
+    /** @var bool Evita doble inyección de CSS si wp_head y el hook de revisión coinciden. */
+    private $checkout_css_injected = false;
+
+    /**
+     * Inyecta CSS en el checkout de presupuesto para ocultar precios y totales.
+     * Se dispara tanto en wp_head (carga rápida) como en
+     * woocommerce_checkout_before_order_review_heading (carrito garantizado disponible).
+     * El flag $checkout_css_injected evita salida duplicada.
      */
     public function inject_checkout_css() {
         if ( ! is_checkout() || is_order_received_page() ) return;
+        if ( $this->checkout_css_injected ) return;
         if ( ! $this->cart_is_quote_experience() ) return;
 
-        echo '<style>
-            .woocommerce-checkout-review-order-table tfoot,
-            .woocommerce-checkout-review-order-table .product-total { display: none !important; }
-        </style>';
+        $this->checkout_css_injected = true;
+        $this->output_checkout_hide_css();
     }
 
     /** Elimina el precio unitario de los ítems en carrito/checkout para usuarios de presupuesto. */
@@ -408,10 +843,155 @@ return new class( $core ) implements MAD_Suite_Module {
         return $subtotal;
     }
 
+    /**
+     * Oculta vía PHP el subtotal del carrito en la tabla de revisión del checkout clásico.
+     * Firma compatible con woocommerce_cart_subtotal ($subtotal, $compound, $cart).
+     */
+    public function hide_cart_totals_html( $subtotal, $compound = false, $cart = null ) {
+        if ( $this->cart_is_quote_experience() ) return '';
+        return $subtotal;
+    }
+
+    /**
+     * Oculta vía PHP el total del pedido en la tabla de revisión del checkout clásico.
+     * Firma compatible con woocommerce_cart_totals_order_total_html ($value).
+     */
+    public function hide_cart_totals_html_single( $value ) {
+        if ( $this->cart_is_quote_experience() ) return '';
+        return $value;
+    }
+
+    /** Elimina los botones "Ver carrito" y "Finalizar compra" del mini-carrito para usuarios de presupuesto. */
+    public function hide_mini_cart_buttons(): void {
+        if ( ! $this->current_user_is_quote_role() ) return;
+
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_button_view_cart', 10 );
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_proceed_to_checkout', 20 );
+
+        // Usa los mismos campos configurables que los usuarios normales,
+        // con fallbacks apropiados para la experiencia de presupuesto.
+        $settings = mad_quotes_get_settings();
+
+        $view_text = trim( $this->resolve_lang_text( $settings['mini_cart_view_cart_text'] ?? [] ) );
+        if ( $view_text === '' ) {
+            $view_text = __( 'Ver lista', 'mad-suite' );
+        }
+
+        $checkout_text = trim( $this->resolve_lang_text( $settings['mini_cart_checkout_text'] ?? [] ) );
+        if ( $checkout_text === '' ) {
+            $checkout_text = __( 'Solicitar presupuesto', 'mad-suite' );
+        }
+
+        $quote_url = $this->get_quote_cart_url();
+        printf(
+            '<a href="%s" class="button wc-forward">%s</a>',
+            esc_url( $quote_url ),
+            esc_html( $view_text )
+        );
+        printf(
+            '<a href="%s" class="button checkout wc-forward">%s</a>',
+            esc_url( $quote_url ),
+            esc_html( $checkout_text )
+        );
+    }
+
+    /** Elimina la línea de subtotal del mini-carrito para usuarios de presupuesto. */
+    public function hide_mini_cart_total(): void {
+        if ( ! $this->current_user_is_quote_role() ) return;
+        remove_action( 'woocommerce_widget_shopping_cart_total', 'woocommerce_widget_shopping_cart_subtotal', 10 );
+    }
+
+    /** Reemplaza los botones estándar del mini-carrito con los textos configurados (usuarios normales). */
+    public function override_mini_cart_buttons(): void {
+        if ( $this->current_user_is_quote_role() ) return; // quote users handled by hide_mini_cart_buttons
+
+        $settings       = mad_quotes_get_settings();
+        $view_cart_text = trim( $this->resolve_lang_text( $settings['mini_cart_view_cart_text'] ?? [] ) );
+        $checkout_text  = trim( $this->resolve_lang_text( $settings['mini_cart_checkout_text'] ?? [] ) );
+
+        if ( $view_cart_text === '' && $checkout_text === '' ) return; // nothing to override
+
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_button_view_cart', 10 );
+        remove_action( 'woocommerce_widget_shopping_cart_buttons', 'woocommerce_widget_shopping_cart_proceed_to_checkout', 20 );
+
+        if ( $view_cart_text === '' ) {
+            $view_cart_text = __( 'Ver carrito', 'woocommerce' );
+        }
+        if ( $checkout_text === '' ) {
+            $checkout_text = __( 'Finalizar compra', 'woocommerce' );
+        }
+
+        printf(
+            '<a href="%s" class="button wc-forward">%s</a>',
+            esc_url( wc_get_cart_url() ),
+            esc_html( $view_cart_text )
+        );
+        printf(
+            '<a href="%s" class="button checkout wc-forward">%s</a>',
+            esc_url( wc_get_checkout_url() ),
+            esc_html( $checkout_text )
+        );
+    }
+
+    /** Resolves a per-language text array to the current WPML language string. */
+    private function resolve_lang_text( $val ): string {
+        if ( is_string( $val ) ) return $val;
+        if ( empty( $val ) ) return '';
+
+        $current_lang = apply_filters( 'wpml_current_language', null );
+        if ( $current_lang && isset( $val[ $current_lang ] ) && $val[ $current_lang ] !== '' ) {
+            return $val[ $current_lang ];
+        }
+        $default_lang = apply_filters( 'wpml_default_language', null );
+        if ( $default_lang && isset( $val[ $default_lang ] ) && $val[ $default_lang ] !== '' ) {
+            return $val[ $default_lang ];
+        }
+        foreach ( $val as $entry ) {
+            if ( $entry !== '' ) return $entry;
+        }
+        return '';
+    }
+
     /** Elimina el bloque de métodos de pago del checkout para usuarios de presupuesto. */
     public function hide_checkout_payment( $show ) {
         if ( $this->cart_is_quote_experience() ) return false;
         return $show;
+    }
+
+    /**
+     * Inyección de CSS de seguridad DESPUÉS de la tabla de revisión del pedido.
+     * Dispara con el carrito definitivamente renderizado; no usa cart_is_quote_experience()
+     * para evitar problemas de timing. Solo comprueba el rol y excluye order-pay.
+     */
+    public function inject_checkout_css_after_review() {
+        if ( is_order_received_page() ) return;
+        if ( get_query_var( 'order-pay' ) ) return;
+        if ( ! $this->current_user_is_quote_role() ) return;
+        if ( $this->checkout_css_injected ) return;
+
+        $this->checkout_css_injected = true;
+        $this->output_checkout_hide_css();
+    }
+
+    /** Emite el bloque <style> que oculta precios en el checkout. Reutilizado por ambos métodos. */
+    private function output_checkout_hide_css() {
+        echo '<style>
+            /* Checkout clásico: columna "Total/Subtotal" en cabecera, cuerpo y pie */
+            .woocommerce-checkout-review-order-table .product-total,
+            .woocommerce-checkout-review-order-table tfoot,
+            .woocommerce-checkout-review-order-table tfoot tr,
+            .woocommerce-checkout-review-order-table .cart-subtotal,
+            .woocommerce-checkout-review-order-table .order-total { display: none !important; }
+            /* Checkout en bloques (WooCommerce Blocks): precios */
+            .wc-block-components-order-summary-item__individual-prices,
+            .wc-block-components-order-summary-item__total-price,
+            .wc-block-components-totals-item,
+            .wc-block-components-totals-footer-item,
+            .wc-block-order-summary-item__price { display: none !important; }
+            /* Checkout Blocks: ocultar sección completa de dirección de facturación */
+            .wc-block-checkout__billing-fields,
+            .wc-block-checkout__shipping-fields { display: none !important; }
+        </style>';
     }
 
     /* ================================================================ */
@@ -419,22 +999,27 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     /**
-     * En experiencia de presupuesto solo pedimos nombre, apellido y email.
+     * Simplifica el checkout a nombre, apellido, email y notas.
+     * Usa current_user_is_quote_role() (sin verificar carrito) para mayor robustez:
+     * evita falsos negativos de cart_is_quote_experience() por timing en AJAX o sesión.
+     * - Excluye la página order-pay: ahí el cliente completa todos sus datos antes de pagar.
+     * - Excluye la página de confirmación (order-received).
      */
     public function simplify_quote_checkout_fields( $fields ) {
-        if ( ! $this->cart_is_quote_experience() ) return $fields;
+        if ( is_order_received_page() )       return $fields;
+        if ( get_query_var( 'order-pay' ) )   return $fields;
+        if ( ! $this->current_user_is_quote_role() ) return $fields;
 
-        $keep = [ 'billing_first_name', 'billing_last_name', 'billing_email' ];
-
+        // Solo email — sin dirección de facturación ni nombre para la solicitud de presupuesto
         foreach ( array_keys( $fields['billing'] ?? [] ) as $key ) {
-            if ( ! in_array( $key, $keep, true ) ) {
+            if ( $key !== 'billing_email' ) {
                 unset( $fields['billing'][ $key ] );
             }
         }
 
         $fields['shipping'] = [];
 
-        // Mantener solo las notas del pedido (útiles para que el cliente explique su solicitud)
+        // Mantener el campo de notas: el cliente puede explicar su solicitud
         if ( isset( $fields['order'] ) ) {
             foreach ( array_keys( $fields['order'] ) as $key ) {
                 if ( $key !== 'order_comments' ) {
@@ -446,9 +1031,78 @@ return new class( $core ) implements MAD_Suite_Module {
         return $fields;
     }
 
+    /**
+     * Removes the `required` flag from all billing fields except email for quote-role users.
+     * Necessary for WooCommerce Blocks checkout: `woocommerce_checkout_fields` is ignored by
+     * Blocks, but the REST API validation honours `required` set here.
+     */
+    public function unrequire_billing_address_for_quotes( array $fields ): array {
+        if ( is_order_received_page() )              return $fields;
+        if ( get_query_var( 'order-pay' ) )          return $fields;
+        if ( ! $this->current_user_is_quote_role() ) return $fields;
+
+        foreach ( $fields as $key => &$field ) {
+            if ( $key !== 'billing_email' ) {
+                $field['required'] = false;
+            }
+        }
+        unset( $field );
+
+        return $fields;
+    }
+
+    /**
+     * Removes the billing and shipping address blocks entirely from the rendered
+     * WooCommerce Blocks checkout for quote-role users.
+     * CSS alone is not enough: React validates client-side any field present in the DOM.
+     * With the block removed there is no DOM element → no React validation → no errors.
+     */
+    public function remove_billing_block_for_quote_role( string $content, array $block ): string {
+        if ( ! is_checkout() || is_order_received_page() || get_query_var( 'order-pay' ) ) {
+            return $content;
+        }
+        if ( ! $this->current_user_is_quote_role() ) {
+            return $content;
+        }
+        $hidden = [
+            'woocommerce/checkout-billing-address-block',
+            'woocommerce/checkout-shipping-address-block',
+        ];
+        return in_array( $block['blockName'], $hidden, true ) ? '' : $content;
+    }
+
+    /**
+     * Fills placeholder billing data for quote-role users after the Store API updates
+     * the order from the request. This runs before server-side validation, ensuring
+     * WooCommerce does not reject the order for missing address fields.
+     *
+     * @param \WC_Order                $order
+     * @param \WP_REST_Request         $request
+     */
+    public function fill_quote_billing_defaults( $order, $request ): void {
+        if ( ! $this->current_user_is_quote_role() ) return;
+
+        if ( ! $order->get_billing_first_name() ) {
+            $order->set_billing_first_name( 'Presupuesto' );
+        }
+        if ( ! $order->get_billing_last_name() ) {
+            $order->set_billing_last_name( '-' );
+        }
+        if ( ! $order->get_billing_address_1() ) {
+            $order->set_billing_address_1( '-' );
+        }
+        if ( ! $order->get_billing_city() ) {
+            $order->set_billing_city( '-' );
+        }
+        if ( ! $order->get_billing_postcode() ) {
+            $order->set_billing_postcode( '00000' );
+        }
+    }
+
     public function no_shipping_for_quotes( $needs_shipping ) {
-        if ( $this->cart_is_quote_experience() ) return false;
-        return $needs_shipping;
+        if ( get_query_var( 'order-pay' ) )   return $needs_shipping;
+        if ( ! $this->current_user_is_quote_role() ) return $needs_shipping;
+        return false;
     }
 
     /* ================================================================ */
@@ -458,36 +1112,47 @@ return new class( $core ) implements MAD_Suite_Module {
     /**
      * Fuerza el estado "Presupuesto pendiente" después de que el gateway haya procesado el pago.
      * Se ejecuta con prioridad 999 en woocommerce_checkout_order_processed para sobreescribir
-     * cualquier cambio de estado que el gateway quotes-wc haga en process_payment().
+     * cualquier cambio de estado que el gateway quotes-gateway haga en process_payment().
      */
     public function finalize_quote_order_status( $order_id ) {
         $order = wc_get_order( $order_id );
         if ( ! $order ) return;
-        if ( $order->get_payment_method() !== 'quotes-wc'
+        if ( $order->get_payment_method() !== 'quotes-gateway'
             && '1' !== $order->get_meta( '_mad_qwc_quote' )
         ) {
             return;
         }
-        if ( $order->get_status() === 'quote-pending' ) return;
-        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
-        $order->save();
+
+        $already_pending = $order->get_status() === 'quote-pending';
+
+        if ( ! $already_pending ) {
+            $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+            $order->save();
+        }
+
+        // Fire confirmation + admin notification only once (guard via order meta)
+        if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
+            $order->update_meta_data( '_mad_quote_emails_sent', '1' );
+            $order->save();
+            WC_Emails::instance();
+            do_action( 'mad_quotes_new_request', $order_id );
+        }
     }
 
     /**
      * Impide que WooCommerce reduzca el stock para pedidos de presupuesto.
      */
     public function prevent_stock_reduction( $can_reduce, $order ) {
-        // Comprobación primaria: payment method disponible sin depender del cache de metas.
-        if ( $order->get_payment_method() === 'quotes-wc' ) {
-            return false;
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $can_reduce;
+
+        // Solo se reduce stock cuando el pago está confirmado.
+        // on-hold (transferencia pendiente de confirmar) no reduce stock.
+        $reduce_on = [ 'processing', 'completed' ];
+        if ( in_array( $order->get_status(), $reduce_on, true ) ) {
+            return $can_reduce;
         }
-        // Comprobación secundaria: estado o meta explícita (pedidos ya procesados).
-        if ( in_array( $order->get_status(), [ 'quote-pending', 'quote-sent' ], true )
-            || '1' === $order->get_meta( '_mad_qwc_quote' )
-        ) {
-            return false;
-        }
-        return $can_reduce;
+
+        return false;
     }
 
     /**
@@ -500,19 +1165,45 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Para usuarios con rol de presupuesto: carrito normal.
-     * Para el resto: restaura los gateways originales (WC estándar) y quita quotes-wc.
+     * Controla qué gateways de pago se muestran según el contexto.
      *
-     * El plugin "Quotes for WooCommerce" elimina todos los gateways normales cuando hay
-     * productos de presupuesto en el carrito. Aquí revertimos eso para roles no habilitados.
+     * Contextos detectados:
+     * – Página order-pay: get_query_var('order-pay') tiene el ID del pedido.
+     * – AJAX de pago desde order-pay: wp_doing_ajax() true y carrito vacío
+     *   (el order-pay no añade ítems al carrito de sesión).
+     * – Checkout normal con rol de presupuesto: resto de casos.
+     *
+     * Nota clave: QWC elimina 'quotes-gateway' de $gateways en prioridad 10
+     * cuando cart_contains_quotable() es false (productos sin qwc_enable_quotes='on').
+     * Por eso recuperamos el gateway directamente de payment_gateways() en lugar
+     * de confiar en que siga presente en $gateways al llegar a prioridad 999.
      */
     public function filter_quote_gateway( $gateways ) {
-        if ( $this->current_user_is_quote_role() ) {
-            return $gateways; // Experiencia de presupuesto: dejar que el plugin original gestione
+        $is_order_pay = (bool) get_query_var( 'order-pay' )
+            || ( wp_doing_ajax() && isset( WC()->cart ) && WC()->cart->is_empty() );
+
+        if ( $is_order_pay ) {
+            $restored = ! empty( $this->original_gateways ) ? $this->original_gateways : $gateways;
+            unset( $restored['quotes-gateway'] );
+            return $restored;
         }
-        // Experiencia normal: restaurar gateways originales y eliminar quotes-wc
+
+        if ( $this->current_user_is_quote_role() ) {
+            // QWC puede haber eliminado quotes-gateway de $gateways (prioridad 10).
+            // Lo buscamos en todos los gateways registrados para garantizar que esté disponible.
+            if ( isset( $gateways['quotes-gateway'] ) ) {
+                return [ 'quotes-gateway' => $gateways['quotes-gateway'] ];
+            }
+            $all = WC()->payment_gateways()->payment_gateways();
+            if ( isset( $all['quotes-gateway'] ) ) {
+                return [ 'quotes-gateway' => $all['quotes-gateway'] ];
+            }
+            return $gateways; // Fallback: quotes-gateway no registrado en absoluto
+        }
+
+        // Profesionales: gateways reales sin quotes-gateway
         $restored = ! empty( $this->original_gateways ) ? $this->original_gateways : $gateways;
-        unset( $restored['quotes-wc'] );
+        unset( $restored['quotes-gateway'] );
         return $restored;
     }
 
@@ -522,9 +1213,18 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function enforce_quote_status( $order_id, $from_status, $to_status ) {
         if ( self::$enforcing_status ) return;
-        // Estas transiciones están permitidas
-        $allowed = [ 'quote-pending', 'quote-sent', 'cancelled', 'completed', 'refunded', 'failed', 'trash' ];
-        if ( in_array( $to_status, $allowed, true ) ) return;
+
+        // Siempre permitidos.
+        $always_allowed = [ 'quote-pending', 'quote-sent', 'cancelled', 'completed', 'refunded', 'failed', 'trash' ];
+        if ( in_array( $to_status, $always_allowed, true ) ) return;
+
+        // on-hold / processing están permitidos solo si el cliente viene del flujo de pago
+        // (transición desde quote-sent o quote-complete). En cualquier otro caso se bloquean.
+        $payment_statuses = [ 'on-hold', 'processing' ];
+        $payment_origins  = [ 'quote-sent', 'quote-complete', 'on-hold' ];
+        if ( in_array( $to_status, $payment_statuses, true ) && in_array( $from_status, $payment_origins, true ) ) {
+            return;
+        }
 
         $order = wc_get_order( $order_id );
         if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
@@ -536,19 +1236,63 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
-     * Red de seguridad: asegura el estado correcto en la página de confirmación,
-     * después de que todo el procesamiento de pago ha terminado.
+     * Red de seguridad en la página de confirmación: solo fuerza quote-pending
+     * si el pedido no ha pasado por el flujo de pago real (on-hold, processing…).
      */
     public function enforce_quote_status_thankyou( $order_id ) {
         if ( self::$enforcing_status ) return;
         $order = wc_get_order( $order_id );
         if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
-        if ( $order->get_status() === 'quote-pending' ) return;
+
+        // Si el pedido ya está en un estado de pago legítimo, no tocarlo.
+        $paid_statuses = [ 'on-hold', 'processing', 'completed', 'quote-pending', 'cancelled', 'refunded', 'failed' ];
+        if ( in_array( $order->get_status(), $paid_statuses, true ) ) return;
 
         self::$enforcing_status = true;
         $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
         $order->save();
         self::$enforcing_status = false;
+    }
+
+    /**
+     * Inyecta CSS en la página de confirmación / vista de pedido del cliente
+     * para ocultar precios mientras el presupuesto aún no ha sido enviado.
+     * El admin ve los precios correctamente desde el panel de administración.
+     */
+    public function hide_prices_on_pending_quote_page( int $order_id ): void {
+        if ( is_admin() ) return;
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( $order->get_status() !== 'quote-pending' ) return;
+
+        echo '<style>
+            /* Ocultar columna de precio en la tabla de ítems del pedido */
+            .woocommerce-order .product-total,
+            .woocommerce-table--order-details .product-total { display:none!important; }
+            /* Ocultar el pie de totales (subtotal, total, método de pago) */
+            .woocommerce-order .woocommerce-table--order-details tfoot,
+            .woocommerce-order .woocommerce-order-overview__total { display:none!important; }
+        </style>';
+    }
+
+    /**
+     * Elimina las filas financieras (subtotal, total) del resumen de pedido
+     * en las vistas del cliente para presupuestos pendientes de confirmación.
+     *
+     * @param  array    $totals  Filas de totales generadas por WooCommerce.
+     * @param  WC_Order $order
+     * @return array
+     */
+    public function hide_totals_on_pending_quote( array $totals, WC_Order $order ): array {
+        if ( is_admin() ) return $totals;
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $totals;
+        if ( $order->get_status() !== 'quote-pending' ) return $totals;
+
+        $financial_keys = [ 'cart_subtotal', 'order_total', 'cart_tax', 'shipping', 'shipping_tax', 'fee', 'discount' ];
+        foreach ( $financial_keys as $key ) {
+            unset( $totals[ $key ] );
+        }
+        return $totals;
     }
 
     /**
@@ -563,7 +1307,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $status = $order->get_status();
         if ( in_array( $status, [ 'quote-pending', 'quote-sent' ], true )
             || '1' === $order->get_meta( '_mad_qwc_quote' )
-            || $order->get_payment_method() === 'quotes-wc'
+            || $order->get_payment_method() === 'quotes-gateway'
         ) {
             return false;
         }
@@ -574,7 +1318,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $order = wc_get_order( $order_id );
         if ( ! $order ) return;
 
-        if ( $order->get_payment_method() !== 'quotes-wc' ) return;
+        if ( $order->get_payment_method() !== 'quotes-gateway' ) return;
 
         // Marcar como pedido de presupuesto MAD
         $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
@@ -617,7 +1361,7 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function add_order_buttons( $order ) {
-        if ( $order->get_payment_method() !== 'quotes-wc' && ! $order->get_meta( '_mad_qwc_quote' ) ) {
+        if ( $order->get_payment_method() !== 'quotes-gateway' && ! $order->get_meta( '_mad_qwc_quote' ) ) {
             return;
         }
 
@@ -694,18 +1438,21 @@ return new class( $core ) implements MAD_Suite_Module {
         $order_id = $this->get_current_order_id();
         if ( ! $order_id ) return;
 
-        wp_register_script( 'mad-quotes-admin', MAD_QUOTES_URL . 'assets/js/admin.js', [ 'jquery' ], '2.0', false );
+        wp_register_script( 'mad-quotes-admin', MAD_QUOTES_URL . 'assets/js/admin.js', [ 'jquery' ], '2.1', true );
         wp_localize_script( 'mad-quotes-admin', 'mad_quotes_admin_params', [
             'ajax_url'            => admin_url( 'admin-ajax.php' ),
             'order_id'            => $order_id,
             'nonce_update_status' => wp_create_nonce( 'mad-quotes-update-status' ),
             'nonce_send_quote'    => wp_create_nonce( 'mad-quotes-send-quote' ),
+            'nonce_proof'         => wp_create_nonce( 'mad_admin_proof_' . $order_id ),
             'i18n_sending'        => __( 'Enviando…', 'mad-suite' ),
             'i18n_updating'       => __( 'Actualizando…', 'mad-suite' ),
             'i18n_sent'           => __( '✔ Presupuesto enviado', 'mad-suite' ),
             'i18n_resend'         => __( 'Reenviar presupuesto', 'mad-suite' ),
             'i18n_complete'       => __( 'Presupuesto completo', 'mad-suite' ),
             'i18n_error'          => __( 'Error. Inténtalo de nuevo.', 'mad-suite' ),
+            'i18n_uploading'      => __( 'Verificando…', 'mad-suite' ),
+            'i18n_file_error'     => __( 'Tipo de archivo no permitido.', 'mad-suite' ),
         ] );
         wp_enqueue_script( 'mad-quotes-admin' );
     }
@@ -713,6 +1460,459 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
     /*  AJAX handlers                                                     */
     /* ================================================================ */
+
+    /* ================================================================ */
+    /*  Comprobante de transferencia bancaria                             */
+    /* ================================================================ */
+
+    /**
+     * Muestra en el admin el comprobante subido y el resultado del análisis IA
+     * para pedidos de presupuesto en estado on-hold.
+     */
+    public function register_payment_proof_meta_box(): void {
+        $screen = function_exists( 'wc_get_page_screen_id' )
+            ? wc_get_page_screen_id( 'shop-order' )
+            : 'shop_order';
+
+        add_meta_box(
+            'mad-payment-proof',
+            __( 'Comprobante de transferencia', 'mad-suite' ),
+            [ $this, 'render_payment_proof_admin' ],
+            $screen,
+            'side',
+            'default'
+        );
+    }
+
+    /** Callback del meta box — acepta WP_Post o WC_Order según HPOS. */
+    public function render_payment_proof_admin( $post_or_order ): void {
+        $order = $post_or_order instanceof WC_Order
+            ? $post_or_order
+            : wc_get_order( $post_or_order->ID );
+
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+
+        $this->render_proof_block( $order );
+    }
+
+    private function render_proof_block( WC_Order $order ): void {
+        $proof_url = $order->get_meta( '_mad_payment_proof_url' );
+        $verified  = $order->get_meta( '_mad_payment_proof_verified' );
+        $ai_json   = $order->get_meta( '_mad_payment_proof_ai_result' );
+        $ai        = $ai_json ? json_decode( (string) $ai_json, true ) : null;
+        $is_pdf    = $proof_url && 'pdf' === strtolower( pathinfo( $proof_url, PATHINFO_EXTENSION ) );
+        $nonce     = wp_create_nonce( 'mad_admin_proof_' . $order->get_id() );
+        ?>
+        <?php if ( $proof_url ) : ?>
+            <div id="mad-proof-preview" style="margin-bottom:8px;">
+                <?php if ( $is_pdf ) : ?>
+                    <embed src="<?php echo esc_url( $proof_url ); ?>" type="application/pdf"
+                           width="100%" height="260" style="display:block;border:1px solid #ddd;margin-bottom:4px;">
+                <?php else : ?>
+                    <img src="<?php echo esc_url( $proof_url ); ?>"
+                         alt="<?php esc_attr_e( 'Comprobante', 'mad-suite' ); ?>"
+                         style="max-width:100%;max-height:260px;border:1px solid #ddd;display:block;margin-bottom:4px;">
+                <?php endif; ?>
+                <a href="<?php echo esc_url( $proof_url ); ?>" target="_blank" style="font-size:12px;">
+                    <?php esc_html_e( '↗ Abrir en pestaña nueva', 'mad-suite' ); ?>
+                </a>
+                <?php if ( $verified ) : ?>
+                    <span style="color:green;margin-left:10px;font-size:12px;">✔ <?php esc_html_e( 'Verificado por IA', 'mad-suite' ); ?></span>
+                <?php endif; ?>
+            </div>
+
+            <?php if ( is_array( $ai ) ) : ?>
+            <ul style="margin:0 0 8px;padding-left:16px;font-size:12px;color:#444;">
+                <?php if ( isset( $ai['detected_amount'] ) && $ai['detected_amount'] !== null ) : ?>
+                    <li><?php esc_html_e( 'Importe detectado:', 'mad-suite' ); ?> <strong><?php echo wp_kses_post( wc_price( (float) $ai['detected_amount'] ) ); ?></strong></li>
+                <?php endif; ?>
+                <?php if ( ! empty( $ai['bank'] ) ) : ?>
+                    <li><?php esc_html_e( 'Banco:', 'mad-suite' ); ?> <?php echo esc_html( $ai['bank'] ); ?></li>
+                <?php endif; ?>
+                <?php if ( ! empty( $ai['date'] ) ) : ?>
+                    <li><?php esc_html_e( 'Fecha:', 'mad-suite' ); ?> <?php echo esc_html( $ai['date'] ); ?></li>
+                <?php endif; ?>
+                <?php if ( isset( $ai['legitimate'] ) ) :
+                    $leg_color = $ai['legitimate'] ? 'green' : 'red';
+                    $leg_label = $ai['legitimate'] ? __( 'Parece legítimo', 'mad-suite' ) : __( 'Posiblemente falso', 'mad-suite' );
+                ?>
+                    <li style="color:<?php echo esc_attr( $leg_color ); ?>;"><?php echo esc_html( $leg_label ); ?></li>
+                <?php endif; ?>
+            </ul>
+            <?php endif; ?>
+
+            <button type="button" id="mad-proof-replace-btn" class="button button-small" style="margin-bottom:6px;">
+                <?php esc_html_e( 'Reemplazar comprobante', 'mad-suite' ); ?>
+            </button>
+
+        <?php else : ?>
+            <p style="margin:0 0 8px;color:#888;"><?php esc_html_e( 'Sin comprobante aún.', 'mad-suite' ); ?></p>
+        <?php endif; ?>
+
+        <div id="mad-proof-admin-upload" style="<?php echo $proof_url ? 'display:none;' : ''; ?>">
+            <input type="file" id="mad-proof-admin-file"
+                   accept="image/jpeg,image/png,image/webp,image/gif,application/pdf"
+                   style="display:block;margin-bottom:6px;">
+            <button type="button" id="mad-proof-admin-submit" class="button button-primary button-small">
+                <?php $proof_url ? esc_html_e( 'Subir nuevo comprobante', 'mad-suite' ) : esc_html_e( 'Subir comprobante', 'mad-suite' ); ?>
+            </button>
+            <span id="mad-proof-admin-msg" style="margin-left:8px;font-size:12px;"></span>
+            <input type="hidden" id="mad-proof-admin-nonce"    value="<?php echo esc_attr( $nonce ); ?>">
+            <input type="hidden" id="mad-proof-admin-order-id" value="<?php echo esc_attr( (string) $order->get_id() ); ?>">
+        </div>
+        <?php
+    }
+
+    /**
+     * AJAX: el admin sube o reemplaza el comprobante desde el backoffice.
+     */
+    public function ajax_admin_upload_payment_proof(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Permiso denegado.', 'mad-suite' ) ] );
+        }
+
+        $order_id = absint( $_POST['order_id'] ?? 0 );
+        $nonce    = sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) );
+
+        if ( ! wp_verify_nonce( $nonce, 'mad_admin_proof_' . $order_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Pedido no válido.', 'mad-suite' ) ] );
+        }
+
+        if ( empty( $_FILES['proof_file'] ) || UPLOAD_ERR_OK !== $_FILES['proof_file']['error'] ) {
+            wp_send_json_error( [ 'message' => __( 'Error al subir el archivo.', 'mad-suite' ) ] );
+        }
+
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+        $file     = $_FILES['proof_file'];
+        $filetype = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
+        $mime     = $filetype['type'] ?? '';
+        $allowed  = [ 'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf' ];
+
+        if ( ! in_array( $mime, $allowed, true ) ) {
+            wp_send_json_error( [ 'message' => __( 'Tipo de archivo no permitido.', 'mad-suite' ) ] );
+        }
+
+        if ( $file['size'] > 10 * 1024 * 1024 ) {
+            wp_send_json_error( [ 'message' => __( 'El archivo no puede superar 10 MB.', 'mad-suite' ) ] );
+        }
+
+        $upload_dir = wp_upload_dir();
+        $sub_dir    = '/mad-payment-proofs/' . gmdate( 'Y/m' );
+        $target_dir = $upload_dir['basedir'] . $sub_dir;
+        wp_mkdir_p( $target_dir );
+
+        $ext      = strtolower( pathinfo( sanitize_file_name( $file['name'] ), PATHINFO_EXTENSION ) );
+        $filename = 'proof-' . $order_id . '-' . time() . '.' . $ext;
+        $target   = $target_dir . '/' . $filename;
+
+        if ( ! move_uploaded_file( $file['tmp_name'], $target ) ) {
+            wp_send_json_error( [ 'message' => __( 'No se pudo guardar el archivo.', 'mad-suite' ) ] );
+        }
+
+        $file_url = $upload_dir['baseurl'] . $sub_dir . '/' . $filename;
+        $order->update_meta_data( '_mad_payment_proof_path', $target );
+        $order->update_meta_data( '_mad_payment_proof_url', $file_url );
+        $order->update_meta_data( '_mad_payment_proof_verified', '' );
+        $order->update_meta_data( '_mad_payment_proof_ai_result', '' );
+        $order->save();
+
+        $result = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+
+        if ( is_wp_error( $result ) ) {
+            wp_send_json_success( [
+                'message'   => __( 'Comprobante guardado. No se pudo verificar con IA: ', 'mad-suite' ) . $result->get_error_message(),
+                'proof_url' => $file_url,
+                'is_pdf'    => 'application/pdf' === $mime,
+            ] );
+        }
+
+        $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
+
+        if ( $result['amount_matches'] ) {
+            $order->update_meta_data( '_mad_payment_proof_verified', '1' );
+            $order->save();
+            if ( $order->get_status() === 'on-hold' ) {
+                $order->update_status( 'processing', __( 'Comprobante verificado por admin + IA. Importe coincide.', 'mad-suite' ) );
+            } else {
+                $order->add_order_note( __( 'Admin subió nuevo comprobante. Verificado por IA — importe coincide.', 'mad-suite' ) );
+            }
+            $message = __( '✔ Verificado. El importe coincide.', 'mad-suite' );
+        } else {
+            $order->save();
+            $detected = isset( $result['detected_amount'] ) && $result['detected_amount'] !== null
+                ? wc_price( (float) $result['detected_amount'] )
+                : __( 'no detectado', 'mad-suite' );
+            $order->add_order_note( sprintf(
+                __( 'Admin subió comprobante. Importe detectado: %s — Esperado: %s.', 'mad-suite' ),
+                wp_strip_all_tags( $detected ),
+                wc_price( (float) $order->get_total() )
+            ) );
+            $message = sprintf(
+                __( 'Guardado. Importe detectado: %s (esperado: %s).', 'mad-suite' ),
+                wp_strip_all_tags( $detected ),
+                wp_strip_all_tags( wc_price( (float) $order->get_total() ) )
+            );
+        }
+
+        wp_send_json_success( [
+            'message'   => $message,
+            'proof_url' => $file_url,
+            'is_pdf'    => 'application/pdf' === $mime,
+            'verified'  => $result['amount_matches'],
+        ] );
+    }
+
+    /**
+     * Encola el JS de subida de comprobante en la página de detalle de pedido
+     * del cliente (Mi Cuenta → Pedidos → Ver pedido).
+     */
+    public function enqueue_proof_scripts(): void {
+        if ( ! is_wc_endpoint_url( 'view-order' ) ) return;
+
+        $order_id = absint( get_query_var( 'view-order' ) );
+        if ( ! $order_id ) return;
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( $order->get_meta( '_mad_payment_proof_url' ) ) return;
+
+        wp_enqueue_script(
+            'mad-payment-proof',
+            MAD_QUOTES_URL . 'assets/js/payment-proof.js',
+            [ 'jquery' ],
+            '1.0',
+            true
+        );
+        wp_localize_script( 'mad-payment-proof', 'mad_proof_params', [
+            'ajax_url' => admin_url( 'admin-ajax.php' ),
+            'nonce'    => wp_create_nonce( 'mad_payment_proof_' . $order_id ),
+            'order_id' => $order_id,
+            'i18n'     => [
+                'uploading'    => __( 'Verificando comprobante…', 'mad-suite' ),
+                'success'      => __( 'Comprobante verificado. Tu pedido está siendo procesado.', 'mad-suite' ),
+                'amount_error' => __( 'El importe del comprobante no coincide con el total del pedido.', 'mad-suite' ),
+                'error'        => __( 'Error al procesar el comprobante. Inténtalo de nuevo.', 'mad-suite' ),
+                'file_error'   => __( 'Tipo de archivo no permitido. Sube una imagen o PDF.', 'mad-suite' ),
+            ],
+        ] );
+    }
+
+    /**
+     * Inyecta el formulario de subida de comprobante en la página de detalle
+     * de pedido del cliente.
+     */
+    public function inject_payment_proof_upload( int $order_id ): void {
+        $order = wc_get_order( $order_id );
+        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+
+        $existing_proof = $order->get_meta( '_mad_payment_proof_url' );
+        $template = MAD_QUOTES_TEMPLATE_PATH . 'payment-proof-upload.php';
+        if ( file_exists( $template ) ) {
+            include $template;
+        }
+    }
+
+    /**
+     * AJAX: recibe el archivo, lo guarda y lo verifica con la IA de Claude.
+     */
+    public function ajax_upload_payment_proof(): void {
+        $order_id = absint( $_POST['order_id'] ?? 0 );
+        $nonce    = sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) );
+
+        if ( ! wp_verify_nonce( $nonce, 'mad_payment_proof_' . $order_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
+        }
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Pedido no válido.', 'mad-suite' ) ] );
+        }
+
+        // Verificar que el usuario tiene acceso al pedido.
+        if ( is_user_logged_in() && $order->get_customer_id() && (int) $order->get_customer_id() !== get_current_user_id() ) {
+            wp_send_json_error( [ 'message' => __( 'Acceso denegado.', 'mad-suite' ) ] );
+        }
+
+        if ( empty( $_FILES['proof_file'] ) || UPLOAD_ERR_OK !== $_FILES['proof_file']['error'] ) {
+            wp_send_json_error( [ 'message' => __( 'Error al subir el archivo.', 'mad-suite' ) ] );
+        }
+
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+        $file = $_FILES['proof_file'];
+
+        // Validar tipo MIME en el servidor (no confiar solo en el cliente).
+        $filetype = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
+        $mime     = $filetype['type'] ?? '';
+        $allowed  = [ 'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf' ];
+        if ( ! in_array( $mime, $allowed, true ) ) {
+            wp_send_json_error( [ 'message' => __( 'Tipo de archivo no permitido. Sube una imagen o PDF.', 'mad-suite' ) ] );
+        }
+
+        if ( $file['size'] > 10 * 1024 * 1024 ) {
+            wp_send_json_error( [ 'message' => __( 'El archivo no puede superar 10 MB.', 'mad-suite' ) ] );
+        }
+
+        // Guardar archivo en directorio protegido.
+        $upload_dir = wp_upload_dir();
+        $sub_dir    = '/mad-payment-proofs/' . gmdate( 'Y/m' );
+        $target_dir = $upload_dir['basedir'] . $sub_dir;
+        wp_mkdir_p( $target_dir );
+
+        // Crear .htaccess para bloquear acceso directo si no existe.
+        $htaccess = $target_dir . '/../.htaccess';
+        if ( ! file_exists( $htaccess ) ) {
+            file_put_contents( $htaccess, "Options -Indexes\n" ); // phpcs:ignore
+        }
+
+        $ext      = strtolower( pathinfo( sanitize_file_name( $file['name'] ), PATHINFO_EXTENSION ) );
+        $filename = 'proof-' . $order_id . '-' . time() . '.' . $ext;
+        $target   = $target_dir . '/' . $filename;
+
+        if ( ! move_uploaded_file( $file['tmp_name'], $target ) ) {
+            wp_send_json_error( [ 'message' => __( 'No se pudo guardar el archivo.', 'mad-suite' ) ] );
+        }
+
+        $file_url = $upload_dir['baseurl'] . $sub_dir . '/' . $filename;
+        $order->update_meta_data( '_mad_payment_proof_path', $target );
+        $order->update_meta_data( '_mad_payment_proof_url', $file_url );
+        $order->save();
+
+        // Verificar con IA.
+        $result = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+
+        if ( is_wp_error( $result ) ) {
+            $order->add_order_note( sprintf(
+                __( 'Comprobante subido pero no se pudo verificar con IA: %s', 'mad-suite' ),
+                $result->get_error_message()
+            ) );
+            wp_send_json_error( [ 'message' => $result->get_error_message(), 'proof_url' => $file_url ] );
+        }
+
+        $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
+
+        if ( $result['amount_matches'] ) {
+            $order->update_meta_data( '_mad_payment_proof_verified', '1' );
+            $order->save();
+            $order->update_status( 'processing', sprintf(
+                __( 'Comprobante verificado por IA. Importe detectado: %s. Pendiente de revisión por el administrador.', 'mad-suite' ),
+                wc_price( (float) $result['detected_amount'] )
+            ) );
+
+            wp_send_json_success( [
+                'message' => __( 'Comprobante verificado. Tu pedido está siendo procesado.', 'mad-suite' ),
+                'reload'  => true,
+            ] );
+        } else {
+            $order->save();
+            $order->add_order_note( sprintf(
+                __( 'Comprobante subido pero el importe no coincide. Detectado: %s — Esperado: %s.', 'mad-suite' ),
+                wc_price( (float) ( $result['detected_amount'] ?? 0 ) ),
+                wc_price( (float) $order->get_total() )
+            ) );
+
+            $message = isset( $result['detected_amount'] ) && $result['detected_amount'] !== null
+                ? sprintf(
+                    __( 'El importe detectado (%s) no coincide con el total del pedido (%s). Revisa el comprobante.', 'mad-suite' ),
+                    wc_price( (float) $result['detected_amount'] ),
+                    wc_price( (float) $order->get_total() )
+                )
+                : __( 'No se pudo detectar el importe en el comprobante.', 'mad-suite' );
+
+            wp_send_json_error( [ 'message' => $message ] );
+        }
+    }
+
+    /**
+     * Llama a Claude para verificar el comprobante de pago.
+     *
+     * Modo test (payment_proof_strict = false): solo extrae el importe.
+     * Modo producción (payment_proof_strict = true): verifica legitimidad + datos bancarios.
+     *
+     * @return array|WP_Error
+     */
+    private function verify_payment_proof_with_ai( string $file_path, string $mime, float $expected_amount ) {
+        $olofane  = get_option( 'madsuite_olofane_settings', [] );
+        $api_key  = $olofane['ai_api_key_claude'] ?? '';
+        if ( empty( $api_key ) ) {
+            return new WP_Error( 'no_api_key', __( 'No hay API key de Claude configurada en el módulo Olofane.', 'mad-suite' ) );
+        }
+
+        $file_data = file_get_contents( $file_path ); // phpcs:ignore
+        if ( false === $file_data ) {
+            return new WP_Error( 'file_read', __( 'No se pudo leer el archivo subido.', 'mad-suite' ) );
+        }
+        $base64 = base64_encode( $file_data ); // phpcs:ignore
+
+        $settings = mad_quotes_get_settings();
+        $strict   = ! empty( $settings['payment_proof_strict'] );
+
+        if ( $strict ) {
+            $prompt = 'Analiza este comprobante de transferencia bancaria. Responde ÚNICAMENTE con un JSON válido con esta estructura: {"legitimate":true,"legitimacy_reason":"...","bank":"...","amount":1234.56,"date":"...","beneficiary":"..."}. El campo "legitimate" debe ser false si el documento parece fabricado artificialmente, es un simple texto con un número, o no tiene las características visuales de un comprobante bancario real (logo, IBAN, número de operación, etc.). Si no detectas el importe usa "amount":null.';
+        } else {
+            $prompt = 'En este documento, ¿cuál es el importe total de la transferencia? Responde ÚNICAMENTE con JSON válido con esta estructura: {"amount":1234.56}. Si no detectas el importe usa {"amount":null}.';
+        }
+
+        $is_pdf = 'application/pdf' === $mime;
+
+        $content_block = $is_pdf
+            ? [ 'type' => 'document', 'source' => [ 'type' => 'base64', 'media_type' => 'application/pdf', 'data' => $base64 ] ]
+            : [ 'type' => 'image',    'source' => [ 'type' => 'base64', 'media_type' => $mime,              'data' => $base64 ] ];
+
+        $headers = [
+            'Content-Type'      => 'application/json',
+            'x-api-key'         => $api_key,
+            'anthropic-version' => '2023-06-01',
+        ];
+        if ( $is_pdf ) {
+            $headers['anthropic-beta'] = 'pdfs-2024-09-25';
+        }
+
+        $response = wp_remote_post( 'https://api.anthropic.com/v1/messages', [
+            'timeout' => 60,
+            'headers' => $headers,
+            'body'    => wp_json_encode( [
+                'model'      => 'claude-haiku-4-5-20251001',
+                'max_tokens' => 400,
+                'messages'   => [
+                    [
+                        'role'    => 'user',
+                        'content' => [ $content_block, [ 'type' => 'text', 'text' => $prompt ] ],
+                    ],
+                ],
+            ] ),
+        ] );
+
+        if ( is_wp_error( $response ) ) {
+            return new WP_Error( 'api_error', $response->get_error_message() );
+        }
+
+        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+        $text = trim( $body['content'][0]['text'] ?? '' );
+
+        // Limpiar posibles bloques markdown que el modelo incluya.
+        $text = preg_replace( '/^```(?:json)?\s*/m', '', $text );
+        $text = preg_replace( '/\s*```\s*$/m', '', $text );
+
+        $parsed = json_decode( $text, true );
+        if ( ! is_array( $parsed ) || ! array_key_exists( 'amount', $parsed ) ) {
+            return new WP_Error( 'parse_error', __( 'No se pudo leer el importe del comprobante.', 'mad-suite' ) );
+        }
+
+        $detected    = $parsed['amount'] !== null ? (float) $parsed['amount'] : null;
+        $legitimate  = $strict ? (bool) ( $parsed['legitimate'] ?? false ) : true;
+        $matches     = $detected !== null && abs( $detected - $expected_amount ) <= 0.02 && $legitimate;
+
+        return array_merge( $parsed, [
+            'detected_amount' => $detected,
+            'amount_matches'  => $matches,
+            'legitimate'      => $legitimate,
+        ] );
+    }
 
     public function ajax_update_status() {
         if ( ! current_user_can( 'manage_woocommerce' )
@@ -734,7 +1934,7 @@ return new class( $core ) implements MAD_Suite_Module {
             }
         }
 
-        wp_die();
+        wp_send_json_success();
     }
 
     public function ajax_send_quote() {
@@ -780,8 +1980,11 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         $result = $this->send_quote_email( $order_id, $admin_note );
-        echo $result ? 'quote-sent' : 'error';
-        wp_die();
+        if ( $result ) {
+            wp_send_json_success( 'quote-sent' );
+        } else {
+            wp_send_json_error( 'error' );
+        }
     }
 
     /* ================================================================ */
@@ -951,6 +2154,119 @@ return new class( $core ) implements MAD_Suite_Module {
         );
     }
 
+    public function field_button_text( $args ) {
+        $settings = mad_quotes_get_settings();
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $stored   = $settings['quote_button_text'] ?? [];
+
+        // Legacy: old installs stored a plain string — migrate on render
+        if ( is_string( $stored ) && $stored !== '' ) {
+            $default_lang = apply_filters( 'wpml_default_language', 'es' ) ?: 'es';
+            $stored = [ $default_lang => $stored ];
+        }
+        if ( ! is_array( $stored ) ) {
+            $stored = [];
+        }
+
+        // Detect active WPML languages; fall back to single field if WPML absent
+        $languages = [];
+        if ( function_exists( 'icl_get_languages' ) ) {
+            $raw = icl_get_languages( 'skip_missing=0' );
+            foreach ( $raw as $code => $info ) {
+                $languages[ $code ] = $info['native_name'];
+            }
+        }
+
+        if ( empty( $languages ) ) {
+            // No WPML — single input
+            $value = is_array( $stored ) ? ( reset( $stored ) ?: '' ) : $stored;
+            printf(
+                '<input type="text" name="%1$s[quote_button_text][default]" value="%2$s" class="regular-text"><br><span class="description">%3$s</span>',
+                esc_attr( $opt_key ),
+                esc_attr( $value ),
+                esc_html( $args['desc'] ?? '' )
+            );
+            return;
+        }
+
+        // One input per language
+        echo '<table class="form-table" style="margin:0;"><tbody>';
+        foreach ( $languages as $code => $name ) {
+            $value = $stored[ $code ] ?? '';
+            printf(
+                '<tr><th style="padding:4px 10px 4px 0;font-weight:normal;width:80px;">%1$s <small>(%2$s)</small></th>'
+                . '<td><input type="text" name="%3$s[quote_button_text][%4$s]" value="%5$s" class="regular-text"></td></tr>',
+                esc_html( $name ),
+                esc_html( strtoupper( $code ) ),
+                esc_attr( $opt_key ),
+                esc_attr( $code ),
+                esc_attr( $value )
+            );
+        }
+        echo '</tbody></table>';
+        echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+    }
+
+    /** Generic per-language text field (reused for mini-cart button texts). */
+    public function field_multilang_text( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $stored   = $settings[ $key ] ?? [];
+        if ( ! is_array( $stored ) ) {
+            $stored = $stored !== '' ? [ 'default' => $stored ] : [];
+        }
+
+        $languages = [];
+        if ( function_exists( 'icl_get_languages' ) ) {
+            foreach ( icl_get_languages( 'skip_missing=0' ) as $code => $info ) {
+                $languages[ $code ] = $info['native_name'];
+            }
+        }
+
+        if ( empty( $languages ) ) {
+            $value = reset( $stored ) ?: '';
+            printf(
+                '<input type="text" name="%1$s[%2$s][default]" value="%3$s" class="regular-text"><br><span class="description">%4$s</span>',
+                esc_attr( $opt_key ),
+                esc_attr( $key ),
+                esc_attr( $value ),
+                esc_html( $args['desc'] ?? '' )
+            );
+            return;
+        }
+
+        echo '<table class="form-table" style="margin:0;"><tbody>';
+        foreach ( $languages as $code => $name ) {
+            printf(
+                '<tr><th style="padding:4px 10px 4px 0;font-weight:normal;width:80px;">%1$s <small>(%2$s)</small></th>'
+                . '<td><input type="text" name="%3$s[%4$s][%5$s]" value="%6$s" class="regular-text"></td></tr>',
+                esc_html( $name ),
+                esc_html( strtoupper( $code ) ),
+                esc_attr( $opt_key ),
+                esc_attr( $key ),
+                esc_attr( $code ),
+                esc_attr( $stored[ $code ] ?? '' )
+            );
+        }
+        echo '</tbody></table>';
+        echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+    }
+
+    public function field_checkbox( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $checked  = ! empty( $settings[ $key ] );
+        printf(
+            '<label><input type="checkbox" name="%1$s[%2$s]" value="1" %3$s> %4$s</label>',
+            esc_attr( $opt_key ),
+            esc_attr( $key ),
+            checked( $checked, true, false ),
+            esc_html( $args['desc'] ?? '' )
+        );
+    }
+
     public function field_number( $args ) {
         $settings = mad_quotes_get_settings();
         $key      = $args['key'];
@@ -996,6 +2312,161 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<p class="description">' . esc_html( $args['desc'] ?? '' ) . '</p>';
     }
 
+    /** Renderiza el shortcode [mad_quote_cart] para incrustar en cualquier página. */
+    public function shortcode_quote_cart(): string {
+        if ( ! $this->current_user_is_quote_role() ) return '';
+        if ( ! function_exists( 'WC' ) || ! isset( WC()->cart ) ) return '';
+
+        $settings  = mad_quotes_get_settings();
+        $btn_label = trim( $this->resolve_lang_text( $settings['quote_button_text'] ?? [] ) );
+        if ( $btn_label === '' ) {
+            $btn_label = __( 'Solicitar presupuesto', 'mad-suite' );
+        }
+
+        ob_start();
+        wc_print_notices();
+
+        if ( WC()->cart->is_empty() ) : ?>
+            <p class="cart-empty">
+                <?php esc_html_e( 'Tu solicitud de presupuesto está vacía.', 'mad-suite' ); ?>
+            </p>
+            <p>
+                <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>">
+                    <?php esc_html_e( 'Ver productos', 'mad-suite' ); ?>
+                </a>
+            </p>
+        <?php else : ?>
+            <form class="mad-quote-cart__form"
+                  action="<?php echo esc_url( wc_get_cart_url() ); ?>"
+                  method="post">
+                <table class="mad-quote-cart__table">
+                    <thead>
+                        <tr>
+                            <th class="product-remove">&nbsp;</th>
+                            <th class="product-thumbnail">&nbsp;</th>
+                            <th class="product-name"><?php esc_html_e( 'Producto', 'mad-suite' ); ?></th>
+                            <th class="product-quantity"><?php esc_html_e( 'Cantidad', 'mad-suite' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ( WC()->cart->get_cart() as $cart_item_key => $cart_item ) :
+                        $product    = apply_filters( 'woocommerce_cart_item_product', $cart_item['data'], $cart_item, $cart_item_key );
+                        $product_id = apply_filters( 'woocommerce_cart_item_product_id', $cart_item['product_id'], $cart_item, $cart_item_key );
+                        if ( ! $product || ! $product->exists() || 0 === $cart_item['quantity'] ) continue;
+                        $product_permalink = apply_filters( 'woocommerce_cart_item_permalink', $product->is_visible() ? $product->get_permalink( $cart_item ) : '', $cart_item, $cart_item_key );
+                    ?>
+                        <tr class="woocommerce-cart-form__cart-item <?php echo esc_attr( apply_filters( 'woocommerce_cart_item_class', 'cart_item', $cart_item, $cart_item_key ) ); ?>">
+                            <td class="product-remove">
+                                <?php echo apply_filters( // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                                    'woocommerce_cart_item_remove_link',
+                                    sprintf(
+                                        '<a href="%s" class="remove" aria-label="%s" data-product_id="%s" data-product_sku="%s">&times;</a>',
+                                        esc_url( wc_get_cart_remove_url( $cart_item_key ) ),
+                                        esc_html__( 'Eliminar este artículo', 'mad-suite' ),
+                                        esc_attr( $product_id ),
+                                        esc_attr( $product->get_sku() )
+                                    ),
+                                    $cart_item_key
+                                ); ?>
+                            </td>
+                            <td class="product-thumbnail">
+                                <?php
+                                $thumbnail = apply_filters( 'woocommerce_cart_item_thumbnail', $product->get_image(), $cart_item, $cart_item_key );
+                                if ( $product_permalink ) {
+                                    printf( '<a href="%s">%s</a>', esc_url( $product_permalink ), $thumbnail ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                                } else {
+                                    echo $thumbnail; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                                }
+                                ?>
+                            </td>
+                            <td class="product-name" data-title="<?php esc_attr_e( 'Producto', 'mad-suite' ); ?>">
+                                <?php if ( $product_permalink ) : ?>
+                                    <a href="<?php echo esc_url( $product_permalink ); ?>"><?php echo wp_kses_post( apply_filters( 'woocommerce_cart_item_name', $product->get_name(), $cart_item, $cart_item_key ) ); ?></a>
+                                <?php else : ?>
+                                    <?php echo wp_kses_post( apply_filters( 'woocommerce_cart_item_name', $product->get_name(), $cart_item, $cart_item_key ) ); ?>
+                                <?php endif; ?>
+                                <?php do_action( 'woocommerce_after_cart_item_name', $cart_item, $cart_item_key ); ?>
+                                <?php echo wc_get_formatted_cart_item_data( $cart_item ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                            </td>
+                            <td class="product-quantity" data-title="<?php esc_attr_e( 'Cantidad', 'mad-suite' ); ?>">
+                                <?php if ( $product->is_sold_individually() ) {
+                                    echo '1';
+                                } else {
+                                    woocommerce_quantity_input( [
+                                        'input_name'   => "cart[{$cart_item_key}][qty]",
+                                        'input_value'  => $cart_item['quantity'],
+                                        'max_value'    => $product->get_max_purchase_quantity(),
+                                        'min_value'    => '0',
+                                        'product_name' => $product->get_name(),
+                                    ], $product );
+                                } ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <div class="mad-quote-cart__update">
+                    <button type="submit" class="mad-quote-cart__btn-update" name="update_cart"
+                            value="<?php esc_attr_e( 'Actualizar', 'mad-suite' ); ?>">
+                        <?php esc_html_e( 'Actualizar solicitud', 'mad-suite' ); ?>
+                    </button>
+                    <?php wp_nonce_field( 'woocommerce-cart', 'woocommerce-cart-nonce' ); ?>
+                </div>
+            </form>
+
+            <div class="mad-quote-cart__actions">
+                <form method="post" class="mad-quote-submit-form">
+                    <?php wp_nonce_field( 'mad_create_quote', 'mad_create_quote_nonce' ); ?>
+                    <?php $current_user = wp_get_current_user(); ?>
+                    <p class="mad-quote-cart__field">
+                        <label for="mad-quote-email"><?php esc_html_e( 'Email', 'mad-suite' ); ?></label>
+                        <input type="email" id="mad-quote-email" name="olofane_email"
+                               value="<?php echo esc_attr( $current_user->user_email ); ?>" required>
+                    </p>
+                    <p class="mad-quote-cart__field">
+                        <label for="mad-quote-notas"><?php esc_html_e( 'Notas (opcional)', 'mad-suite' ); ?></label>
+                        <textarea id="mad-quote-notas" name="olofane_notas" rows="4"></textarea>
+                    </p>
+                    <button type="submit" name="mad_submit_quote" class="mad-quote-cart__proceed">
+                        <?php echo esc_html( $btn_label ); ?>
+                    </button>
+                </form>
+                <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
+                   class="mad-quote-cart__back">
+                    <?php esc_html_e( 'Seguir viendo productos', 'mad-suite' ); ?>
+                </a>
+            </div>
+        <?php endif;
+
+        return ob_get_clean();
+    }
+
+    /** Registra en el log de WooCommerce los fallos de entrega de email. */
+    public function log_mail_failure( WP_Error $error ): void {
+        wc_get_logger()->error(
+            'wp_mail() falló: ' . $error->get_error_message(),
+            [ 'source' => 'mad-quotes-email' ]
+        );
+    }
+
+    /** Selector de página de WordPress para los ajustes del módulo. */
+    public function field_page_select( $args ) {
+        $settings = mad_quotes_get_settings();
+        $key      = $args['key'];
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $current  = absint( $settings[ $key ] ?? 0 );
+
+        wp_dropdown_pages( [
+            'name'              => $opt_key . '[' . $key . ']',
+            'id'                => 'mad_quotes_' . $key,
+            'selected'          => $current,
+            'show_option_none'  => __( '— Usar plantilla por defecto —', 'mad-suite' ),
+            'option_none_value' => 0,
+            'post_status'       => 'publish',
+        ] );
+        echo '<br><span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+    }
+
     public function sanitize_settings( $input ) {
         $clean = [];
 
@@ -1005,7 +2476,23 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $clean['quote_expiry_days'] = absint( $input['quote_expiry_days'] ?? 0 );
 
-        $clean['quote_button_text'] = sanitize_text_field( $input['quote_button_text'] ?? '' );
+        $raw_button = $input['quote_button_text'] ?? [];
+        if ( is_array( $raw_button ) ) {
+            $clean['quote_button_text'] = array_map( 'sanitize_text_field', $raw_button );
+        } else {
+            // Legacy plain string → keep as-is so resolve_button_text() can migrate it
+            $clean['quote_button_text'] = sanitize_text_field( $raw_button );
+        }
+
+        foreach ( [ 'mini_cart_view_cart_text', 'mini_cart_checkout_text' ] as $field ) {
+            $raw = $input[ $field ] ?? [];
+            $clean[ $field ] = is_array( $raw )
+                ? array_map( 'sanitize_text_field', $raw )
+                : sanitize_text_field( $raw );
+        }
+
+        $clean['quote_cart_page_id']   = absint( $input['quote_cart_page_id'] ?? 0 );
+        $clean['payment_proof_strict'] = ! empty( $input['payment_proof_strict'] );
 
         return $clean;
     }
