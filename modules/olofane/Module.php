@@ -119,6 +119,17 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             add_action( 'add_meta_boxes', [ $this, 'register_post_author_meta_box' ] );
             add_action( 'save_post',      [ $this, 'save_post_author_meta_box' ], 10, 2 );
         }
+
+        // Feature 8 – Custom user avatar
+        add_filter( 'get_avatar_url',  [ $this, 'custom_avatar_url' ], 10, 3 );
+        add_filter( 'get_avatar',      [ $this, 'custom_avatar_img' ], 10, 6 );
+        add_action( 'show_user_profile',        [ $this, 'render_avatar_field' ] );
+        add_action( 'edit_user_profile',        [ $this, 'render_avatar_field' ] );
+        add_action( 'personal_options_update',  [ $this, 'save_avatar_field' ] );
+        add_action( 'edit_user_profile_update', [ $this, 'save_avatar_field' ] );
+        if ( is_admin() ) {
+            add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_avatar_admin_js' ] );
+        }
     }
 
     public function admin_init(): void {
@@ -786,5 +797,183 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             </form>
         </div>
         <?php
+    }
+
+    // ── Feature 8: Custom user avatar ────────────────────────────────────────
+
+    private function get_user_avatar_url( int $user_id ): string {
+        $attachment_id = (int) get_user_meta( $user_id, '_mad_avatar_id', true );
+        if ( ! $attachment_id ) return '';
+        $url = wp_get_attachment_image_url( $attachment_id, 'thumbnail' );
+        return $url ?: '';
+    }
+
+    public function custom_avatar_url( string $url, $id_or_email, array $args ): string {
+        $user_id = 0;
+        if ( is_numeric( $id_or_email ) ) {
+            $user_id = (int) $id_or_email;
+        } elseif ( is_string( $id_or_email ) ) {
+            $user = get_user_by( 'email', $id_or_email );
+            if ( $user ) $user_id = $user->ID;
+        } elseif ( $id_or_email instanceof WP_User ) {
+            $user_id = $id_or_email->ID;
+        } elseif ( $id_or_email instanceof WP_Post ) {
+            $user_id = (int) $id_or_email->post_author;
+        } elseif ( $id_or_email instanceof WP_Comment ) {
+            $user_id = (int) $id_or_email->user_id;
+        }
+        if ( ! $user_id ) return $url;
+
+        $custom = $this->get_user_avatar_url( $user_id );
+        return $custom ?: $url;
+    }
+
+    public function custom_avatar_img( string $avatar, $id_or_email, $size, string $default, string $alt, array $args ): string {
+        $user_id = 0;
+        if ( is_numeric( $id_or_email ) ) {
+            $user_id = (int) $id_or_email;
+        } elseif ( is_string( $id_or_email ) ) {
+            $user = get_user_by( 'email', $id_or_email );
+            if ( $user ) $user_id = $user->ID;
+        } elseif ( $id_or_email instanceof WP_User ) {
+            $user_id = $id_or_email->ID;
+        } elseif ( $id_or_email instanceof WP_Post ) {
+            $user_id = (int) $id_or_email->post_author;
+        } elseif ( $id_or_email instanceof WP_Comment ) {
+            $user_id = (int) $id_or_email->user_id;
+        }
+        if ( ! $user_id ) return $avatar;
+
+        $custom_url = $this->get_user_avatar_url( $user_id );
+        if ( ! $custom_url ) return $avatar;
+
+        $size_px = is_array( $size ) ? ( $size[0] ?? 96 ) : (int) $size;
+        $class   = isset( $args['class'] ) ? esc_attr( implode( ' ', (array) $args['class'] ) ) : 'avatar';
+
+        return sprintf(
+            '<img src="%s" width="%d" height="%d" class="%s avatar-%d photo" alt="%s" loading="lazy">',
+            esc_url( $custom_url ),
+            $size_px,
+            $size_px,
+            esc_attr( $class . ' avatar-' . $size_px ),
+            $size_px,
+            esc_attr( $alt )
+        );
+    }
+
+    public function render_avatar_field( WP_User $user ): void {
+        $attachment_id = (int) get_user_meta( $user->ID, '_mad_avatar_id', true );
+        $current_url   = $attachment_id ? wp_get_attachment_image_url( $attachment_id, 'medium' ) : '';
+        ?>
+        <h2><?php esc_html_e( 'Foto de perfil', 'mad-suite' ); ?></h2>
+        <table class="form-table" role="presentation">
+            <tr>
+                <th><label><?php esc_html_e( 'Imagen', 'mad-suite' ); ?></label></th>
+                <td>
+                    <?php wp_nonce_field( 'mad_avatar_save_' . $user->ID, 'mad_avatar_nonce' ); ?>
+                    <div id="mad-avatar-preview" style="margin-bottom:10px;">
+                        <?php if ( $current_url ) : ?>
+                            <img src="<?php echo esc_url( $current_url ); ?>"
+                                 style="width:96px;height:96px;object-fit:cover;border-radius:50%;border:2px solid #ddd;display:block;">
+                        <?php else : ?>
+                            <div style="width:96px;height:96px;border-radius:50%;background:#e0e0e0;display:flex;align-items:center;justify-content:center;color:#999;font-size:32px;">
+                                &#128100;
+                            </div>
+                        <?php endif; ?>
+                    </div>
+
+                    <input type="hidden" name="mad_avatar_attachment_id"
+                           id="mad-avatar-attachment-id"
+                           value="<?php echo esc_attr( $attachment_id ?: '' ); ?>">
+                    <input type="hidden" name="mad_avatar_remove"
+                           id="mad-avatar-remove-flag" value="0">
+
+                    <button type="button" class="button" id="mad-avatar-upload-btn">
+                        <?php esc_html_e( $attachment_id ? 'Cambiar foto' : 'Subir foto', 'mad-suite' ); ?>
+                    </button>
+                    <?php if ( $attachment_id ) : ?>
+                    <button type="button" class="button" id="mad-avatar-remove-btn" style="margin-left:6px;">
+                        <?php esc_html_e( 'Quitar foto', 'mad-suite' ); ?>
+                    </button>
+                    <?php endif; ?>
+
+                    <p class="description" style="margin-top:6px;">
+                        <?php esc_html_e( 'Formatos: JPG, PNG, WebP. Se mostrará en lugar del Gravatar.', 'mad-suite' ); ?>
+                    </p>
+                </td>
+            </tr>
+        </table>
+        <?php
+    }
+
+    public function save_avatar_field( int $user_id ): void {
+        if ( ! current_user_can( 'edit_user', $user_id ) ) return;
+        if ( ! isset( $_POST['mad_avatar_nonce'] ) ) return;
+        if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['mad_avatar_nonce'] ) ), 'mad_avatar_save_' . $user_id ) ) return;
+
+        // Remove requested
+        if ( ! empty( $_POST['mad_avatar_remove'] ) && '1' === $_POST['mad_avatar_remove'] ) {
+            delete_user_meta( $user_id, '_mad_avatar_id' );
+            return;
+        }
+
+        $attachment_id = isset( $_POST['mad_avatar_attachment_id'] ) ? absint( $_POST['mad_avatar_attachment_id'] ) : 0;
+        if ( $attachment_id ) {
+            update_user_meta( $user_id, '_mad_avatar_id', $attachment_id );
+        }
+    }
+
+    public function enqueue_avatar_admin_js( string $hook ): void {
+        if ( ! in_array( $hook, [ 'profile.php', 'user-edit.php' ], true ) ) return;
+        wp_enqueue_media();
+        wp_register_script( 'mad-olofane-avatar', false, [ 'jquery', 'media-editor' ], null, true );
+        wp_enqueue_script( 'mad-olofane-avatar' );
+        wp_add_inline_script( 'mad-olofane-avatar', $this->avatar_admin_js() );
+    }
+
+    private function avatar_admin_js(): string {
+        return <<<'JS'
+(function($) {
+    'use strict';
+    var frame;
+
+    $('#mad-avatar-upload-btn').on('click', function(e) {
+        e.preventDefault();
+        frame = wp.media({
+            title   : 'Seleccionar foto de perfil',
+            button  : { text: 'Usar esta foto' },
+            multiple: false,
+            library : { type: 'image' }
+        });
+        frame.on('select', function() {
+            var att   = frame.state().get('selection').first().toJSON();
+            var thumb = (att.sizes && att.sizes.medium) ? att.sizes.medium.url : att.url;
+            $('#mad-avatar-attachment-id').val(att.id);
+            $('#mad-avatar-remove-flag').val('0');
+            $('#mad-avatar-preview').html(
+                '<img src="' + thumb + '" style="width:96px;height:96px;object-fit:cover;border-radius:50%;border:2px solid #ddd;display:block;">'
+            );
+            $('#mad-avatar-upload-btn').text('Cambiar foto');
+            if (!$('#mad-avatar-remove-btn').length) {
+                $('<button type="button" class="button" id="mad-avatar-remove-btn" style="margin-left:6px;">Quitar foto</button>')
+                    .insertAfter('#mad-avatar-upload-btn');
+            }
+            $('#mad-avatar-remove-btn').show();
+        });
+        frame.open();
+    });
+
+    $(document).on('click', '#mad-avatar-remove-btn', function(e) {
+        e.preventDefault();
+        $('#mad-avatar-attachment-id').val('');
+        $('#mad-avatar-remove-flag').val('1');
+        $('#mad-avatar-preview').html(
+            '<div style="width:96px;height:96px;border-radius:50%;background:#e0e0e0;display:flex;align-items:center;justify-content:center;color:#999;font-size:32px;">&#128100;</div>'
+        );
+        $('#mad-avatar-upload-btn').text('Subir foto');
+        $(this).hide();
+    });
+})(jQuery);
+JS;
     }
 };
