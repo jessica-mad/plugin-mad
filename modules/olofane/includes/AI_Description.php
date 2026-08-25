@@ -120,7 +120,7 @@ class MAD_Olofane_AI_Description {
             wp_send_json_error( [ 'message' => __( 'Producto no encontrado.', 'mad-suite' ) ] );
         }
 
-        $description = $this->generate_description( $product->get_name() );
+        $description = $this->generate_description( $product );
         if ( is_wp_error( $description ) ) {
             wp_send_json_error( [ 'message' => $description->get_error_message() ] );
         }
@@ -155,7 +155,7 @@ class MAD_Olofane_AI_Description {
             $product = wc_get_product( absint( $post_id ) );
             if ( ! $product ) continue;
 
-            $description = $this->generate_description( $product->get_name() );
+            $description = $this->generate_description( $product );
             if ( is_wp_error( $description ) ) continue;
 
             wp_update_post( [ 'ID' => $post_id, 'post_content' => $description ] );
@@ -221,11 +221,66 @@ class MAD_Olofane_AI_Description {
     // ── Core: generate description ────────────────────────────────────────────
 
     /** @return string|WP_Error */
-    private function generate_description( string $product_name ) {
+    private function generate_description( WC_Product $product ) {
         $prompt_tpl = $this->settings['ai_prompt_description'] ?? '';
-        $prompt     = str_replace( '{product_name}', $product_name, $prompt_tpl );
+        $prompt     = str_replace( '{product_name}', $product->get_name(), $prompt_tpl );
 
-        return $this->call_ai( $prompt );
+        $context = $this->build_product_context( $product );
+        if ( $context ) {
+            $prompt = strpos( $prompt_tpl, '{product_context}' ) !== false
+                ? str_replace( '{product_context}', $context, $prompt )
+                : $prompt . "\n\n" . $context;
+        }
+
+        return $this->call_ai( $prompt, $this->get_product_image_url( $product ) );
+    }
+
+    /**
+     * Reúne categoría, etiquetas, atributos configurados y precio del producto
+     * para que la IA tenga el contexto completo (no solo el nombre) al redactar.
+     */
+    private function build_product_context( WC_Product $product ): string {
+        $lines = [];
+
+        $cats = wp_get_post_terms( $product->get_id(), 'product_cat', [ 'fields' => 'names' ] );
+        if ( ! is_wp_error( $cats ) && $cats ) {
+            $lines[] = 'Categoría: ' . implode( ', ', $cats );
+        }
+
+        $tags = wp_get_post_terms( $product->get_id(), 'product_tag', [ 'fields' => 'names' ] );
+        if ( ! is_wp_error( $tags ) && $tags ) {
+            $lines[] = 'Etiquetas: ' . implode( ', ', $tags );
+        }
+
+        foreach ( $product->get_attributes() as $attribute ) {
+            if ( ! $attribute instanceof WC_Product_Attribute ) continue;
+
+            $label  = wc_attribute_label( $attribute->get_name(), $product );
+            $values = $attribute->is_taxonomy()
+                ? wc_get_product_terms( $product->get_id(), $attribute->get_name(), [ 'fields' => 'names' ] )
+                : $attribute->get_options();
+
+            if ( $values ) {
+                $lines[] = $label . ': ' . implode( ', ', $values );
+            }
+        }
+
+        $price = wp_strip_all_tags( (string) $product->get_price_html() );
+        if ( $price ) {
+            $lines[] = 'Precio: ' . $price;
+        }
+
+        if ( ! $lines ) return '';
+
+        return "Datos del producto (úsalos para que la descripción sea precisa y coherente; no los repitas como lista):\n" . implode( "\n", $lines );
+    }
+
+    /** URL pública de la imagen destacada del producto, o cadena vacía si no tiene. */
+    private function get_product_image_url( WC_Product $product ): string {
+        $image_id = $product->get_image_id();
+        if ( ! $image_id ) return '';
+
+        return (string) ( wp_get_attachment_image_url( $image_id, 'large' ) ?: '' );
     }
 
     // ── Core: translate and save into WPML translations ──────────────────────
@@ -262,23 +317,33 @@ class MAD_Olofane_AI_Description {
     // ── Core: call AI provider ────────────────────────────────────────────────
 
     /** @return string|WP_Error */
-    private function call_ai( string $prompt ) {
+    private function call_ai( string $prompt, string $image_url = '' ) {
         $provider = $this->settings['ai_provider'] ?? 'claude';
 
         if ( $provider === 'openai' ) {
-            return $this->call_openai( $prompt );
+            return $this->call_openai( $prompt, $image_url );
         }
 
-        return $this->call_claude( $prompt );
+        return $this->call_claude( $prompt, $image_url );
     }
 
     /** @return string|WP_Error */
-    private function call_claude( string $prompt ) {
+    private function call_claude( string $prompt, string $image_url = '' ) {
         $api_key = $this->settings['ai_api_key_claude'] ?? '';
         $model   = $this->settings['ai_model_claude'] ?? 'claude-sonnet-4-6';
 
         if ( empty( $api_key ) ) {
             return new WP_Error( 'no_api_key', __( 'API Key de Claude no configurada.', 'mad-suite' ) );
+        }
+
+        // Solo se usa contenido multimodal (array de bloques) cuando hay imagen;
+        // si no, se manda el prompt como string plano, igual que antes.
+        $content = $prompt;
+        if ( $image_url ) {
+            $content = [
+                [ 'type' => 'image', 'source' => [ 'type' => 'url', 'url' => $image_url ] ],
+                [ 'type' => 'text', 'text' => $prompt ],
+            ];
         }
 
         $response = wp_remote_post(
@@ -294,7 +359,7 @@ class MAD_Olofane_AI_Description {
                     'model'      => $model,
                     'max_tokens' => 1024,
                     'messages'   => [
-                        [ 'role' => 'user', 'content' => $prompt ],
+                        [ 'role' => 'user', 'content' => $content ],
                     ],
                 ] ),
             ]
@@ -314,12 +379,22 @@ class MAD_Olofane_AI_Description {
     }
 
     /** @return string|WP_Error */
-    private function call_openai( string $prompt ) {
+    private function call_openai( string $prompt, string $image_url = '' ) {
         $api_key = $this->settings['ai_api_key_openai'] ?? '';
         $model   = $this->settings['ai_model_openai'] ?? 'gpt-4o';
 
         if ( empty( $api_key ) ) {
             return new WP_Error( 'no_api_key', __( 'API Key de OpenAI no configurada.', 'mad-suite' ) );
+        }
+
+        // Igual que en Claude: solo se cambia a contenido multimodal si hay imagen,
+        // para no romper modelos sin visión si el admin cambia ai_model_openai.
+        $content = $prompt;
+        if ( $image_url ) {
+            $content = [
+                [ 'type' => 'text', 'text' => $prompt ],
+                [ 'type' => 'image_url', 'image_url' => [ 'url' => $image_url ] ],
+            ];
         }
 
         $response = wp_remote_post(
@@ -333,7 +408,7 @@ class MAD_Olofane_AI_Description {
                 'body' => wp_json_encode( [
                     'model'    => $model,
                     'messages' => [
-                        [ 'role' => 'user', 'content' => $prompt ],
+                        [ 'role' => 'user', 'content' => $content ],
                     ],
                     'max_tokens' => 1024,
                 ] ),

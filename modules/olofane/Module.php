@@ -737,7 +737,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                         <td>
                             <textarea id="ai_prompt_description" name="ai_prompt_description"
                                 rows="4" class="large-text"><?php echo esc_textarea( $s['ai_prompt_description'] ); ?></textarea>
-                            <p class="description">{product_name}</p>
+                            <p class="description">
+                                <?php esc_html_e( '{product_name} — nombre del producto. {product_context} — opcional: si lo incluyes, ahí se inserta la categoría, atributos y precio del producto; si no lo incluyes, se añade igualmente al final del prompt. Además, la imagen destacada del producto se envía siempre que exista (Claude y GPT-4o pueden verla).', 'mad-suite' ); ?>
+                            </p>
                         </td>
                     </tr>
                     <tr>
