@@ -175,6 +175,14 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Mini-carrito: textos personalizables para usuarios normales ──
         add_action( 'woocommerce_widget_shopping_cart_buttons', [ $this, 'override_mini_cart_buttons' ], 5 );
 
+        // ── Carrito/Checkout en bloques (Cart & Checkout blocks): el precio se
+        // lee de la Store API, que ignora los filtros clásicos de abajo — hay
+        // que poner a 0 el precio real en el cálculo del carrito. Prioridad 30
+        // para correr después de cualquier módulo que ajuste precio por ítem
+        // (ej. el configurador de Divano Toscano, prioridad 20), así el rol de
+        // presupuesto siempre termina en 0 sin depender del orden de carga.
+        add_action( 'woocommerce_before_calculate_totals', [ $this, 'zero_price_for_quote_role_cart' ], 30 );
+
         // ── Checkout: ocultar precios y pagos para experiencia de presupuesto ─
         // PHP hooks: actúan en el origen, sin depender de selectores CSS del tema
         add_filter( 'woocommerce_cart_item_price',    [ $this, 'hide_cart_item_price' ],    10, 3 );
@@ -185,6 +193,9 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_cart_totals_order_total_html', [ $this, 'hide_cart_totals_html_single' ] );
         // CSS temprano (wp_head): evita flash si el carrito ya está disponible
         add_action( 'wp_head', [ $this, 'inject_checkout_css' ] );
+        // El mini-carrito (Mini Cart block) puede aparecer en CUALQUIER página, no
+        // solo carrito/checkout — este CSS no depende de is_cart()/is_checkout().
+        add_action( 'wp_head', [ $this, 'inject_minicart_price_css' ] );
         // CSS inline antes de la tabla de revisión: timing garantizado dentro del template
         add_action( 'woocommerce_checkout_before_order_review_heading', [ $this, 'inject_checkout_css' ] );
         // CSS de seguridad DESPUÉS de la tabla: dispara con el carrito definitivamente renderizado;
@@ -620,6 +631,26 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
+     * Pone a 0 el precio real de cada ítem del carrito para usuarios de rol
+     * presupuesto. Los filtros de abajo (hide_cart_item_price, etc.) solo
+     * cambian el HTML del carrito/checkout CLÁSICO; el Cart block y el
+     * Checkout block de WooCommerce leen el total ya calculado a través de
+     * la Store API y no pasan por esos filtros en absoluto. Zerar el precio
+     * aquí, en cambio, es la fuente real que ambos leen — funciona igual en
+     * plantillas clásicas y en bloques.
+     */
+    public function zero_price_for_quote_role_cart( $cart ): void {
+        if ( is_admin() && ! defined( 'DOING_AJAX' ) ) return;
+        if ( ! $this->current_user_is_quote_role() ) return;
+
+        foreach ( $cart->get_cart() as $cart_item ) {
+            if ( isset( $cart_item['data'] ) && is_object( $cart_item['data'] ) ) {
+                $cart_item['data']->set_price( 0 );
+            }
+        }
+    }
+
+    /**
      * Intercepta el POST del formulario de solicitud de presupuesto.
      * Crea el pedido directamente (sin pasar por el checkout de WooCommerce Blocks),
      * vacía el carrito y redirige a la página de confirmación del pedido.
@@ -820,7 +851,7 @@ return new class( $core ) implements MAD_Suite_Module {
      * El flag $checkout_css_injected evita salida duplicada.
      */
     public function inject_checkout_css() {
-        if ( ! is_checkout() || is_order_received_page() ) return;
+        if ( ( ! is_checkout() && ! is_cart() ) || is_order_received_page() ) return;
         if ( $this->checkout_css_injected ) return;
         if ( ! $this->cart_is_quote_experience() ) return;
 
@@ -973,21 +1004,48 @@ return new class( $core ) implements MAD_Suite_Module {
     /** Emite el bloque <style> que oculta precios en el checkout. Reutilizado por ambos métodos. */
     private function output_checkout_hide_css() {
         echo '<style>
-            /* Checkout clásico: columna "Total/Subtotal" en cabecera, cuerpo y pie */
+            /* Carrito/checkout clásico: columna "Total/Subtotal" en cabecera, cuerpo y pie.
+             * OJO: no se oculta .cart_totals entero — ahí vive el botón "Finalizar
+             * compra"/calculadora de envío, solo se ocultan sus filas de importe. */
+            .woocommerce-cart-form .product-price,
+            .woocommerce-cart-form .product-subtotal,
             .woocommerce-checkout-review-order-table .product-total,
             .woocommerce-checkout-review-order-table tfoot,
             .woocommerce-checkout-review-order-table tfoot tr,
             .woocommerce-checkout-review-order-table .cart-subtotal,
-            .woocommerce-checkout-review-order-table .order-total { display: none !important; }
-            /* Checkout en bloques (WooCommerce Blocks): precios */
-            .wc-block-components-order-summary-item__individual-prices,
-            .wc-block-components-order-summary-item__total-price,
-            .wc-block-components-totals-item,
-            .wc-block-components-totals-footer-item,
-            .wc-block-order-summary-item__price { display: none !important; }
+            .woocommerce-checkout-review-order-table .order-total,
+            .cart_totals .cart-subtotal,
+            .cart_totals .order-total,
+            .cart_totals .shipping,
+            .cart_totals .cart-discount { display: none !important; }
             /* Checkout Blocks: ocultar sección completa de dirección de facturación */
             .wc-block-checkout__billing-fields,
             .wc-block-checkout__shipping-fields { display: none !important; }
+        </style>';
+    }
+
+    /**
+     * CSS de precio para los componentes de WooCommerce Blocks. Cart block,
+     * Checkout block y Mini Cart block comparten las mismas clases de
+     * componente — a diferencia de output_checkout_hide_css() (solo
+     * carrito/checkout), esto se imprime en CUALQUIER página porque el Mini
+     * Cart puede aparecer en el header de todo el sitio. El precio real ya
+     * se puso a 0 en PHP (zero_price_for_quote_role_cart); esto solo evita
+     * que se vea el "0,00 €" y las etiquetas de subtotal/total.
+     */
+    public function inject_minicart_price_css() {
+        if ( ! $this->cart_is_quote_experience() ) return;
+        echo '<style>
+            .wc-block-components-product-price,
+            .wc-block-components-order-summary-item__individual-prices,
+            .wc-block-components-order-summary-item__total-price,
+            .wc-block-components-totals-item,
+            .wc-block-components-totals-item__value,
+            .wc-block-components-totals-footer-item,
+            .wc-block-order-summary-item__price,
+            .wc-block-cart-items__header-total,
+            .wc-block-cart-item__total,
+            .wc-block-mini-cart__amount { display: none !important; }
         </style>';
     }
 
