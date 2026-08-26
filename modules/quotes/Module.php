@@ -771,9 +771,11 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return;
 
         // Si hay una página configurada con el shortcode, redirigir allí.
+        // Nunca a la propia página de Carrito: is_cart() volvería a ser true y
+        // redirigiría a sí misma (bucle infinito → ERR_TOO_MANY_REDIRECTS).
         $settings = mad_quotes_get_settings();
         $page_id  = absint( $settings['quote_cart_page_id'] ?? 0 );
-        if ( $page_id && 'publish' === get_post_status( $page_id ) ) {
+        if ( $page_id && ! $this->is_wc_cart_page( $page_id ) && 'publish' === get_post_status( $page_id ) ) {
             wp_safe_redirect( (string) get_permalink( $page_id ) );
             exit;
         }
@@ -805,10 +807,15 @@ return new class( $core ) implements MAD_Suite_Module {
     private function get_quote_cart_url(): string {
         $settings = mad_quotes_get_settings();
         $page_id  = absint( $settings['quote_cart_page_id'] ?? 0 );
-        if ( $page_id && 'publish' === get_post_status( $page_id ) ) {
+        if ( $page_id && ! $this->is_wc_cart_page( $page_id ) && 'publish' === get_post_status( $page_id ) ) {
             return (string) get_permalink( $page_id );
         }
         return wc_get_cart_url();
+    }
+
+    /** True si $page_id es la página oficial de Carrito de WooCommerce. */
+    private function is_wc_cart_page( int $page_id ): bool {
+        return $page_id > 0 && function_exists( 'wc_get_page_id' ) && $page_id === (int) wc_get_page_id( 'cart' );
     }
 
     /**
@@ -2523,6 +2530,11 @@ return new class( $core ) implements MAD_Suite_Module {
         $opt_key  = MAD_Suite_Core::option_key( $this->slug );
         $current  = absint( $settings[ $key ] ?? 0 );
 
+        // Excluir la página de Carrito de WooCommerce: si se seleccionara aquí,
+        // serve_quote_cart_template() redirigiría la página de carrito a sí misma
+        // (bucle infinito de redirección — ERR_TOO_MANY_REDIRECTS).
+        $cart_page_id = function_exists( 'wc_get_page_id' ) ? (int) wc_get_page_id( 'cart' ) : 0;
+
         wp_dropdown_pages( [
             'name'              => $opt_key . '[' . $key . ']',
             'id'                => 'mad_quotes_' . $key,
@@ -2530,8 +2542,10 @@ return new class( $core ) implements MAD_Suite_Module {
             'show_option_none'  => __( '— Usar plantilla por defecto —', 'mad-suite' ),
             'option_none_value' => 0,
             'post_status'       => 'publish',
+            'exclude'           => $cart_page_id > 0 ? [ $cart_page_id ] : [],
         ] );
         echo '<br><span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+        echo '<br><span class="description" style="color:#b32d2e;">' . esc_html__( 'No selecciones aquí la página de Carrito de WooCommerce: causaría un bucle de redirección.', 'mad-suite' ) . '</span>';
     }
 
     public function sanitize_settings( $input ) {
