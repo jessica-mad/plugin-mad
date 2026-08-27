@@ -1179,7 +1179,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                        class="mcs-category-search regular-text" />
                 <input type="hidden" name="mcs_google_category_id" id="mcs_google_category_id"
                        value="<?php echo esc_attr($google_category_id); ?>" />
-                <p class="description"><?php esc_html_e('Buscar y seleccionar categoría de Google Merchant Center', 'mad-suite'); ?></p>
+                <p class="description"><?php esc_html_e('Buscar y seleccionar categoría de Google Merchant Center (por nombre o por ID)', 'mad-suite'); ?></p>
             </td>
         </tr>
         <?php

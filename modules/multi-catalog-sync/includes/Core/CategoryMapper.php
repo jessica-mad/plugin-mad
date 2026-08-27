@@ -107,41 +107,58 @@ class CategoryMapper {
             return [];
         }
 
-        $search_term = mb_strtolower($search_term);
+        $raw_term = trim((string) $search_term);
+        if ($raw_term === '') {
+            return [];
+        }
+
+        $search_lower = mb_strtolower($raw_term);
+        // Búsqueda por ID: solo si el término es puramente numérico (los IDs
+        // de Google son siempre numéricos), para no confundir con texto.
+        $is_id_search = ctype_digit($raw_term);
+
         $results = [];
 
         foreach ($taxonomy as $id => $path) {
+            $id         = (string) $id;
             $path_lower = mb_strtolower($path);
 
-            // Check if search term is in category path
-            if (strpos($path_lower, $search_term) !== false) {
-                $results[] = [
-                    'value' => $id,
-                    'label' => $path,
-                    'path' => $path,
-                ];
+            $matches_id   = $is_id_search && ( $id === $raw_term || strpos($id, $raw_term) === 0 );
+            $matches_path = strpos($path_lower, $search_lower) !== false;
 
-                if (count($results) >= $limit) {
-                    break;
-                }
+            if ($matches_id || $matches_path) {
+                $results[] = [
+                    'value'    => $id,
+                    'label'    => $path,
+                    'path'     => $path,
+                    'id_match' => $matches_id,
+                ];
             }
         }
 
-        // Sort results by relevance (exact matches first)
-        usort($results, function($a, $b) use ($search_term) {
+        // Sort results by relevance: ID exacto > ID por prefijo > texto exacto > empieza por > más corto
+        usort($results, function($a, $b) use ($search_lower, $raw_term) {
+            $a_exact_id = ($a['value'] === $raw_term);
+            $b_exact_id = ($b['value'] === $raw_term);
+            if ($a_exact_id && !$b_exact_id) return -1;
+            if (!$a_exact_id && $b_exact_id) return 1;
+
+            if ($a['id_match'] && !$b['id_match']) return -1;
+            if (!$a['id_match'] && $b['id_match']) return 1;
+
             $a_lower = mb_strtolower($a['label']);
             $b_lower = mb_strtolower($b['label']);
 
             // Exact match at the end (most specific category)
-            $a_end = substr($a_lower, -strlen($search_term)) === $search_term;
-            $b_end = substr($b_lower, -strlen($search_term)) === $search_term;
+            $a_end = substr($a_lower, -strlen($search_lower)) === $search_lower;
+            $b_end = substr($b_lower, -strlen($search_lower)) === $search_lower;
 
             if ($a_end && !$b_end) return -1;
             if (!$a_end && $b_end) return 1;
 
             // Starts with search term
-            $a_start = strpos($a_lower, $search_term) === 0;
-            $b_start = strpos($b_lower, $search_term) === 0;
+            $a_start = strpos($a_lower, $search_lower) === 0;
+            $b_start = strpos($b_lower, $search_lower) === 0;
 
             if ($a_start && !$b_start) return -1;
             if (!$a_start && $b_start) return 1;
@@ -149,6 +166,12 @@ class CategoryMapper {
             // Shorter path is more relevant
             return strlen($a['path']) - strlen($b['path']);
         });
+
+        $results = array_slice($results, 0, $limit);
+        foreach ($results as &$result) {
+            unset($result['id_match']);
+        }
+        unset($result);
 
         return $results;
     }
