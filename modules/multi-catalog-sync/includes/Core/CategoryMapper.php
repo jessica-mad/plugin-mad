@@ -187,11 +187,16 @@ class CategoryMapper {
             return $this->taxonomy_cache;
         }
 
-        // Try persistent cache
+        $current_mtime = file_exists($this->taxonomy_file) ? filemtime($this->taxonomy_file) : 0;
+
+        // Try persistent cache — solo es válida si el archivo no cambió desde
+        // que se cacheó (evita servir una taxonomía vieja/de muestra durante
+        // 24h cada vez que se reemplaza google-taxonomy.json, por ejemplo al
+        // desplegar una actualización del plugin).
         $cached = get_transient($this->cache_key);
-        if ($cached !== false) {
-            $this->taxonomy_cache = $cached;
-            return $cached;
+        if (is_array($cached) && isset($cached['mtime'], $cached['data']) && $cached['mtime'] === $current_mtime) {
+            $this->taxonomy_cache = $cached['data'];
+            return $cached['data'];
         }
 
         // Load from file
@@ -206,8 +211,8 @@ class CategoryMapper {
             return [];
         }
 
-        // Cache for 24 hours
-        set_transient($this->cache_key, $taxonomy, DAY_IN_SECONDS);
+        // Cache for 24 hours (junto con el mtime del archivo en ese momento)
+        set_transient($this->cache_key, [ 'mtime' => $current_mtime, 'data' => $taxonomy ], DAY_IN_SECONDS);
         $this->taxonomy_cache = $taxonomy;
 
         return $taxonomy;
