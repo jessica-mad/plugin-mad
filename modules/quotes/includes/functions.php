@@ -141,6 +141,7 @@ function mad_quotes_get_settings() {
         'mini_cart_checkout_text'  => [],
         'quote_cart_page_id'       => 0,
         'payment_proof_strict'     => false,
+        'real_price_roles'         => [],
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );

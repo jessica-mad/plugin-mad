@@ -127,6 +127,15 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_variable_price_html',             [ $this, 'maybe_restore_price' ],  999, 2 );
         add_filter( 'woocommerce_get_price_html',                  [ $this, 'add_b2b_price_labels' ], 1000, 2 );
         add_filter( 'woocommerce_variable_price_html',             [ $this, 'add_b2b_price_labels' ], 1000, 2 );
+
+        // ── Precio real por rol: el precio nativo de WooCommerce es un valor
+        // simbólico (para poder usar el carrito y para el feed de Google
+        // Shopping sin publicar el precio real). Los roles configurados en
+        // "Precio real por rol" ven y pagan PVP-real menos su descuento en
+        // vez de ese valor simbólico. Prioridad 25: después del configurador
+        // de Divano Toscano (20) y antes de zero_price_for_quote_role_cart
+        // (30, que solo aplica a rol presupuesto — mutuamente excluyentes).
+        add_action( 'woocommerce_before_calculate_totals', [ $this, 'apply_real_price_to_cart' ], 25 );
         add_action( 'wp_head',                                     [ $this, 'b2b_price_labels_css' ] );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
@@ -306,6 +315,23 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_page_select',
             'mad_quotes_roles',
             __( 'Página que contiene el shortcode [mad_quote_cart]. Los usuarios de presupuesto serán redirigidos aquí en lugar del carrito de WooCommerce.', 'mad-suite' )
+        );
+
+        // ── Sección: Precio real por rol ──────────────────────────────
+        add_settings_section(
+            'mad_quotes_real_price',
+            __( 'Precio real por rol', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'El precio de WooCommerce puede ser un valor simbólico (para que el carrito funcione y para no publicar el precio real en el feed de Google Shopping). Los roles que actives aquí ven y pagan, en su lugar, el "PVP real" que cargues en cada producto (pestaña Presupuesto) menos el % que definas — nunca el valor simbólico.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'real_price_roles',
+            __( 'Roles con precio real', 'mad-suite' ),
+            'field_real_price_roles',
+            'mad_quotes_real_price',
+            __( 'Si un usuario tiene varios roles activados, se usa el descuento más alto. Un rol marcado aquí no debería estar también en "Roles habilitados" (presupuesto) — son experiencias excluyentes.', 'mad-suite' )
         );
 
         // ── Sección: Textos del mini-carrito ─────────────────────────
@@ -503,10 +529,99 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     public function maybe_restore_price( $price, $product ) {
-        if ( ! $this->current_user_is_quote_role() ) {
-            return $this->price_cache[ $product->get_id() ] ?? $price;
+        if ( $this->current_user_is_quote_role() ) {
+            return $price;
         }
-        return $price;
+
+        $discount = $this->get_real_price_role_discount();
+        if ( null !== $discount ) {
+            $real_html = $this->render_real_price_html( $product, $discount );
+            if ( null !== $real_html ) {
+                return $real_html;
+            }
+        }
+
+        return $this->price_cache[ $product->get_id() ] ?? $price;
+    }
+
+    /**
+     * Descuento (%) de "precio real" del usuario actual, o null si no aplica
+     * (rol de presupuesto, invitado, o ningún rol suyo tiene precio real
+     * activado en Ajustes → Precio real por rol). Si tiene varios roles
+     * calificados, se usa el de mayor descuento.
+     */
+    private function get_real_price_role_discount(): ?float {
+        if ( $this->current_user_is_quote_role() ) return null;
+
+        $user = wp_get_current_user();
+        if ( ! $user->ID ) return null;
+
+        $settings = mad_quotes_get_settings();
+        $map      = (array) ( $settings['real_price_roles'] ?? [] );
+        $best     = null;
+
+        foreach ( (array) $user->roles as $role ) {
+            if ( empty( $map[ $role ]['enabled'] ) ) continue;
+            $discount = (float) ( $map[ $role ]['discount'] ?? 0 );
+            if ( null === $best || $discount > $best ) $best = $discount;
+        }
+
+        return $best;
+    }
+
+    /**
+     * Precio final (PVP real menos el descuento de rol) para un producto,
+     * o null si el producto no tiene PVP real configurado (_mad_real_pvp).
+     */
+    private function compute_real_price( int $product_id, float $discount_pct ): ?float {
+        $pvp = get_post_meta( $product_id, '_mad_real_pvp', true );
+        if ( '' === $pvp || ! is_numeric( $pvp ) ) return null;
+
+        $pvp = (float) $pvp;
+        if ( $pvp <= 0 ) return null;
+
+        return round( $pvp * ( 1 - $discount_pct / 100 ), 2 );
+    }
+
+    /** HTML de precio (PVP tachado + precio con descuento, y costo si está cargado) para el rol de precio real. */
+    private function render_real_price_html( WC_Product $product, float $discount_pct ): ?string {
+        $final = $this->compute_real_price( $product->get_id(), $discount_pct );
+        if ( null === $final ) return null;
+
+        $pvp = (float) get_post_meta( $product->get_id(), '_mad_real_pvp', true );
+
+        $html = ( $discount_pct > 0 )
+            ? '<del aria-hidden="true">' . wc_price( $pvp ) . '</del> <ins>' . wc_price( $final ) . '</ins>'
+            : wc_price( $final );
+
+        $costo = get_post_meta( $product->get_id(), '_mad_valor_base', true );
+        if ( '' !== $costo && is_numeric( $costo ) ) {
+            $html .= '<small class="mad-real-cost-label" style="display:block;color:#888;font-size:.75em;">'
+                . esc_html__( 'Costo:', 'mad-suite' ) . ' ' . wc_price( (float) $costo ) . '</small>';
+        }
+
+        return $html;
+    }
+
+    /**
+     * Ajusta el precio real del ítem de carrito al PVP-real menos el
+     * descuento de rol. Se recalcula siempre desde el meta del producto, así
+     * que es seguro que este hook se dispare varias veces por request.
+     */
+    public function apply_real_price_to_cart( $cart ): void {
+        if ( is_admin() && ! defined( 'DOING_AJAX' ) ) return;
+
+        $discount = $this->get_real_price_role_discount();
+        if ( null === $discount ) return;
+
+        foreach ( $cart->get_cart() as $cart_item ) {
+            if ( empty( $cart_item['data'] ) || ! is_object( $cart_item['data'] ) ) continue;
+
+            $final = $this->compute_real_price( (int) $cart_item['product_id'], $discount );
+            if ( null === $final ) continue;
+
+            $cart_item['data']->set_price( $final );
+        }
     }
 
     /**
@@ -2102,6 +2217,9 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     public function product_data_panel() {
+        $product_id = get_the_ID();
+        $real_pvp   = get_post_meta( $product_id, '_mad_real_pvp', true );
+        $valor_base = get_post_meta( $product_id, '_mad_valor_base', true );
         ?>
         <div id="mad_quotes_product_data" class="panel woocommerce_options_panel">
             <div class="options_group">
@@ -2118,14 +2236,43 @@ return new class( $core ) implements MAD_Suite_Module {
                     </span>
                 </p>
             </div>
+            <div class="options_group">
+                <?php woocommerce_wp_text_input( [
+                    'id'                => 'mad_real_pvp',
+                    'value'             => $real_pvp,
+                    'label'             => __( 'PVP real (precio público)', 'mad-suite' ),
+                    'description'       => __( 'El precio real de este producto, aparte del precio de WooCommerce (que puede ser un valor simbólico usado para el carrito y el feed de Google Shopping). Los roles con "Precio real" activado en Ajustes ven y pagan este valor menos su descuento de rol.', 'mad-suite' ),
+                    'desc_tip'          => false,
+                    'data_type'         => 'price',
+                    'custom_attributes' => [ 'step' => '0.01', 'min' => '0' ],
+                ] ); ?>
+                <?php woocommerce_wp_text_input( [
+                    'id'                => 'mad_valor_base',
+                    'value'             => $valor_base,
+                    'label'             => __( 'Valor base / costo', 'mad-suite' ),
+                    'description'       => __( 'Referencia de costo, visible junto al precio real solo para los roles con "Precio real" activado. Déjalo vacío para no mostrarlo.', 'mad-suite' ),
+                    'desc_tip'          => false,
+                    'data_type'         => 'price',
+                    'custom_attributes' => [ 'step' => '0.01', 'min' => '0' ],
+                ] ); ?>
+            </div>
         </div>
         <?php
     }
 
     public function save_product_meta( $post_id ) {
-        // La configuración de precios usa los campos nativos de WooCommerce:
-        // Precio regular → cotización | Precio de oferta → profesionales.
-        // No hay metadatos adicionales que guardar.
+        // Precio de cotización/profesionales → campos nativos de WooCommerce (sin cambios).
+        foreach ( [ 'mad_real_pvp' => '_mad_real_pvp', 'mad_valor_base' => '_mad_valor_base' ] as $field => $meta_key ) {
+            if ( ! isset( $_POST[ $field ] ) ) continue;
+
+            $raw = wc_clean( wp_unslash( $_POST[ $field ] ) );
+            if ( '' === $raw ) {
+                delete_post_meta( $post_id, $meta_key );
+                continue;
+            }
+
+            update_post_meta( $post_id, $meta_key, wc_format_decimal( $raw ) );
+        }
     }
 
     /* ================================================================ */
@@ -2386,6 +2533,38 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<p class="description">' . esc_html( $args['desc'] ?? '' ) . '</p>';
     }
 
+    public function field_real_price_roles( $args ) {
+        $settings = mad_quotes_get_settings();
+        $map      = (array) ( $settings['real_price_roles'] ?? [] );
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $roles    = wp_roles()->roles;
+
+        echo '<table class="widefat striped" style="max-width:480px;"><thead><tr>'
+            . '<th>' . esc_html__( 'Rol', 'mad-suite' ) . '</th>'
+            . '<th>' . esc_html__( 'Activar', 'mad-suite' ) . '</th>'
+            . '<th>' . esc_html__( 'Descuento %', 'mad-suite' ) . '</th>'
+            . '</tr></thead><tbody>';
+
+        foreach ( $roles as $slug => $role ) {
+            $enabled  = ! empty( $map[ $slug ]['enabled'] );
+            $discount = isset( $map[ $slug ]['discount'] ) ? (float) $map[ $slug ]['discount'] : 0;
+
+            printf(
+                '<tr><td>%1$s</td>'
+                . '<td><input type="checkbox" name="%2$s[real_price_roles][%3$s][enabled]" value="1" %4$s></td>'
+                . '<td><input type="number" step="0.01" min="0" max="100" style="width:80px;" name="%2$s[real_price_roles][%3$s][discount]" value="%5$s"> %%</td></tr>',
+                esc_html( translate_user_role( $role['name'] ) ),
+                esc_attr( $opt_key ),
+                esc_attr( $slug ),
+                checked( $enabled, true, false ),
+                esc_attr( $discount )
+            );
+        }
+
+        echo '</tbody></table>';
+        echo '<p class="description">' . esc_html( $args['desc'] ?? '' ) . '</p>';
+    }
+
     /** Renderiza el shortcode [mad_quote_cart] para incrustar en cualquier página. */
     public function shortcode_quote_cart(): string {
         if ( ! $this->current_user_is_quote_role() ) return '';
@@ -2574,6 +2753,17 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $clean['quote_cart_page_id']   = absint( $input['quote_cart_page_id'] ?? 0 );
         $clean['payment_proof_strict'] = ! empty( $input['payment_proof_strict'] );
+
+        $clean['real_price_roles'] = [];
+        foreach ( (array) ( $input['real_price_roles'] ?? [] ) as $slug => $row ) {
+            $slug = sanitize_key( $slug );
+            if ( ! $slug ) continue;
+
+            $clean['real_price_roles'][ $slug ] = [
+                'enabled'  => ! empty( $row['enabled'] ) ? 1 : 0,
+                'discount' => max( 0, min( 100, (float) ( $row['discount'] ?? 0 ) ) ),
+            ];
+        }
 
         return $clean;
     }
