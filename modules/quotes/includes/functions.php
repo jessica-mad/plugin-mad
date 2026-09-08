@@ -142,6 +142,7 @@ function mad_quotes_get_settings() {
         'quote_cart_page_id'       => 0,
         'payment_proof_strict'     => false,
         'real_price_roles'         => [],
+        'add_to_cart_notice_text'  => __( 'a tu lista de precios', 'mad-suite' ),
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );

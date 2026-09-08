@@ -65,14 +65,18 @@ return new class( $core ) implements MAD_Suite_Module {
 
         add_action( 'wp_enqueue_scripts', [ $this, 'maybe_enqueue_assets' ] );
 
-        // Panel inline, no popup: se imprime justo debajo del formulario de
-        // "Añadir al carrito" en la ficha de producto (fuera del </form> del
-        // carrito, para no anidar el <form> del formulario embebido dentro
-        // de él), y como aviso arriba de la tabla en la página de Carrito
-        // (fallback si por lo que sea el evento added_to_cart no llegó a
-        // dispararse en la ficha).
-        add_action( 'woocommerce_after_add_to_cart_form', [ $this, 'render_panel_product' ] );
-        add_action( 'woocommerce_before_cart_table',       [ $this, 'render_panel_cart' ] );
+        // Panel inline, no popup: se imprime justo después del bloque de
+        // avisos de WooCommerce (".woocommerce-notices-wrapper", donde
+        // aparece el "Se agregó [producto] a tu carrito/lista de precios")
+        // en la ficha de producto — prioridad 20 para correr después de que
+        // wc_print_notices() imprima ese bloque en woocommerce_before_single_product
+        // (prioridad 10). Se queda oculto hasta que added_to_cart lo abre,
+        // así que en la carga inicial no se nota que está ahí.
+        // En la página de Carrito, como aviso arriba de la tabla (fallback
+        // si por lo que sea el evento added_to_cart no llegó a dispararse
+        // en la ficha).
+        add_action( 'woocommerce_before_single_product', [ $this, 'render_panel_product' ], 20 );
+        add_action( 'woocommerce_before_cart_table',      [ $this, 'render_panel_cart' ] );
 
         // Puente: al enviarse el form de Fluent Forms, guardar el email en
         // la sesión de WooCommerce. Guardas exactamente como se pidió: no

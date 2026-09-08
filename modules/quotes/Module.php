@@ -139,6 +139,7 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'wp_head',                                     [ $this, 'b2b_price_labels_css' ] );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
+        add_filter( 'wc_add_to_cart_message_html',                 [ $this, 'rename_cart_in_add_to_cart_message' ], 20, 2 );
 
         // ── WPML: registrar strings traducibles en cada carga ────────────────
         add_action( 'init', [ $this, 'register_wpml_strings' ], 20 );
@@ -308,6 +309,13 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_button_text',
             'mad_quotes_roles',
             __( 'Texto del botón en páginas de producto y carrito. Ej: "Solicitar presupuesto". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
+        );
+        $this->register_field(
+            'add_to_cart_notice_text',
+            __( 'Texto del aviso "añadido al carrito"', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_roles',
+            __( 'Reemplaza "a tu carrito" en el aviso que WooCommerce muestra al agregar un producto (ej. "a tu lista de precios"). Deja en blanco para no tocar el texto original.', 'mad-suite' )
         );
         $this->register_field(
             'quote_cart_page_id',
@@ -686,6 +694,27 @@ return new class( $core ) implements MAD_Suite_Module {
         $settings    = mad_quotes_get_settings();
         $custom_text = trim( $this->resolve_button_text( $settings ) );
         return $custom_text !== '' ? $custom_text : $text;
+    }
+
+    /**
+     * Reemplaza "a tu carrito" en el aviso nativo de WooCommerce ("X ha sido
+     * añadido a tu carrito.") para usuarios de rol presupuesto. WooCommerce
+     * no expone las piezas del mensaje por separado (solo el HTML final), así
+     * que el reemplazo es sobre el texto ya armado — mismo enfoque que se usa
+     * para personalizar este aviso en cualquier tienda WooCommerce.
+     */
+    public function rename_cart_in_add_to_cart_message( $message, $products ) {
+        if ( ! $this->current_user_is_quote_role() ) return $message;
+
+        $settings = mad_quotes_get_settings();
+        $replacement = trim( (string) ( $settings['add_to_cart_notice_text'] ?? '' ) );
+        if ( '' === $replacement ) return $message;
+
+        return str_replace(
+            [ 'a tu carrito', 'a tu carro' ],
+            $replacement,
+            $message
+        );
     }
 
     /**
@@ -2734,7 +2763,8 @@ return new class( $core ) implements MAD_Suite_Module {
             ? array_values( array_map( 'sanitize_text_field', (array) $input['quote_roles'] ) )
             : [];
 
-        $clean['quote_expiry_days'] = absint( $input['quote_expiry_days'] ?? 0 );
+        $clean['quote_expiry_days']       = absint( $input['quote_expiry_days'] ?? 0 );
+        $clean['add_to_cart_notice_text'] = sanitize_text_field( $input['add_to_cart_notice_text'] ?? '' );
 
         $raw_button = $input['quote_button_text'] ?? [];
         if ( is_array( $raw_button ) ) {
