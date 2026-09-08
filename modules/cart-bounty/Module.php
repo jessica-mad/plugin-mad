@@ -78,11 +78,42 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'woocommerce_before_single_product', [ $this, 'render_panel_product' ], 20 );
         add_action( 'woocommerce_before_cart_table',      [ $this, 'render_panel_cart' ] );
 
+        // La ficha de producto de este sitio hace un POST clásico con recarga
+        // completa (el AJAX de WooCommerce en Ajustes → Productos solo cubre
+        // los botones del listado/tienda, no la ficha individual) — cualquier
+        // disparador en JS se pierde con la recarga. Por eso el disparo real
+        // es del lado del servidor: woocommerce_add_to_cart se dispara sí o
+        // sí (con o sin AJAX) en el momento en que WooCommerce procesa el
+        // agregado; guardamos un flag de sesión y, en la página que carga
+        // justo después (la misma ficha recargada, o el carrito si el sitio
+        // redirige ahí), el panel se imprime ya abierto en vez de esperar un
+        // evento de JS que en este sitio nunca llega a disparar.
+        add_action( 'woocommerce_add_to_cart', [ $this, 'flag_just_added_to_cart' ], 10, 6 );
+
         // Puente: al enviarse el form de Fluent Forms, guardar el email en
         // la sesión de WooCommerce. Guardas exactamente como se pidió: no
         // tocar nada si el form no es el configurado, si el email es
         // inválido, o si WooCommerce/la sesión no están disponibles.
         add_action( 'fluentform/submission_inserted', [ $this, 'bridge_email_to_woo_session' ], 10, 3 );
+    }
+
+    /** Marca en la sesión que se acaba de agregar un producto, para abrir el panel ya desplegado en la próxima carga de página. */
+    public function flag_just_added_to_cart( $cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data ) {
+        if ( ! $this->should_show() ) return;
+        if ( ! function_exists( 'WC' ) || ! WC()->session ) return;
+
+        WC()->session->set( 'mad_cart_bounty_just_added', 1 );
+    }
+
+    /** Lee y consume (una sola vez) el flag de "se acaba de agregar un producto". */
+    private function consume_just_added_flag(): bool {
+        if ( ! function_exists( 'WC' ) || ! WC()->session ) return false;
+
+        $flag = (bool) WC()->session->get( 'mad_cart_bounty_just_added' );
+        if ( $flag ) {
+            WC()->session->set( 'mad_cart_bounty_just_added', 0 );
+        }
+        return $flag;
     }
 
     /* ================================================================ */
@@ -172,10 +203,12 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     private function render_panel() {
-        $settings = $this->get_settings();
-        $form_id  = $this->get_form_id();
+        $settings   = $this->get_settings();
+        $form_id    = $this->get_form_id();
+        $just_added = $this->consume_just_added_flag();
+        $classes    = 'mad-cb-panel' . ( $just_added ? ' mad-cb-open' : '' );
         ?>
-        <div id="mad-cart-bounty-panel" class="mad-cb-panel" aria-hidden="true">
+        <div id="mad-cart-bounty-panel" class="<?php echo esc_attr( $classes ); ?>" aria-hidden="<?php echo $just_added ? 'false' : 'true'; ?>">
             <button type="button" class="mad-cb-close" data-mad-cb-close aria-label="<?php esc_attr_e( 'Cerrar', 'mad-suite' ); ?>">&times;</button>
             <h5 id="mad-cb-title" class="mad-cb-title"><?php echo esc_html( $settings['title_text'] ); ?></h5>
             <div class="mad-cb-form">
