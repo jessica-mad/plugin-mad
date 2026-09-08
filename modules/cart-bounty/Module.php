@@ -51,7 +51,7 @@ return new class( $core ) implements MAD_Suite_Module {
         return [
             'WooCommerce'           => 'woocommerce/woocommerce.php',
             'Fluent Forms'          => 'fluentform/fluentform.php',
-            'FunnelKit Automations' => 'funnelkit-automations/funnelkit-automations.php',
+            'FunnelKit Automations' => 'wp-marketing-automations/wp-marketing-automations.php',
         ];
     }
 
