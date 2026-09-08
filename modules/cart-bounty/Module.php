@@ -69,18 +69,16 @@ return new class( $core ) implements MAD_Suite_Module {
 
         add_action( 'wp_enqueue_scripts', [ $this, 'maybe_enqueue_assets' ] );
 
-        // Panel inline, no popup: se imprime justo después del bloque de
-        // avisos de WooCommerce (".woocommerce-notices-wrapper", donde
-        // aparece el "Se agregó [producto] a tu carrito/lista de precios")
-        // en la ficha de producto — prioridad 20 para correr después de que
-        // wc_print_notices() imprima ese bloque en woocommerce_before_single_product
-        // (prioridad 10). Se queda oculto hasta que added_to_cart lo abre,
-        // así que en la carga inicial no se nota que está ahí.
-        // En la página de Carrito, como aviso arriba de la tabla (fallback
-        // si por lo que sea el evento added_to_cart no llegó a dispararse
-        // en la ficha).
-        add_action( 'woocommerce_before_single_product', [ $this, 'render_panel_product' ], 20 );
-        add_action( 'woocommerce_before_cart_table',      [ $this, 'render_panel_cart' ] );
+        // El log confirmó que woocommerce_before_single_product NUNCA se
+        // dispara en este sitio (la plantilla arma la ficha con sus propios
+        // widgets — típico de temas con Elementor/page builders — sin pasar
+        // por la plantilla clásica de WooCommerce). En vez de apostar a otro
+        // hook de plantilla que tampoco sabemos si existe, el panel se
+        // imprime en wp_footer (esto SÍ se dispara siempre, es un hook de
+        // WordPress, no de la plantilla de producto) y el JS lo reubica
+        // junto al formulario "form.cart" — esa clase sí existe seguro,
+        // porque de ahí sale el botón que ya confirmamos que funciona.
+        add_action( 'wp_footer', [ $this, 'render_panel_footer' ] );
 
         // La ficha de producto de este sitio hace un POST clásico con recarga
         // completa (el AJAX de WooCommerce en Ajustes → Productos solo cubre
@@ -115,15 +113,30 @@ return new class( $core ) implements MAD_Suite_Module {
         $this->log( 'flag_just_added_to_cart: flag guardado en la sesión.' );
     }
 
-    /** Lee y consume (una sola vez) el flag de "se acaba de agregar un producto". */
-    private function consume_just_added_flag(): bool {
-        if ( ! function_exists( 'WC' ) || ! WC()->session ) return false;
+    /** @var bool|null Cache del flag ya consumido, para leerlo una sola vez por request. */
+    private $just_added_cache = null;
 
-        $flag = (bool) WC()->session->get( 'mad_cart_bounty_just_added' );
-        if ( $flag ) {
-            WC()->session->set( 'mad_cart_bounty_just_added', 0 );
+    /**
+     * Lee y consume (una sola vez POR REQUEST, cacheado) el flag de "se
+     * acaba de agregar un producto". Se llama tanto desde maybe_enqueue_assets()
+     * (hook wp_enqueue_scripts, corre primero) como desde render_panel()
+     * (hook wp_footer, corre después) — el caché evita que la segunda
+     * lectura ya encuentre el flag limpiado por la primera.
+     */
+    private function was_just_added(): bool {
+        if ( null !== $this->just_added_cache ) {
+            return $this->just_added_cache;
         }
-        return $flag;
+
+        $this->just_added_cache = false;
+        if ( function_exists( 'WC' ) && WC()->session ) {
+            $this->just_added_cache = (bool) WC()->session->get( 'mad_cart_bounty_just_added' );
+            if ( $this->just_added_cache ) {
+                WC()->session->set( 'mad_cart_bounty_just_added', 0 );
+            }
+        }
+
+        return $this->just_added_cache;
     }
 
     /** Log a WooCommerce → Estado → Registros (archivo "mad-cart-bounty-..."). */
@@ -205,31 +218,23 @@ return new class( $core ) implements MAD_Suite_Module {
             'isCart'          => function_exists( 'is_cart' ) && is_cart(),
             'cartHasItems'    => ( function_exists( 'WC' ) && WC()->cart ) ? ! WC()->cart->is_empty() : false,
             'alreadyCaptured' => $this->already_captured_this_session(),
+            'justAdded'       => $this->was_just_added(),
         ] );
     }
 
-    public function render_panel_product() {
-        if ( ! function_exists( 'is_product' ) || ! is_product() ) return;
+    public function render_panel_footer() {
+        if ( ! function_exists( 'is_product' ) || ! ( is_product() || is_cart() ) ) return;
         if ( ! $this->should_show() ) return;
-        $this->log( 'render_panel_product: imprimiendo panel en la ficha.' );
-        $this->render_panel();
-    }
-
-    public function render_panel_cart() {
-        if ( ! function_exists( 'is_cart' ) || ! is_cart() ) return;
-        if ( ! $this->should_show() ) return;
-        $this->log( 'render_panel_cart: imprimiendo panel en el carrito.' );
+        $this->log( 'render_panel_footer: imprimiendo panel en wp_footer.' );
         $this->render_panel();
     }
 
     private function render_panel() {
-        $settings   = $this->get_settings();
-        $form_id    = $this->get_form_id();
-        $just_added = $this->consume_just_added_flag();
-        $classes    = 'mad-cb-panel' . ( $just_added ? ' mad-cb-open' : '' );
-        $this->log( 'render_panel: ' . ( $just_added ? 'flag activo — panel impreso ya abierto.' : 'sin flag — panel impreso oculto, a la espera de JS.' ) );
+        $settings = $this->get_settings();
+        $form_id  = $this->get_form_id();
+        $this->log( 'render_panel: panel impreso oculto en wp_footer — JS lo reubica y, si corresponde, lo abre.' );
         ?>
-        <div id="mad-cart-bounty-panel" class="<?php echo esc_attr( $classes ); ?>" aria-hidden="<?php echo $just_added ? 'false' : 'true'; ?>">
+        <div id="mad-cart-bounty-panel" class="mad-cb-panel" aria-hidden="true">
             <button type="button" class="mad-cb-close" data-mad-cb-close aria-label="<?php esc_attr_e( 'Cerrar', 'mad-suite' ); ?>">&times;</button>
             <h5 id="mad-cb-title" class="mad-cb-title"><?php echo esc_html( $settings['title_text'] ); ?></h5>
             <div class="mad-cb-form">

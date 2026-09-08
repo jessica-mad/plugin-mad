@@ -82,11 +82,42 @@
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
+    /**
+     * El panel se imprime en wp_footer (lo único que se dispara siempre,
+     * sin importar cómo la plantilla arme la ficha de producto). Acá se
+     * reubica junto al formulario real de WooCommerce, que sabemos que
+     * existe porque de ahí sale el botón de añadir al carrito que ya
+     * funciona. Si no se encuentra ningún ancla razonable, se deja donde
+     * está (footer) en vez de no mostrarse nunca.
+     */
+    function relocatePanel($panel) {
+        var $productAnchor = $('form.cart').first();
+        if ($productAnchor.length) {
+            $panel.insertAfter($productAnchor);
+            return;
+        }
+
+        var $cartAnchor = $('.woocommerce-cart-form, .cart-collaterals, .wc-block-cart').first();
+        if ($cartAnchor.length) {
+            $panel.insertBefore($cartAnchor);
+        }
+    }
+
     $(function () {
         var $panel = $('#mad-cart-bounty-panel');
         if (!$panel.length) return;
 
         if (window.madCartBounty && window.madCartBounty.alreadyCaptured) return;
+
+        relocatePanel($panel);
+
+        // El PHP siempre imprime el panel oculto (para evitar el parpadeo
+        // en la posición vieja del footer antes de reubicarse). Si el flag
+        // de sesión indica que se acaba de agregar un producto, lo abrimos
+        // recién ahora, ya en su posición final junto a form.cart.
+        if (window.madCartBounty && window.madCartBounty.justAdded) {
+            openPanel($panel);
+        }
 
         $(document).on('click', '[data-mad-cb-close]', function (e) {
             e.preventDefault();
