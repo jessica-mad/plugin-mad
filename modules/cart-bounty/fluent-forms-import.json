@@ -1,0 +1,126 @@
+{
+    "forms": [
+        {
+            "title": "Cart Bounty — Captura de email",
+            "form_fields": {
+                "fields": [
+                    {
+                        "index": 0,
+                        "element": "input_email",
+                        "attributes": {
+                            "name": "email",
+                            "type": "email",
+                            "class": "",
+                            "id": "",
+                            "value": "",
+                            "placeholder": "Su correo electrónico",
+                            "maxlength": ""
+                        },
+                        "settings": {
+                            "container_class": "",
+                            "label_placement": "",
+                            "admin_field_label": "",
+                            "help_message": "",
+                            "validation_rules": {
+                                "required": {
+                                    "value": true,
+                                    "message": "Este campo es obligatorio."
+                                },
+                                "valid_email": {
+                                    "value": true,
+                                    "message": "Ingrese un correo electrónico válido."
+                                }
+                            },
+                            "conditional_logics": []
+                        },
+                        "editor_options": {
+                            "title": "Email Address",
+                            "element": "input_email"
+                        },
+                        "uniqElKey": "el_email_capture"
+                    },
+                    {
+                        "index": 1,
+                        "element": "input_text",
+                        "attributes": {
+                            "name": "hp_website",
+                            "type": "text",
+                            "class": "mad-cb-honeypot",
+                            "id": "",
+                            "value": "",
+                            "placeholder": "",
+                            "maxlength": ""
+                        },
+                        "settings": {
+                            "container_class": "mad-cb-honeypot-wrap",
+                            "label_placement": "",
+                            "admin_field_label": "Honeypot (no completar)",
+                            "help_message": "",
+                            "validation_rules": {
+                                "required": {
+                                    "value": false,
+                                    "message": "This field is required"
+                                }
+                            },
+                            "conditional_logics": []
+                        },
+                        "editor_options": {
+                            "title": "Honeypot",
+                            "element": "input_text"
+                        },
+                        "uniqElKey": "el_honeypot"
+                    },
+                    {
+                        "index": 2,
+                        "element": "button",
+                        "attributes": {
+                            "type": "submit",
+                            "class": ""
+                        },
+                        "settings": {
+                            "button_style": "default",
+                            "align": "left",
+                            "button_size": "md"
+                        },
+                        "editor_options": {
+                            "title": "Submit Button",
+                            "element": "button"
+                        },
+                        "uniqElKey": "el_submit"
+                    }
+                ],
+                "submitButtonText": "Enviar"
+            },
+            "form_settings": {
+                "confirmation": {
+                    "redirectTo": "samePage",
+                    "messageToShow": "Gracias. Nos pondremos en contacto.",
+                    "customTo": "",
+                    "samePageFormBehavior": "hide_form"
+                },
+                "restrictions": {
+                    "denyEmptySubmission": {
+                        "enabled": true,
+                        "message": "El envío está vacío. Por favor, intente nuevamente."
+                    },
+                    "limitNumberOfEntries": {
+                        "enabled": false
+                    },
+                    "scheduleForm": {
+                        "enabled": false
+                    },
+                    "requireLogin": {
+                        "enabled": false
+                    }
+                },
+                "layout": {
+                    "labelPlacement": "top",
+                    "helpMessagePlacement": "with_label",
+                    "errorMessagePlacement": "inline",
+                    "asteriskPlacement": "asterisk-right"
+                }
+            },
+            "note": "IMPORTANTE: este archivo es una reconstrucción del formato de exportación de Fluent Forms hecha sin acceso al sitio real — no se pudo probar contra tu instalación/versión exacta. Si la importación (Fluent Forms → Ajustes → Importar/Exportar → Importar formularios) falla o el formulario importado se ve raro, la alternativa segura es crearlo a mano en 2 minutos: un campo 'Email Address' (name=email, required + validación de email) + un campo de texto oculto como honeypot (o, mejor, activar el honeypot nativo en Configuración del formulario → Spam & Seguridad si tu versión de Fluent Forms Pro lo trae). El nombre del campo de email DEBE ser exactamente 'email' — el puente PHP lee $formData['email']."
+        }
+    ]
+}

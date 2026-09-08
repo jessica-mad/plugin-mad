@@ -1,0 +1,82 @@
+.mad-cb-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 999999;
+    display: none;
+}
+
+.mad-cb-modal.mad-cb-open {
+    display: block;
+}
+
+.mad-cb-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, .55);
+}
+
+.mad-cb-dialog {
+    position: relative;
+    max-width: 420px;
+    width: calc(100% - 32px);
+    margin: 10vh auto 0;
+    background: #fff;
+    border-radius: 8px;
+    padding: 28px 24px 20px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .25);
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.mad-cb-close {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    width: 32px;
+    height: 32px;
+    background: none;
+    border: none;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    color: #666;
+}
+
+.mad-cb-close:hover {
+    color: #111;
+}
+
+.mad-cb-title {
+    margin: 0 0 16px;
+    padding-right: 24px;
+    font-size: 1.15em;
+    line-height: 1.35;
+}
+
+.mad-cb-form .ff-el-form-control {
+    width: 100%;
+}
+
+/* Honeypot: oculto para personas, visible para bots que rellenan todo */
+.mad-cb-honeypot-wrap,
+.mad-cb-form .mad-cb-honeypot {
+    position: absolute !important;
+    left: -9999px !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
+}
+
+.mad-cb-consent {
+    margin: 14px 0 0;
+    font-size: .8em;
+    line-height: 1.4;
+    color: #777;
+}
+
+@media (max-width: 480px) {
+    .mad-cb-dialog {
+        margin-top: 6vh;
+        padding: 22px 18px 16px;
+    }
+}
