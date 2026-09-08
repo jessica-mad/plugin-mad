@@ -64,7 +64,15 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $this->get_form_id() ) return; // sin form_id configurado, el módulo no hace nada en el front
 
         add_action( 'wp_enqueue_scripts', [ $this, 'maybe_enqueue_assets' ] );
-        add_action( 'wp_footer',          [ $this, 'render_modal' ] );
+
+        // Panel inline, no popup: se imprime justo debajo del formulario de
+        // "Añadir al carrito" en la ficha de producto (fuera del </form> del
+        // carrito, para no anidar el <form> del formulario embebido dentro
+        // de él), y como aviso arriba de la tabla en la página de Carrito
+        // (fallback si por lo que sea el evento added_to_cart no llegó a
+        // dispararse en la ficha).
+        add_action( 'woocommerce_after_add_to_cart_form', [ $this, 'render_panel_product' ] );
+        add_action( 'woocommerce_before_cart_table',       [ $this, 'render_panel_cart' ] );
 
         // Puente: al enviarse el form de Fluent Forms, guardar el email en
         // la sesión de WooCommerce. Guardas exactamente como se pidió: no
@@ -102,7 +110,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
         add_settings_field(
             'title_text',
-            __( 'Título / texto del popup', 'mad-suite' ),
+            __( 'Título / texto del panel', 'mad-suite' ),
             [ $this, 'field_title_text' ],
             $this->opt_key,
             'mad_cb_main'
@@ -122,6 +130,7 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function maybe_enqueue_assets() {
+        if ( ! function_exists( 'is_product' ) || ! ( is_product() || is_cart() ) ) return;
         if ( ! $this->should_show() ) return;
 
         wp_enqueue_style(
@@ -146,22 +155,29 @@ return new class( $core ) implements MAD_Suite_Module {
         ] );
     }
 
-    public function render_modal() {
+    public function render_panel_product() {
+        if ( ! function_exists( 'is_product' ) || ! is_product() ) return;
         if ( ! $this->should_show() ) return;
+        $this->render_panel();
+    }
 
+    public function render_panel_cart() {
+        if ( ! function_exists( 'is_cart' ) || ! is_cart() ) return;
+        if ( ! $this->should_show() ) return;
+        $this->render_panel();
+    }
+
+    private function render_panel() {
         $settings = $this->get_settings();
         $form_id  = $this->get_form_id();
         ?>
-        <div id="mad-cart-bounty-modal" class="mad-cb-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="mad-cb-title">
-            <div class="mad-cb-overlay" data-mad-cb-close></div>
-            <div class="mad-cb-dialog">
-                <button type="button" class="mad-cb-close" data-mad-cb-close aria-label="<?php esc_attr_e( 'Cerrar', 'mad-suite' ); ?>">&times;</button>
-                <h2 id="mad-cb-title" class="mad-cb-title"><?php echo esc_html( $settings['title_text'] ); ?></h2>
-                <div class="mad-cb-form">
-                    <?php echo do_shortcode( '[fluentform id="' . absint( $form_id ) . '"]' ); ?>
-                </div>
-                <p class="mad-cb-consent"><?php echo esc_html( $settings['consent_text'] ); ?></p>
+        <div id="mad-cart-bounty-panel" class="mad-cb-panel" aria-hidden="true">
+            <button type="button" class="mad-cb-close" data-mad-cb-close aria-label="<?php esc_attr_e( 'Cerrar', 'mad-suite' ); ?>">&times;</button>
+            <h5 id="mad-cb-title" class="mad-cb-title"><?php echo esc_html( $settings['title_text'] ); ?></h5>
+            <div class="mad-cb-form">
+                <?php echo do_shortcode( '[fluentform id="' . absint( $form_id ) . '"]' ); ?>
             </div>
+            <p class="mad-cb-consent"><?php echo esc_html( $settings['consent_text'] ); ?></p>
         </div>
         <?php
     }
@@ -169,12 +185,12 @@ return new class( $core ) implements MAD_Suite_Module {
     /**
      * Solo mostrar a invitados, en ficha de producto o carrito, si hay
      * form_id configurado y todavía no se capturó el email esta sesión.
+     * El chequeo de página (is_product()/is_cart()) lo hace cada caller.
      */
     private function should_show(): bool {
         if ( is_admin() ) return false;
         if ( is_user_logged_in() ) return false;
         if ( ! $this->get_form_id() ) return false;
-        if ( ! function_exists( 'is_product' ) || ! ( is_product() || is_cart() ) ) return false;
         if ( $this->already_captured_this_session() ) return false;
 
         return true;
