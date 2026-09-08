@@ -59,6 +59,29 @@
         observer.observe($formWrap[0], { childList: true, subtree: true });
     }
 
+    /**
+     * Disparador robusto ante temas con AJAX propio: en vez de depender de
+     * que la plantilla dispare el evento estándar `added_to_cart` de
+     * WooCommerce (algunos temas premium implementan su propio add-to-cart
+     * y nunca lo disparan), observamos directamente el bloque de avisos de
+     * WooCommerce (".woocommerce-notices-wrapper") — confirmado que SÍ se
+     * puebla con el aviso "Se agregó [producto]..." al hacer clic, sin
+     * importar qué JS de la plantilla lo haya provocado.
+     */
+    function watchForAddToCartNotice($panel) {
+        if (typeof MutationObserver === 'undefined') return;
+
+        var noticeSelector = '.woocommerce-notices-wrapper .woocommerce-message, .woocommerce-notices-wrapper .woocommerce-info';
+
+        var observer = new MutationObserver(function () {
+            if ($(noticeSelector).length) {
+                openPanel($panel);
+            }
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+
     $(function () {
         var $panel = $('#mad-cart-bounty-panel');
         if (!$panel.length) return;
@@ -70,17 +93,21 @@
             closePanel($panel);
         });
 
-        // Disparador: WooCommerce completó el add-to-cart por AJAX. Requiere
-        // que "Habilitar AJAX en los botones añadir al carrito" esté activo
-        // en WooCommerce → Ajustes → Productos (si no, la página navega y
-        // este evento nunca llega a dispararse en la ficha).
+        // Disparador estándar: WooCommerce completó el add-to-cart por AJAX
+        // nativo. Requiere que "Habilitar AJAX en los botones añadir al
+        // carrito" esté activo en WooCommerce → Ajustes → Productos.
         $(document.body).on('added_to_cart', function () {
             openPanel($panel);
         });
 
+        // Refuerzo: si la plantilla usa su propio AJAX y nunca dispara el
+        // evento de arriba, esto igual detecta el aviso de "añadido" apenas
+        // aparece en el DOM.
+        watchForAddToCartNotice($panel);
+
         // Fallback: si llegamos a la página de Carrito con productos y sin
-        // haber capturado el email todavía (por si el evento de arriba no
-        // llegó a dispararse por algún motivo).
+        // haber capturado el email todavía (por si nada de lo anterior
+        // llegó a dispararse en la ficha).
         if (window.madCartBounty && window.madCartBounty.isCart && window.madCartBounty.cartHasItems) {
             openPanel($panel);
         }
