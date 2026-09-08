@@ -61,7 +61,11 @@ return new class( $core ) implements MAD_Suite_Module {
 
     public function init() {
         if ( ! class_exists( 'WooCommerce' ) ) return;
-        if ( ! $this->get_form_id() ) return; // sin form_id configurado, el módulo no hace nada en el front
+        if ( ! $this->get_form_id() ) {
+            $this->log( 'init: sin form_id configurado — el módulo no hace nada en el front hasta que se configure en Ajustes.' );
+            return;
+        }
+        $this->log( 'init: módulo activo.', [ 'form_id' => $this->get_form_id() ] );
 
         add_action( 'wp_enqueue_scripts', [ $this, 'maybe_enqueue_assets' ] );
 
@@ -99,10 +103,16 @@ return new class( $core ) implements MAD_Suite_Module {
 
     /** Marca en la sesión que se acaba de agregar un producto, para abrir el panel ya desplegado en la próxima carga de página. */
     public function flag_just_added_to_cart( $cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data ) {
+        $this->log( 'woocommerce_add_to_cart disparado.', [ 'product_id' => $product_id ] );
+
         if ( ! $this->should_show() ) return;
-        if ( ! function_exists( 'WC' ) || ! WC()->session ) return;
+        if ( ! function_exists( 'WC' ) || ! WC()->session ) {
+            $this->log( 'flag_just_added_to_cart: WC()->session no disponible — no se puede guardar el flag.' );
+            return;
+        }
 
         WC()->session->set( 'mad_cart_bounty_just_added', 1 );
+        $this->log( 'flag_just_added_to_cart: flag guardado en la sesión.' );
     }
 
     /** Lee y consume (una sola vez) el flag de "se acaba de agregar un producto". */
@@ -114,6 +124,13 @@ return new class( $core ) implements MAD_Suite_Module {
             WC()->session->set( 'mad_cart_bounty_just_added', 0 );
         }
         return $flag;
+    }
+
+    /** Log a WooCommerce → Estado → Registros (archivo "mad-cart-bounty-..."). */
+    private function log( string $message, array $context = [] ): void {
+        if ( ! function_exists( 'wc_get_logger' ) ) return;
+        $context['source'] = 'mad-cart-bounty';
+        wc_get_logger()->debug( $message, $context );
     }
 
     /* ================================================================ */
@@ -167,6 +184,7 @@ return new class( $core ) implements MAD_Suite_Module {
     public function maybe_enqueue_assets() {
         if ( ! function_exists( 'is_product' ) || ! ( is_product() || is_cart() ) ) return;
         if ( ! $this->should_show() ) return;
+        $this->log( 'maybe_enqueue_assets: encolando CSS/JS.' );
 
         wp_enqueue_style(
             'mad-cart-bounty',
@@ -193,12 +211,14 @@ return new class( $core ) implements MAD_Suite_Module {
     public function render_panel_product() {
         if ( ! function_exists( 'is_product' ) || ! is_product() ) return;
         if ( ! $this->should_show() ) return;
+        $this->log( 'render_panel_product: imprimiendo panel en la ficha.' );
         $this->render_panel();
     }
 
     public function render_panel_cart() {
         if ( ! function_exists( 'is_cart' ) || ! is_cart() ) return;
         if ( ! $this->should_show() ) return;
+        $this->log( 'render_panel_cart: imprimiendo panel en el carrito.' );
         $this->render_panel();
     }
 
@@ -207,6 +227,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $form_id    = $this->get_form_id();
         $just_added = $this->consume_just_added_flag();
         $classes    = 'mad-cb-panel' . ( $just_added ? ' mad-cb-open' : '' );
+        $this->log( 'render_panel: ' . ( $just_added ? 'flag activo — panel impreso ya abierto.' : 'sin flag — panel impreso oculto, a la espera de JS.' ) );
         ?>
         <div id="mad-cart-bounty-panel" class="<?php echo esc_attr( $classes ); ?>" aria-hidden="<?php echo $just_added ? 'false' : 'true'; ?>">
             <button type="button" class="mad-cb-close" data-mad-cb-close aria-label="<?php esc_attr_e( 'Cerrar', 'mad-suite' ); ?>">&times;</button>
@@ -226,9 +247,19 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     private function should_show(): bool {
         if ( is_admin() ) return false;
-        if ( is_user_logged_in() ) return false;
-        if ( ! $this->get_form_id() ) return false;
-        if ( $this->already_captured_this_session() ) return false;
+
+        if ( is_user_logged_in() ) {
+            $this->log( 'should_show: false — usuario logueado (el panel solo es para invitados).' );
+            return false;
+        }
+        if ( ! $this->get_form_id() ) {
+            $this->log( 'should_show: false — sin form_id configurado.' );
+            return false;
+        }
+        if ( $this->already_captured_this_session() ) {
+            $this->log( 'should_show: false — el email ya se capturó en esta sesión.' );
+            return false;
+        }
 
         return true;
     }
@@ -243,13 +274,29 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function bridge_email_to_woo_session( $entryId, $formData, $form ) {
-        $target_form_id = $this->get_form_id();
+        $target_form_id    = $this->get_form_id();
+        $submitted_form_id = isset( $form->id ) ? (int) $form->id : null;
+        $this->log( 'fluentform/submission_inserted disparado.', [
+            'form_id_configurado' => $target_form_id,
+            'form_id_recibido'    => $submitted_form_id,
+            'campos_recibidos'    => implode( ', ', array_keys( (array) $formData ) ),
+        ] );
+
         if ( ! $target_form_id ) return;
-        if ( ! isset( $form->id ) || (int) $form->id !== $target_form_id ) return;
+        if ( ! isset( $form->id ) || (int) $form->id !== $target_form_id ) {
+            $this->log( 'bridge: form_id no coincide con el configurado — ignorado.' );
+            return;
+        }
 
         $email = isset( $formData['email'] ) ? sanitize_email( $formData['email'] ) : '';
-        if ( ! $email || ! is_email( $email ) ) return;
-        if ( ! function_exists( 'WC' ) || ! WC()->customer ) return;
+        if ( ! $email || ! is_email( $email ) ) {
+            $this->log( 'bridge: no se encontró un email válido en el campo "email" del formulario.' );
+            return;
+        }
+        if ( ! function_exists( 'WC' ) || ! WC()->customer ) {
+            $this->log( 'bridge: WC()->customer no disponible.' );
+            return;
+        }
 
         WC()->customer->set_billing_email( $email );
         WC()->customer->save();
@@ -257,6 +304,8 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( WC()->session ) {
             WC()->session->set( 'mad_cart_bounty_captured', 1 );
         }
+
+        $this->log( 'bridge: email guardado como billing_email en la sesión de WooCommerce.' );
     }
 
     /* ================================================================ */
