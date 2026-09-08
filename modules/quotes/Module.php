@@ -305,10 +305,17 @@ return new class( $core ) implements MAD_Suite_Module {
         );
         $this->register_field(
             'quote_button_text',
-            __( 'Texto del botón de solicitud', 'mad-suite' ),
+            __( 'Texto del botón "Añadir"', 'mad-suite' ),
             'field_button_text',
             'mad_quotes_roles',
-            __( 'Texto del botón en páginas de producto y carrito. Ej: "Solicitar presupuesto". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
+            __( 'Texto del botón en la ficha de producto (agrega el producto a la lista). Ej: "Añadir a la lista de precios". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
+        );
+        $this->register_field(
+            'quote_submit_button_text',
+            __( 'Texto del botón "Enviar solicitud"', 'mad-suite' ),
+            'field_multilang_text',
+            'mad_quotes_roles',
+            __( 'Texto del botón final, en la página de la lista de precios, que envía la solicitud (crea el pedido). Ej: "Enviar solicitud de lista de precios". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
         );
         $this->register_field(
             'add_to_cart_notice_text',
@@ -2600,9 +2607,9 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! function_exists( 'WC' ) || ! isset( WC()->cart ) ) return '';
 
         $settings  = mad_quotes_get_settings();
-        $btn_label = trim( $this->resolve_lang_text( $settings['quote_button_text'] ?? [] ) );
+        $btn_label = trim( $this->resolve_lang_text( $settings['quote_submit_button_text'] ?? [] ) );
         if ( $btn_label === '' ) {
-            $btn_label = __( 'Solicitar presupuesto', 'mad-suite' );
+            $btn_label = __( 'Enviar solicitud de lista de precios', 'mad-suite' );
         }
 
         ob_start();
@@ -2774,7 +2781,7 @@ return new class( $core ) implements MAD_Suite_Module {
             $clean['quote_button_text'] = sanitize_text_field( $raw_button );
         }
 
-        foreach ( [ 'mini_cart_view_cart_text', 'mini_cart_checkout_text' ] as $field ) {
+        foreach ( [ 'quote_submit_button_text', 'mini_cart_view_cart_text', 'mini_cart_checkout_text' ] as $field ) {
             $raw = $input[ $field ] ?? [];
             $clean[ $field ] = is_array( $raw )
                 ? array_map( 'sanitize_text_field', $raw )
