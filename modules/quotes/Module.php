@@ -2267,7 +2267,11 @@ return new class( $core ) implements MAD_Suite_Module {
                     $item->save();
                 }
             }
-            // Recalcular total del pedido; luego eliminar impuestos (presupuesto sin IVA)
+            // Los presupuestos no llevan IVA. calculate_totals() recalcula
+            // impuestos según la clase fiscal del producto y los suma al total
+            // ANTES de que lleguemos a poner los tax_total en 0 más abajo — si
+            // no reconstruimos el total a mano después, queda guardado el total
+            // con IVA adentro aunque las líneas de impuesto se vean en cero.
             $order->calculate_totals();
             $order->set_cart_tax( 0 );
             $order->set_shipping_tax( 0 );
@@ -2276,6 +2280,12 @@ return new class( $core ) implements MAD_Suite_Module {
                 $tax_item->set_shipping_tax_total( 0 );
                 $tax_item->save();
             }
+
+            $order_total = (float) $order->get_shipping_total();
+            foreach ( $order->get_items() as $line ) {
+                $order_total += (float) $line->get_total();
+            }
+            $order->set_total( $order_total );
             $order->save();
         }
 
