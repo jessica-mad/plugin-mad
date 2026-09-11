@@ -406,6 +406,11 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'wp_ajax_mad_quotes_send_quote',          [ $this, 'ajax_send_quote' ] );
         add_action( 'wp_ajax_mad_admin_upload_payment_proof', [ $this, 'ajax_admin_upload_payment_proof' ] );
 
+        // ── Crear presupuesto manual desde el admin ────────────────────
+        add_action( 'admin_post_mad_quotes_create_manual',      [ $this, 'handle_create_manual_quote' ] );
+        add_action( 'wp_ajax_mad_quotes_search_products_admin', [ $this, 'ajax_search_products_for_quote' ] );
+        add_action( 'wp_ajax_mad_quotes_search_customers_admin', [ $this, 'ajax_search_customers_for_quote' ] );
+
         // ── Panel de producto ──────────────────────────────────────────
         add_action( 'woocommerce_product_data_tabs',    [ $this, 'product_data_tab' ] );
         add_action( 'woocommerce_product_data_panels',  [ $this, 'product_data_panel' ] );
@@ -420,9 +425,19 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) {
             wp_die( esc_html__( 'Sin permisos.', 'mad-suite' ) );
         }
+
+        if ( 'new' === ( isset( $_GET['mad_action'] ) ? sanitize_key( $_GET['mad_action'] ) : '' ) ) {
+            include __DIR__ . '/views/new-quote.php';
+            return;
+        }
         ?>
         <div class="wrap">
-            <h1><?php echo esc_html( $this->title() ); ?></h1>
+            <h1>
+                <?php echo esc_html( $this->title() ); ?>
+                <a href="<?php echo esc_url( add_query_arg( [ 'page' => $this->menu_slug(), 'mad_action' => 'new' ], admin_url( 'admin.php' ) ) ); ?>" class="page-title-action">
+                    <?php esc_html_e( '+ Crear presupuesto', 'mad-suite' ); ?>
+                </a>
+            </h1>
             <form method="post" action="options.php">
                 <?php
                 settings_fields( $this->menu_slug() );
@@ -855,20 +870,7 @@ return new class( $core ) implements MAD_Suite_Module {
         // Pre-poblar con precio regular de cada producto (o el sugerido por un
         // configurador de opciones, si lo hay) como punto de partida.
         // El admin puede modificarlos en el meta box antes de enviar el presupuesto.
-        $order_total = 0.0;
-        foreach ( $order->get_items() as $line ) {
-            $suggested   = $line->get_meta( '_mad_dt_suggested_price' );
-            $quote_price = ( '' !== $suggested && false !== $suggested )
-                ? (float) $suggested
-                : mad_quotes_get_product_quote_price( $line->get_product_id() );
-            $qty         = $line->get_quantity();
-            $line_total  = $quote_price * $qty;
-            $line->update_meta_data( '_mad_quote_line_price', (string) $quote_price );
-            $line->set_subtotal( $line_total );
-            $line->set_total( $line_total );
-            $line->save();
-            $order_total += $line_total;
-        }
+        $order_total = $this->populate_quote_line_prices( $order );
 
         $order->set_billing_email( $email );
         $order->set_billing_first_name( $user->first_name ?: $user->display_name );
@@ -908,6 +910,193 @@ return new class( $core ) implements MAD_Suite_Module {
 
         wp_safe_redirect( $order->get_checkout_order_received_url() );
         exit;
+    }
+
+    /**
+     * Precio de partida de cada línea del pedido: el sugerido por un
+     * configurador de opciones (ej. Divano Toscano) si lo hay, si no el
+     * precio de cotización del producto. El admin los ajusta después desde
+     * el editor de precios del pedido antes de enviar el presupuesto.
+     * Usado tanto por la solicitud del cliente como por la creación manual
+     * desde el admin, para que ambos caminos terminen en el mismo estado.
+     *
+     * @return float Total del pedido resultante de sumar las líneas.
+     */
+    private function populate_quote_line_prices( WC_Order $order ): float {
+        $order_total = 0.0;
+        foreach ( $order->get_items() as $line ) {
+            $suggested   = $line->get_meta( '_mad_dt_suggested_price' );
+            $quote_price = ( '' !== $suggested && false !== $suggested )
+                ? (float) $suggested
+                : mad_quotes_get_product_quote_price( $line->get_product_id() );
+            $qty         = $line->get_quantity();
+            $line_total  = $quote_price * $qty;
+            $line->update_meta_data( '_mad_quote_line_price', (string) $quote_price );
+            $line->set_subtotal( $line_total );
+            $line->set_total( $line_total );
+            $line->save();
+            $order_total += $line_total;
+        }
+        return $order_total;
+    }
+
+    /**
+     * Admin: crea un presupuesto desde cero (el admin arma el pedido en vez de
+     * que lo genere un cliente desde el carrito). Deja el pedido exactamente
+     * en el mismo estado que el flujo normal (quote-pending, mismos metas),
+     * y redirige al editor de precios ya existente en la pantalla del pedido
+     * para que el admin confirme precios y presione "Enviar presupuesto" —
+     * ese paso final no se duplica acá, se reutiliza el que ya funciona.
+     */
+    public function handle_create_manual_quote(): void {
+        if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) {
+            wp_die( __( 'No tienes permisos suficientes.', 'mad-suite' ) );
+        }
+        check_admin_referer( 'mad_quotes_create_manual' );
+
+        $back_url = add_query_arg( [ 'page' => $this->menu_slug(), 'mad_action' => 'new' ], admin_url( 'admin.php' ) );
+
+        $email = sanitize_email( wp_unslash( $_POST['billing_email'] ?? '' ) );
+        if ( ! is_email( $email ) ) {
+            wp_safe_redirect( add_query_arg( 'mad_error', 'email', $back_url ) );
+            exit;
+        }
+
+        $product_ids = isset( $_POST['product_id'] ) ? array_map( 'absint', (array) wp_unslash( $_POST['product_id'] ) ) : [];
+        $quantities  = isset( $_POST['product_qty'] ) ? array_map( 'absint', (array) wp_unslash( $_POST['product_qty'] ) ) : [];
+
+        $items = [];
+        foreach ( $product_ids as $i => $product_id ) {
+            if ( ! $product_id ) continue;
+            $qty = max( 1, (int) ( $quantities[ $i ] ?? 1 ) );
+            $items[ $product_id ] = ( $items[ $product_id ] ?? 0 ) + $qty;
+        }
+
+        if ( empty( $items ) ) {
+            wp_safe_redirect( add_query_arg( 'mad_error', 'items', $back_url ) );
+            exit;
+        }
+
+        $customer_id = absint( $_POST['customer_id'] ?? 0 );
+        if ( $customer_id && ! get_userdata( $customer_id ) ) {
+            $customer_id = 0; // ID manipulado o cliente eliminado entre la búsqueda y el envío: cae a invitado.
+        }
+        $first_name  = sanitize_text_field( wp_unslash( $_POST['billing_first_name'] ?? '' ) );
+        $last_name   = sanitize_text_field( wp_unslash( $_POST['billing_last_name'] ?? '' ) );
+        $notas       = sanitize_textarea_field( wp_unslash( $_POST['admin_notes'] ?? '' ) );
+
+        $order = wc_create_order( [ 'customer_id' => $customer_id ] );
+
+        foreach ( $items as $product_id => $qty ) {
+            $product = wc_get_product( $product_id );
+            if ( ! $product ) continue;
+            $item_id = $order->add_product( $product, $qty );
+            if ( $item_id ) {
+                do_action( 'mad_quotes_order_item_created', $order->get_item( $item_id ), [ 'data' => $product, 'quantity' => $qty ], $order );
+            }
+        }
+
+        if ( ! $order->get_item_count() ) {
+            $order->delete( true );
+            wp_safe_redirect( add_query_arg( 'mad_error', 'items', $back_url ) );
+            exit;
+        }
+
+        $order_total = $this->populate_quote_line_prices( $order );
+
+        $order->set_billing_email( $email );
+        if ( '' !== $first_name ) $order->set_billing_first_name( $first_name );
+        if ( '' !== $last_name )  $order->set_billing_last_name( $last_name );
+        $order->set_payment_method( 'quotes-gateway' );
+        $order->set_cart_tax( 0 );
+        $order->set_shipping_total( 0 );
+        $order->set_shipping_tax( 0 );
+        $order->set_total( $order_total );
+        $order->update_meta_data( '_mad_qwc_quote', '1' );
+        $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
+        $order->update_meta_data( '_mad_quote_created_by_admin', '1' );
+        $lang = apply_filters( 'wpml_current_language', null );
+        if ( $lang ) {
+            $order->update_meta_data( '_mad_quote_lang', sanitize_key( $lang ) );
+        }
+
+        $admin_user = wp_get_current_user();
+        $note = sprintf(
+            /* translators: %s: admin display name */
+            __( 'Presupuesto creado manualmente desde el admin por %s.', 'mad-suite' ),
+            $admin_user->display_name ?: $admin_user->user_login
+        );
+        if ( '' !== $notas ) {
+            $note .= "\n" . $notas;
+        }
+        $order->add_order_note( $note );
+
+        // A diferencia del flujo del cliente, acá NO se disparan los emails de
+        // "solicitud recibida" (no tendría sentido: el admin la está creando él
+        // mismo). El email real al destinatario sale del botón "Enviar
+        // presupuesto" en la pantalla del pedido, una vez fijados los precios.
+        $order->update_status( 'quote-pending', __( 'Presupuesto creado manualmente, pendiente de fijar precios y enviar.', 'mad-suite' ) );
+        $order->save();
+
+        wp_safe_redirect( $order->get_edit_order_url() );
+        exit;
+    }
+
+    /** AJAX: buscador de productos para el formulario "Crear presupuesto". */
+    public function ajax_search_products_for_quote(): void {
+        check_ajax_referer( 'mad_quotes_admin_search', 'nonce' );
+        if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) wp_send_json_error();
+
+        $query   = sanitize_text_field( wp_unslash( $_GET['q'] ?? '' ) );
+        $results = [];
+
+        if ( strlen( $query ) >= 2 ) {
+            $products = get_posts( [
+                'post_type'      => 'product',
+                'posts_per_page' => 20,
+                's'              => $query,
+                'post_status'    => 'publish',
+            ] );
+            foreach ( $products as $p ) {
+                $product = wc_get_product( $p );
+                if ( ! $product ) continue;
+                $results[] = [
+                    'id'    => $product->get_id(),
+                    'text'  => $product->get_name() . ' (SKU: ' . ( $product->get_sku() ?: '—' ) . ')',
+                    'price' => wc_price( (float) mad_quotes_get_product_quote_price( $product->get_id() ) ),
+                ];
+            }
+        }
+
+        wp_send_json( [ 'results' => $results ] );
+    }
+
+    /** AJAX: buscador de clientes existentes para el formulario "Crear presupuesto". */
+    public function ajax_search_customers_for_quote(): void {
+        check_ajax_referer( 'mad_quotes_admin_search', 'nonce' );
+        if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) wp_send_json_error();
+
+        $query   = sanitize_text_field( wp_unslash( $_GET['q'] ?? '' ) );
+        $results = [];
+
+        if ( strlen( $query ) >= 2 ) {
+            $users = get_users( [
+                'search'         => '*' . $query . '*',
+                'search_columns' => [ 'user_login', 'user_email', 'display_name' ],
+                'number'         => 20,
+            ] );
+            foreach ( $users as $user ) {
+                $results[] = [
+                    'id'         => $user->ID,
+                    'text'       => $user->display_name . ' <' . $user->user_email . '>',
+                    'email'      => $user->user_email,
+                    'first_name' => get_user_meta( $user->ID, 'first_name', true ),
+                    'last_name'  => get_user_meta( $user->ID, 'last_name', true ),
+                ];
+            }
+        }
+
+        wp_send_json( [ 'results' => $results ] );
     }
 
     /**
@@ -1660,6 +1849,20 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function enqueue_admin_js( $hook ) {
+        if ( isset( $_GET['page'] ) && $_GET['page'] === $this->menu_slug()
+            && isset( $_GET['mad_action'] ) && 'new' === $_GET['mad_action']
+        ) {
+            wp_register_script( 'mad-quotes-new-order', MAD_QUOTES_URL . 'assets/js/admin-new-quote.js', [ 'jquery' ], '1.0', true );
+            wp_localize_script( 'mad-quotes-new-order', 'mad_quotes_new_order_params', [
+                'ajax_url'   => admin_url( 'admin-ajax.php' ),
+                'nonce'      => wp_create_nonce( 'mad_quotes_admin_search' ),
+                'i18n_searching'   => __( 'Buscando…', 'mad-suite' ),
+                'i18n_no_results'  => __( 'Sin resultados.', 'mad-suite' ),
+                'i18n_qty'         => __( 'Cant.', 'mad-suite' ),
+            ] );
+            wp_enqueue_script( 'mad-quotes-new-order' );
+        }
+
         $order_id = $this->get_current_order_id();
         if ( ! $order_id ) return;
 
