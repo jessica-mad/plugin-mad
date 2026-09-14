@@ -673,18 +673,38 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( strpos( $price_html, '<del' ) === false ) return $price_html;
 
         $label_public = '<small class="mad-b2b-label mad-b2b-label--public">'
-            . esc_html__( 'Precio público', 'mad-suite' )
+            . esc_html__( 'PVP', 'mad-suite' )
             . '</small>';
 
-        $label_pro = '<small class="mad-b2b-label mad-b2b-label--pro">'
+        $after_ins = '<small class="mad-b2b-label mad-b2b-label--pro">'
             . esc_html__( 'Tu precio profesional', 'mad-suite' )
             . '</small>';
 
-        // Insertar "Precio público" justo después del cierre de <del>.
+        // Desglose de IVA: solo en productos simples — en variables el precio
+        // es un rango y get_price() no da un valor único fiable para esta
+        // cuenta. Usa las tarifas reales configuradas en WooCommerce (no un %
+        // fijo a mano), así que si cambian las tarifas esto sigue siendo
+        // correcto sin tocar código.
+        if ( $product instanceof WC_Product && ! $product->is_type( 'variable' ) ) {
+            $price_excl = wc_get_price_excluding_tax( $product );
+            $price_incl = wc_get_price_including_tax( $product );
+
+            if ( $price_incl - $price_excl > 0.005 ) {
+                $after_ins .= '<small class="mad-b2b-label mad-b2b-tax-line">'
+                    . sprintf(
+                        /* translators: %s: precio con impuesto incluido */
+                        esc_html__( '%s con IVA (tarifa estándar — solo aplica a facturas con destino España)', 'mad-suite' ),
+                        wc_price( $price_incl )
+                    )
+                    . '</small>';
+            }
+        }
+
+        // Insertar "PVP" justo después del cierre de <del>.
         $price_html = preg_replace( '/(<\/del>)/i', '$1' . $label_public, $price_html, 1 );
 
-        // Insertar "Tu precio profesional" justo después del cierre de <ins>.
-        $price_html = preg_replace( '/(<\/ins>)/i', '$1' . $label_pro, $price_html, 1 );
+        // Insertar "Tu precio profesional" (+ desglose de IVA, si aplica) justo después del cierre de <ins>.
+        $price_html = preg_replace( '/(<\/ins>)/i', '$1' . $after_ins, $price_html, 1 );
 
         return $price_html;
     }
@@ -708,6 +728,13 @@ return new class( $core ) implements MAD_Suite_Module {
 .mad-b2b-label--pro {
     color: #2e7d32;
     margin-top: 2px;
+}
+.mad-b2b-tax-line {
+    color: #888;
+    text-transform: none;
+    letter-spacing: normal;
+    font-size: 0.68em;
+    margin-top: 1px;
 }
 </style>';
     }

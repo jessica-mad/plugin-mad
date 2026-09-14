@@ -168,17 +168,29 @@ class ProductFeedGenerator {
     private function get_base_product_data($product){
         $product_id = $product->get_id();
 
-        // Basic required fields
+        // Precio: SIEMPRE el precio regular (nunca el de oferta/profesional —
+        // ese es interno para B2B y no debe salir en ningún catálogo público).
+        // Si hay un "precio de referencia" ficticio cargado (meta box del
+        // producto), se manda como precio tachado y el regular pasa a ser el
+        // "precio con descuento" — solo para dar visibilidad en Shopping/Ads,
+        // no refleja ninguna oferta real del sitio.
+        $regular_price = $product->get_regular_price();
+        $fake_reference_price = get_post_meta($product_id, '_mcs_fake_reference_price', true);
+
         $data = [
             'id' => (string) $product_id,
             'title' => $this->get_product_title($product),
             'description' => $this->get_product_description($product),
             'link' => $product->get_permalink(),
             'image_link' => $this->get_product_image($product),
-            'price' => $this->format_price($product),
+            'price' => $this->format_price_value($fake_reference_price !== '' ? $fake_reference_price : $regular_price),
             'availability' => $this->get_availability($product),
             'condition' => 'new', // Default condition
         ];
+
+        if ($fake_reference_price !== '' && (float) $fake_reference_price > (float) $regular_price) {
+            $data['sale_price'] = $this->format_price_value($regular_price);
+        }
 
         // Brand
         $data['brand'] = $this->get_product_brand($product_id);
@@ -187,24 +199,6 @@ class ProductFeedGenerator {
         $additional_images = $this->get_additional_images($product);
         if (!empty($additional_images)) {
             $data['additional_image_link'] = implode(',', $additional_images);
-        }
-
-        // Sale price (if applicable)
-        $sale_price = $product->get_sale_price();
-        if (!empty($sale_price) && $sale_price < $product->get_regular_price()) {
-            $data['sale_price'] = $this->format_price($product, 'sale');
-
-            // Sale price effective dates
-            $date_on_sale_from = $product->get_date_on_sale_from();
-            $date_on_sale_to = $product->get_date_on_sale_to();
-
-            if ($date_on_sale_from && $date_on_sale_to) {
-                $data['sale_price_effective_date'] = sprintf(
-                    '%s/%s',
-                    $date_on_sale_from->format('c'),
-                    $date_on_sale_to->format('c')
-                );
-            }
         }
 
         // GTIN / EAN
@@ -357,17 +351,11 @@ class ProductFeedGenerator {
     }
 
     /**
-     * Format product price
+     * Format a raw price value (already resolved by the caller — regular
+     * price or fake reference price) for the feed.
      */
-    private function format_price($product, $price_type = 'regular'){
-        $price = ($price_type === 'sale') ? $product->get_sale_price() : $product->get_price();
-
-        if (empty($price)) {
-            $price = $product->get_regular_price();
-        }
-
+    private function format_price_value($price){
         $currency = get_woocommerce_currency();
-
         return ValidationHelper::format_price($price, $currency);
     }
 

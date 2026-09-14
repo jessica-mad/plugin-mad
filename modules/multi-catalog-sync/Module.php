@@ -1038,6 +1038,7 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         $custom_brand = get_post_meta($post->ID, '_mcs_custom_brand', true);
         $gtin = get_post_meta($post->ID, '_mcs_gtin', true);
         $mpn = get_post_meta($post->ID, '_mcs_mpn', true);
+        $fake_reference_price = get_post_meta($post->ID, '_mcs_fake_reference_price', true);
 
         $settings = $this->get_settings();
         ?>
@@ -1104,6 +1105,20 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
                 </label>
             </p>
 
+            <hr style="margin: 15px 0;">
+
+            <p>
+                <label>
+                    <strong><?php esc_html_e('Precio de referencia (solo Shopping/Ads):', 'mad-suite'); ?></strong><br>
+                    <input type="text" name="_mcs_fake_reference_price" value="<?php echo esc_attr($fake_reference_price); ?>"
+                           placeholder="<?php esc_attr_e('Vacío = no mostrar precio anterior', 'mad-suite'); ?>"
+                           style="width: 100%;" />
+                </label>
+                <span class="description">
+                    <?php esc_html_e('Si lo cargás, el feed a Google/Facebook/Pinterest muestra este valor como precio tachado y el precio normal del producto como precio con descuento (nunca se envía el precio de profesionales). Dejalo vacío para enviar solo el precio normal, sin tachado.', 'mad-suite'); ?>
+                </span>
+            </p>
+
             <?php
             // Show last sync status
             $last_sync = get_post_meta($post->ID, '_mcs_last_sync', true);
@@ -1145,6 +1160,16 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
         // MPN
         if (isset($_POST['_mcs_mpn'])) {
             update_post_meta($post_id, '_mcs_mpn', sanitize_text_field($_POST['_mcs_mpn']));
+        }
+
+        // Precio de referencia ficticio para Google/Facebook/Pinterest (opcional)
+        if (isset($_POST['_mcs_fake_reference_price'])) {
+            $raw = wc_format_decimal(sanitize_text_field($_POST['_mcs_fake_reference_price']));
+            if ($raw === '' || !is_numeric($raw)) {
+                delete_post_meta($post_id, '_mcs_fake_reference_price');
+            } else {
+                update_post_meta($post_id, '_mcs_fake_reference_price', $raw);
+            }
         }
 
         // Queue for sync
