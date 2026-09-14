@@ -26,9 +26,11 @@ if ( ! empty( $admin_note ) ) {
 echo esc_html__( 'DETALLE DEL PRESUPUESTO', 'mad-suite' ) . "\n";
 echo str_repeat( '-', 50 ) . "\n";
 
-$grand_total = 0.0;
+$grand_total          = 0.0;
+$grand_total_incl_tax = 0.0;
 foreach ( $order->get_items() as $item_id => $item ) {
     $product_id  = $item->get_product_id();
+    $product     = wc_get_product( $product_id );
     $qty         = $item->get_quantity();
 
     $saved_price = $item->get_meta( '_mad_quote_line_price' );
@@ -37,6 +39,10 @@ foreach ( $order->get_items() as $item_id => $item ) {
         : mad_quotes_get_product_quote_price( $product_id );
     $line_total  = $unit_price * $qty;
     $grand_total += $line_total;
+
+    $grand_total_incl_tax += $product
+        ? wc_get_price_including_tax( $product, [ 'qty' => $qty, 'price' => $unit_price ] )
+        : $line_total;
 
     printf(
         "%s (x%d): %s c/u — %s\n",
@@ -48,10 +54,20 @@ foreach ( $order->get_items() as $item_id => $item ) {
 }
 
 echo str_repeat( '-', 50 ) . "\n";
-printf(
-    esc_html__( 'Total del presupuesto: %s', 'mad-suite' ) . "\n",
-    wp_strip_all_tags( wc_price( $grand_total ) )
-);
+
+if ( $grand_total_incl_tax - $grand_total > 0.005 ) {
+    printf( esc_html__( 'Base imponible: %s', 'mad-suite' ) . "\n", wp_strip_all_tags( wc_price( $grand_total ) ) );
+    printf(
+        esc_html__( 'IVA (tarifa estándar, solo aplica a facturas con destino España): %s', 'mad-suite' ) . "\n",
+        wp_strip_all_tags( wc_price( $grand_total_incl_tax - $grand_total ) )
+    );
+    printf( esc_html__( 'Total con IVA: %s', 'mad-suite' ) . "\n", wp_strip_all_tags( wc_price( $grand_total_incl_tax ) ) );
+} else {
+    printf(
+        esc_html__( 'Total del presupuesto: %s', 'mad-suite' ) . "\n",
+        wp_strip_all_tags( wc_price( $grand_total ) )
+    );
+}
 
 echo "\n";
 echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";

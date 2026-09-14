@@ -35,9 +35,11 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
     </thead>
     <tbody>
     <?php
-    $grand_total = 0.0;
+    $grand_total          = 0.0;
+    $grand_total_incl_tax = 0.0;
     foreach ( $order->get_items() as $item_id => $item ) :
         $product_id  = $item->get_product_id();
+        $product     = wc_get_product( $product_id );
         $qty         = $item->get_quantity();
 
         // Precio de presupuesto: usa el guardado en el pedido (si fue editado) o el del producto
@@ -47,6 +49,13 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
             : mad_quotes_get_product_quote_price( $product_id );
         $line_total  = $unit_price * $qty;
         $grand_total += $line_total;
+
+        // Impuesto: según la tarifa real configurada en WooCommerce para este
+        // producto (no un % fijo a mano) — solo informativo en el email, se
+        // aplica de verdad cuando el cliente paga (ahí ya sabemos su país).
+        $grand_total_incl_tax += $product
+            ? wc_get_price_including_tax( $product, [ 'qty' => $qty, 'price' => $unit_price ] )
+            : $line_total;
     ?>
         <tr>
             <td style="padding:9px 12px;border:1px solid #e5e5e5;"><?php echo esc_html( $item->get_name() ); ?></td>
@@ -58,9 +67,27 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
     </tbody>
     <tfoot>
         <tr>
+            <th colspan="3" align="right" style="padding:9px 12px;border:1px solid #e5e5e5;background:#f8f8f8;"><?php esc_html_e( 'Base imponible:', 'mad-suite' ); ?></th>
+            <td align="right" style="padding:9px 12px;border:1px solid #e5e5e5;"><?php echo wp_kses_post( wc_price( $grand_total ) ); ?></td>
+        </tr>
+        <?php if ( $grand_total_incl_tax - $grand_total > 0.005 ) : ?>
+        <tr>
+            <th colspan="3" align="right" style="padding:9px 12px;border:1px solid #e5e5e5;background:#f8f8f8;font-weight:normal;color:#666;">
+                <?php esc_html_e( 'IVA (tarifa estándar):', 'mad-suite' ); ?>
+                <em style="font-weight:normal;"><?php esc_html_e( '(solo aplica a facturas con destino España)', 'mad-suite' ); ?></em>
+            </th>
+            <td align="right" style="padding:9px 12px;border:1px solid #e5e5e5;color:#666;"><?php echo wp_kses_post( wc_price( $grand_total_incl_tax - $grand_total ) ); ?></td>
+        </tr>
+        <tr>
+            <th colspan="3" align="right" style="padding:9px 12px;border:1px solid #e5e5e5;background:#f8f8f8;"><?php esc_html_e( 'Total con IVA:', 'mad-suite' ); ?></th>
+            <td align="right" style="padding:9px 12px;border:1px solid #e5e5e5;font-weight:bold;"><?php echo wp_kses_post( wc_price( $grand_total_incl_tax ) ); ?></td>
+        </tr>
+        <?php else : ?>
+        <tr>
             <th colspan="3" align="right" style="padding:9px 12px;border:1px solid #e5e5e5;background:#f8f8f8;"><?php esc_html_e( 'Total del presupuesto:', 'mad-suite' ); ?></th>
             <td align="right" style="padding:9px 12px;border:1px solid #e5e5e5;font-weight:bold;"><?php echo wp_kses_post( wc_price( $grand_total ) ); ?></td>
         </tr>
+        <?php endif; ?>
     </tfoot>
 </table>
 
