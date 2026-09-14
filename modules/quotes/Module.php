@@ -137,8 +137,8 @@ return new class( $core ) implements MAD_Suite_Module {
         // (30, que solo aplica a rol presupuesto — mutuamente excluyentes).
         add_action( 'woocommerce_before_calculate_totals', [ $this, 'apply_real_price_to_cart' ], 25 );
         add_action( 'wp_head',                                     [ $this, 'b2b_price_labels_css' ] );
-        add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999 );
-        add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999 );
+        add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999, 2 );
+        add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999, 2 );
         add_filter( 'wc_add_to_cart_message_html',                 [ $this, 'rename_cart_in_add_to_cart_message' ], 20, 2 );
 
         // ── WPML: registrar strings traducibles en cada carga ────────────────
@@ -570,6 +570,12 @@ return new class( $core ) implements MAD_Suite_Module {
             return $price;
         }
 
+        // Ya viene con el "Consultar precio" de hide_price_for_quote_role() —
+        // no lo pises con el precio original (vacío) cacheado más abajo.
+        if ( $product instanceof WC_Product && $this->product_requires_quote( $product ) ) {
+            return $price;
+        }
+
         $discount = $this->get_real_price_role_discount();
         if ( null !== $discount ) {
             $real_html = $this->render_real_price_html( $product, $discount );
@@ -618,6 +624,25 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( $pvp <= 0 ) return null;
 
         return round( $pvp * ( 1 - $discount_pct / 100 ), 2 );
+    }
+
+    /**
+     * True si, para el visitante actual, este producto no tiene ningún precio
+     * resolvible — ni el nativo de WooCommerce ni el PVP real por rol. En ese
+     * caso debe pasar por "solicitar presupuesto" en vez de venderse directo,
+     * sin importar el rol del visitante (profesional, particular, etc.).
+     * No se usa para el rol de presupuesto: a ellos ya se les oculta el
+     * precio siempre, tengan o no un precio configurado.
+     */
+    private function product_requires_quote( WC_Product $product ): bool {
+        if ( '' !== (string) $product->get_price() ) return false;
+
+        $discount = $this->get_real_price_role_discount();
+        if ( null !== $discount && null !== $this->compute_real_price( $product->get_id(), $discount ) ) {
+            return false;
+        }
+
+        return true;
     }
 
     /** HTML de precio (PVP tachado + precio con descuento, y costo si está cargado) para el rol de precio real. */
@@ -736,6 +761,11 @@ return new class( $core ) implements MAD_Suite_Module {
     font-size: 0.68em;
     margin-top: 1px;
 }
+.mad-quote-consult-price {
+    font-size: 0.9em;
+    font-style: italic;
+    color: #555;
+}
 </style>';
     }
 
@@ -743,12 +773,21 @@ return new class( $core ) implements MAD_Suite_Module {
         // No-op: button text is now managed per-language directly in MAD Suite settings.
     }
 
-    public function maybe_restore_button( $text ) {
+    public function maybe_restore_button( $text, $product = null ) {
+        $settings    = mad_quotes_get_settings();
+        $custom_text = trim( $this->resolve_button_text( $settings ) );
+
+        // Sin precio resolvible: pedir presupuesto sin importar el rol.
+        if ( $product instanceof WC_Product
+            && ! $this->current_user_is_quote_role()
+            && $this->product_requires_quote( $product )
+        ) {
+            return $custom_text !== '' ? $custom_text : __( 'Solicitar presupuesto', 'mad-suite' );
+        }
+
         if ( ! $this->current_user_is_quote_role() ) {
             return __( 'Añadir al carrito', 'woocommerce' );
         }
-        $settings    = mad_quotes_get_settings();
-        $custom_text = trim( $this->resolve_button_text( $settings ) );
         return $custom_text !== '' ? $custom_text : $text;
     }
 
@@ -825,9 +864,22 @@ return new class( $core ) implements MAD_Suite_Module {
      * de un usuario de presupuesto activa la experiencia de solicitud.
      */
     private function cart_is_quote_experience(): bool {
-        if ( ! $this->current_user_is_quote_role() ) return false;
         if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return false;
-        return ! WC()->cart->is_empty();
+        if ( WC()->cart->is_empty() ) return false;
+
+        if ( $this->current_user_is_quote_role() ) return true;
+
+        // Cualquier producto sin precio resolvible en el carrito también activa
+        // la experiencia de presupuesto, sin importar el rol del visitante.
+        foreach ( WC()->cart->get_cart() as $cart_item ) {
+            if ( isset( $cart_item['data'] ) && $cart_item['data'] instanceof WC_Product
+                && $this->product_requires_quote( $cart_item['data'] )
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -841,10 +893,18 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function zero_price_for_quote_role_cart( $cart ): void {
         if ( is_admin() && ! defined( 'DOING_AJAX' ) ) return;
-        if ( ! $this->current_user_is_quote_role() ) return;
+
+        $quote_role = $this->current_user_is_quote_role();
 
         foreach ( $cart->get_cart() as $cart_item ) {
-            if ( isset( $cart_item['data'] ) && is_object( $cart_item['data'] ) ) {
+            if ( ! isset( $cart_item['data'] ) || ! is_object( $cart_item['data'] ) ) continue;
+
+            // Rol de presupuesto: precio en 0 siempre. Cualquier otro rol:
+            // también en 0 si este producto en particular no tiene precio
+            // resolvible (debe pasar por "solicitar presupuesto").
+            if ( $quote_role
+                || ( $cart_item['data'] instanceof WC_Product && $this->product_requires_quote( $cart_item['data'] ) )
+            ) {
                 $cart_item['data']->set_price( 0 );
             }
         }
@@ -862,7 +922,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $back_url = $this->get_quote_cart_url();
 
-        if ( ! $this->current_user_is_quote_role() ) {
+        if ( ! $this->current_user_is_quote_role() && ! $this->cart_is_quote_experience() ) {
             wp_safe_redirect( $back_url );
             exit;
         }
@@ -1020,7 +1080,7 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function serve_quote_cart_template(): void {
         if ( ! is_cart() ) return;
-        if ( ! $this->current_user_is_quote_role() ) return;
+        if ( ! $this->current_user_is_quote_role() && ! $this->cart_is_quote_experience() ) return;
         if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return;
 
         // Si hay una página configurada con el shortcode, redirigir allí.
@@ -1080,6 +1140,9 @@ return new class( $core ) implements MAD_Suite_Module {
     public function hide_price_for_quote_role( $price, $product ) {
         if ( $this->current_user_is_quote_role() ) {
             return '';
+        }
+        if ( $product instanceof WC_Product && $this->product_requires_quote( $product ) ) {
+            return '<span class="mad-quote-consult-price">' . esc_html__( 'Consultar precio', 'mad-suite' ) . '</span>';
         }
         return $price;
     }
@@ -1503,7 +1566,7 @@ return new class( $core ) implements MAD_Suite_Module {
             return $restored;
         }
 
-        if ( $this->current_user_is_quote_role() ) {
+        if ( $this->current_user_is_quote_role() || $this->cart_is_quote_experience() ) {
             // QWC puede haber eliminado quotes-gateway de $gateways (prioridad 10).
             // Lo buscamos en todos los gateways registrados para garantizar que esté disponible.
             if ( isset( $gateways['quotes-gateway'] ) ) {
