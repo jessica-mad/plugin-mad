@@ -1109,13 +1109,13 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
 
             <p>
                 <label>
-                    <strong><?php esc_html_e('Precio de referencia (solo Shopping/Ads):', 'mad-suite'); ?></strong><br>
+                    <strong><?php esc_html_e('Precio para anuncios (Shopping/Ads):', 'mad-suite'); ?></strong><br>
                     <input type="text" name="_mcs_fake_reference_price" value="<?php echo esc_attr($fake_reference_price); ?>"
-                           placeholder="<?php esc_attr_e('Vacío = no mostrar precio anterior', 'mad-suite'); ?>"
+                           placeholder="<?php esc_attr_e('Vacío = usar el precio normal del producto', 'mad-suite'); ?>"
                            style="width: 100%;" />
                 </label>
                 <span class="description">
-                    <?php esc_html_e('Si lo cargás, el feed a Google/Facebook/Pinterest muestra este valor como precio tachado y el precio normal del producto como precio con descuento (nunca se envía el precio de profesionales). Dejalo vacío para enviar solo el precio normal, sin tachado.', 'mad-suite'); ?>
+                    <?php esc_html_e('Precio que se publica en Google/Facebook/Pinterest (nunca se envía el precio de profesionales). Sirve para dos casos: (1) si el producto tiene precio normal, este valor se muestra como precio tachado y el normal como "con descuento" — solo para visibilidad; (2) si el producto es "a consultar" (sin precio, se pide presupuesto en la web), este es el único precio que se publica en el anuncio, sin tachado — así el producto puede anunciarse aunque el precio real se pida por la web. Sin precio normal NI este campo cargado, el producto no se publica (no hay nada que mostrar).', 'mad-suite'); ?>
                 </span>
             </p>
 

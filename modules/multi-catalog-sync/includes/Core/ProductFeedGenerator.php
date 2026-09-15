@@ -62,6 +62,9 @@ class ProductFeedGenerator {
      */
     private function generate_simple_product_feed($product, $destination){
         $data = $this->get_base_product_data($product);
+        if (null === $data) {
+            return null;
+        }
 
         // Add destination-specific formatting
         if ($destination !== 'all') {
@@ -113,6 +116,9 @@ class ProductFeedGenerator {
         }
 
         $data = $this->get_base_product_data($variation);
+        if (null === $data) {
+            return null;
+        }
 
         // Add item_group_id to group variations
         $data['item_group_id'] = (string) $parent_product->get_id();
@@ -168,14 +174,23 @@ class ProductFeedGenerator {
     private function get_base_product_data($product){
         $product_id = $product->get_id();
 
-        // Precio: SIEMPRE el precio regular (nunca el de oferta/profesional —
-        // ese es interno para B2B y no debe salir en ningún catálogo público).
-        // Si hay un "precio de referencia" ficticio cargado (meta box del
-        // producto), se manda como precio tachado y el regular pasa a ser el
-        // "precio con descuento" — solo para dar visibilidad en Shopping/Ads,
-        // no refleja ninguna oferta real del sitio.
+        // Precio a publicar: SIEMPRE el regular o el de anuncio, nunca el de
+        // oferta/profesional (ese es interno para B2B). El campo "Precio de
+        // referencia / anuncio" del meta box cubre dos casos:
+        // 1. Producto con precio regular real: se usa como precio tachado y
+        //    el regular pasa a ser el "con descuento", solo para visibilidad.
+        // 2. Producto "a consultar" (sin precio regular, se pide presupuesto
+        //    en la web): no hay nada con qué comparar, así que se publica
+        //    solo ese precio, sin tachado ni sale_price.
+        // Si no hay ni precio regular ni precio de anuncio, no hay nada
+        // publicable — el producto se omite del feed (null).
         $regular_price = $product->get_regular_price();
-        $fake_reference_price = get_post_meta($product_id, '_mcs_fake_reference_price', true);
+        $ad_price      = get_post_meta($product_id, '_mcs_fake_reference_price', true);
+
+        $display_price = ( '' !== $ad_price ) ? $ad_price : $regular_price;
+        if ( '' === $display_price || ! is_numeric( $display_price ) || (float) $display_price <= 0 ) {
+            return null;
+        }
 
         $data = [
             'id' => (string) $product_id,
@@ -183,12 +198,15 @@ class ProductFeedGenerator {
             'description' => $this->get_product_description($product),
             'link' => $product->get_permalink(),
             'image_link' => $this->get_product_image($product),
-            'price' => $this->format_price_value($fake_reference_price !== '' ? $fake_reference_price : $regular_price),
+            'price' => $this->format_price_value($display_price),
             'availability' => $this->get_availability($product),
             'condition' => 'new', // Default condition
         ];
 
-        if ($fake_reference_price !== '' && (float) $fake_reference_price > (float) $regular_price) {
+        if (
+            '' !== $ad_price && '' !== $regular_price && is_numeric($regular_price)
+            && (float) $ad_price > (float) $regular_price
+        ) {
             $data['sale_price'] = $this->format_price_value($regular_price);
         }
 
