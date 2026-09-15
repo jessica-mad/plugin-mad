@@ -175,6 +175,7 @@ return new class( $core ) implements MAD_Suite_Module {
         // Datos de facturación en la página order-pay de presupuestos enviados.
         add_action( 'woocommerce_pay_order_before_payment', [ $this, 'inject_billing_fields_on_pay_page' ] );
         add_action( 'woocommerce_before_pay_action',        [ $this, 'save_billing_fields_before_pay'   ], 1, 1 );
+        add_action( 'woocommerce_before_pay_action',        [ $this, 'apply_real_tax_before_pay'        ], 5, 1 );
 
         // ── Mini-carrito: ocultar botones y subtotal para usuarios de presupuesto ─
         // El plugin QWC base solo lo hace por producto (cart_contains_quotable()),
@@ -525,6 +526,25 @@ return new class( $core ) implements MAD_Suite_Module {
                 $order->$setter( $value );
             }
         }
+        $order->save();
+    }
+
+    /**
+     * Recalcula el total del pedido CON impuesto real, justo antes de que la
+     * pasarela de pago procese el cobro — corre después de
+     * save_billing_fields_before_pay() (prioridad 1), así que ya tenemos el
+     * país de facturación que el cliente acaba de cargar. Hasta ahora se
+     * cobraba siempre el total sin IVA, sin importar el país: el "Total con
+     * IVA" del email era solo informativo. calculate_totals() usa las
+     * tarifas reales configuradas en WooCommerce para ese país (si no hay
+     * país determinable, cae al país base de la tienda) — no un % fijo a
+     * mano — y las suma a las líneas tal cual quedaron fijadas al enviar el
+     * presupuesto, sin tocar esos precios base.
+     */
+    public function apply_real_tax_before_pay( WC_Order $order ): void {
+        if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+
+        $order->calculate_totals( true );
         $order->save();
     }
 
