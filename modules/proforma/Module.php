@@ -52,7 +52,7 @@ return new class( MAD_Suite_Core::instance() ) implements MAD_Suite_Module {
     public function required_plugins() {
         return [
             'WooCommerce' => 'woocommerce/woocommerce.php',
-            'PDF Invoices & Packing Slips for WooCommerce' => 'woocommerce-pdf-invoices-packing-slips/woocommerce-pdf-invoices-packing-slips.php',
+            'PDF Invoices & Packing Slips for WooCommerce' => 'woocommerce-pdf-invoices-packing-slips/woocommerce-pdf-invoices-packingslips.php',
         ];
     }
 
