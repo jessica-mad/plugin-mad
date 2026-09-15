@@ -2373,6 +2373,12 @@ return new class( $core ) implements MAD_Suite_Module {
 
             $order_total = (float) $order->get_shipping_total();
             foreach ( $order->get_items() as $line ) {
+                // calculate_totals() también le puso impuesto a CADA línea
+                // (según la clase fiscal del producto) — sin limpiar esto acá,
+                // la ficha del pedido muestra cada producto "con IVA" mientras
+                // el total general (ya corregido arriba) aparece sin IVA.
+                $line->set_taxes( [ 'total' => [], 'subtotal' => [] ] );
+                $line->save();
                 $order_total += (float) $line->get_total();
             }
             $order->set_total( $order_total );
