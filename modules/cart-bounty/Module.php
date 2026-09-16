@@ -11,9 +11,16 @@
  *    existe conector nativo entre ellos. El puente es escribir el email
  *    como billing email en la sesión de WooCommerce
  *    (WC()->customer->set_billing_email()) al enviarse el formulario.
- *    FunnelKit detecta esa sesión con email y hace el resto (carrito
- *    recuperable, evento Cart Abandoned, add-to-list, secuencia de
- *    emails) de forma nativa — no hay nada más que "empujar" desde acá.
+ *  - CONFIRMADO en el sitio (no era solo una suposición): guardar el email
+ *    en la sesión NO alcanza para que FunnelKit registre el carrito como
+ *    "recuperable" — necesita que el visitante llegue a la página de
+ *    Checkout. Por eso, apenas el formulario se envía con éxito, el JS
+ *    (cart-bounty.js, watchForSuccess()) redirige a Checkout — ahí
+ *    FunnelKit sí detecta la sesión con email + carrito y hace el resto
+ *    (carrito recuperable, evento Cart Abandoned, add-to-list, secuencia
+ *    de emails) de forma nativa. Desactivable por ajuste
+ *    ("Llevar a Checkout al enviar") si algún día cambia el comportamiento
+ *    de FunnelKit y deja de hacer falta.
  *  - La lista/etiqueta de contacto se configura en FunnelKit → Settings →
  *    Carts (Add to list / Add tag), no en este módulo ni en el formulario.
  *  - El popup solo se muestra a invitados no logueados: a los usuarios
@@ -188,6 +195,14 @@ return new class( $core ) implements MAD_Suite_Module {
             $this->opt_key,
             'mad_cb_main'
         );
+
+        add_settings_field(
+            'redirect_to_checkout',
+            __( 'Llevar a Checkout al enviar', 'mad-suite' ),
+            [ $this, 'field_redirect_to_checkout' ],
+            $this->opt_key,
+            'mad_cb_main'
+        );
     }
 
     /* ================================================================ */
@@ -214,11 +229,15 @@ return new class( $core ) implements MAD_Suite_Module {
             true
         );
 
+        $settings = $this->get_settings();
+
         wp_localize_script( 'mad-cart-bounty', 'madCartBounty', [
-            'isCart'          => function_exists( 'is_cart' ) && is_cart(),
-            'cartHasItems'    => ( function_exists( 'WC' ) && WC()->cart ) ? ! WC()->cart->is_empty() : false,
-            'alreadyCaptured' => $this->already_captured_this_session(),
-            'justAdded'       => $this->was_just_added(),
+            'isCart'             => function_exists( 'is_cart' ) && is_cart(),
+            'cartHasItems'       => ( function_exists( 'WC' ) && WC()->cart ) ? ! WC()->cart->is_empty() : false,
+            'alreadyCaptured'    => $this->already_captured_this_session(),
+            'justAdded'          => $this->was_just_added(),
+            'redirectToCheckout' => ! empty( $settings['redirect_to_checkout'] ),
+            'checkoutUrl'        => function_exists( 'wc_get_checkout_url' ) ? wc_get_checkout_url() : '',
         ] );
     }
 
@@ -401,23 +420,36 @@ return new class( $core ) implements MAD_Suite_Module {
         );
     }
 
+    public function field_redirect_to_checkout(): void {
+        $v = ! empty( $this->get_settings()['redirect_to_checkout'] );
+        printf(
+            '<label><input type="checkbox" name="%1$s[redirect_to_checkout]" value="1" %2$s> %3$s</label>',
+            esc_attr( $this->opt_key ),
+            checked( $v, true, false ),
+            esc_html__( 'Sí, redirigir automáticamente a Checkout apenas se envía el email.', 'mad-suite' )
+        );
+        echo '<p class="description">' . esc_html__( 'FunnelKit Automations solo registra un carrito como "recuperable" cuando el visitante llega a Checkout — si esto está desactivado, el email queda guardado en la sesión pero puede que FunnelKit nunca lo detecte.', 'mad-suite' ) . '</p>';
+    }
+
     /* ================================================================ */
     /*  Helpers                                                          */
     /* ================================================================ */
 
     public function sanitize_settings( $input ): array {
         return [
-            'form_id'      => absint( $input['form_id'] ?? 0 ),
-            'title_text'   => sanitize_textarea_field( $input['title_text'] ?? '' ),
-            'consent_text' => sanitize_textarea_field( $input['consent_text'] ?? '' ),
+            'form_id'              => absint( $input['form_id'] ?? 0 ),
+            'title_text'           => sanitize_textarea_field( $input['title_text'] ?? '' ),
+            'consent_text'         => sanitize_textarea_field( $input['consent_text'] ?? '' ),
+            'redirect_to_checkout' => ! empty( $input['redirect_to_checkout'] ),
         ];
     }
 
     private function get_settings(): array {
         $defaults = [
-            'form_id'      => 0,
-            'title_text'   => __( 'Le guardamos su selección. Déjenos su correo y le enviamos el detalle.', 'mad-suite' ),
-            'consent_text' => __( 'Al dejar su correo acepta recibir recordatorios sobre su selección.', 'mad-suite' ),
+            'form_id'              => 0,
+            'title_text'           => __( 'Le guardamos su selección. Déjenos su correo y le enviamos el detalle.', 'mad-suite' ),
+            'consent_text'         => __( 'Al dejar su correo acepta recibir recordatorios sobre su selección.', 'mad-suite' ),
+            'redirect_to_checkout' => true,
         ];
         $saved = get_option( $this->opt_key, [] );
         return wp_parse_args( is_array( $saved ) ? $saved : [], $defaults );

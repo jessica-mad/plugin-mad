@@ -50,9 +50,22 @@
 
         var observer = new MutationObserver(function () {
             if ($formWrap.find(successSelector).length) {
-                markDismissed();
-                setTimeout(function () { closePanel($panel); }, 1500);
                 observer.disconnect();
+                markDismissed();
+
+                // FunnelKit Automations solo registra el carrito como
+                // "recuperable" cuando el visitante llega a Checkout — si
+                // el email se guarda pero nunca pisa esa página, FunnelKit
+                // no lo ve. Por eso, en vez de solo cerrar el panel, lo
+                // llevamos a Checkout (con el email ya precargado en la
+                // sesión por el puente PHP) apenas confirma el envío.
+                if (window.madCartBounty && window.madCartBounty.redirectToCheckout && window.madCartBounty.checkoutUrl) {
+                    setTimeout(function () {
+                        window.location.href = window.madCartBounty.checkoutUrl;
+                    }, 1500);
+                } else {
+                    setTimeout(function () { closePanel($panel); }, 1500);
+                }
             }
         });
 
