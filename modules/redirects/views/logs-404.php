@@ -3,9 +3,11 @@
 defined( 'ABSPATH' ) || exit;
 
 $paged    = max( 1, absint( $_GET['paged'] ?? 1 ) );
+$orderby  = isset( $_GET['orderby'] ) ? sanitize_key( $_GET['orderby'] ) : 'last_seen';
+$order    = ( isset( $_GET['order'] ) && 'asc' === strtolower( (string) $_GET['order'] ) ) ? 'asc' : 'desc';
 $per_page = 30;
 
-$data  = $this->get_404_log( $per_page, $paged );
+$data  = $this->get_404_log( $per_page, $paged, $orderby, $order );
 $rows  = $data['rows'];
 $total = $data['total'];
 $pages = (int) ceil( $total / $per_page );
@@ -36,10 +38,10 @@ $pages = (int) ceil( $total / $per_page );
     <table class="wp-list-table widefat fixed striped">
         <thead>
             <tr>
-                <th><?php esc_html_e( 'URL', 'mad-suite' ); ?></th>
-                <th style="width:80px;"><?php esc_html_e( 'Veces', 'mad-suite' ); ?></th>
-                <th style="width:160px;"><?php esc_html_e( 'Primera vez', 'mad-suite' ); ?></th>
-                <th style="width:160px;"><?php esc_html_e( 'Última vez', 'mad-suite' ); ?></th>
+                <?php $this->render_sortable_th( __( 'URL', 'mad-suite' ), 'url', $orderby, $order ); ?>
+                <?php $this->render_sortable_th( __( 'Veces', 'mad-suite' ), 'hits', $orderby, $order, '80px' ); ?>
+                <?php $this->render_sortable_th( __( 'Primera vez', 'mad-suite' ), 'first_seen', $orderby, $order, '160px' ); ?>
+                <?php $this->render_sortable_th( __( 'Última vez', 'mad-suite' ), 'last_seen', $orderby, $order, '160px' ); ?>
                 <th style="width:150px;"><?php esc_html_e( 'Acciones', 'mad-suite' ); ?></th>
             </tr>
         </thead>

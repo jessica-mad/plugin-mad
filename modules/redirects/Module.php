@@ -496,9 +496,15 @@ return new class( MAD_Suite_Core::instance() ) implements MAD_Suite_Module {
         return $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$this->table} WHERE id = %d", $id ), ARRAY_A );
     }
 
-    public function get_redirects( string $search = '', int $per_page = 20, int $paged = 1 ): array {
+    /** Columnas por las que se puede ordenar cada tabla (whitelist — nunca interpolar orderby/order sin validar). */
+    private const REDIRECTS_SORTABLE_COLUMNS = [ 'id', 'source_path', 'destination', 'status_code', 'match_type', 'hits', 'is_active' ];
+    private const LOG_404_SORTABLE_COLUMNS   = [ 'url', 'hits', 'first_seen', 'last_seen' ];
+
+    public function get_redirects( string $search = '', int $per_page = 20, int $paged = 1, string $orderby = 'id', string $order = 'DESC' ): array {
         global $wpdb;
-        $offset = max( 0, ( $paged - 1 ) * $per_page );
+        $offset  = max( 0, ( $paged - 1 ) * $per_page );
+        $orderby = in_array( $orderby, self::REDIRECTS_SORTABLE_COLUMNS, true ) ? $orderby : 'id';
+        $order   = ( 'ASC' === strtoupper( $order ) ) ? 'ASC' : 'DESC';
 
         $where  = '';
         $params = [];
@@ -512,24 +518,51 @@ return new class( MAD_Suite_Core::instance() ) implements MAD_Suite_Module {
         $count_sql = "SELECT COUNT(*) FROM {$this->table} {$where}";
         $total     = (int) ( $params ? $wpdb->get_var( $wpdb->prepare( $count_sql, $params ) ) : $wpdb->get_var( $count_sql ) );
 
-        $rows_sql    = "SELECT * FROM {$this->table} {$where} ORDER BY id DESC LIMIT %d OFFSET %d";
+        // Desempate por id DESC para que el orden sea estable entre páginas cuando hay valores repetidos.
+        $rows_sql    = "SELECT * FROM {$this->table} {$where} ORDER BY {$orderby} {$order}, id DESC LIMIT %d OFFSET %d";
         $rows_params = array_merge( $params, [ $per_page, $offset ] );
         $rows        = $wpdb->get_results( $wpdb->prepare( $rows_sql, $rows_params ), ARRAY_A );
 
         return [ 'rows' => $rows, 'total' => $total ];
     }
 
-    public function get_404_log( int $per_page = 20, int $paged = 1 ): array {
+    public function get_404_log( int $per_page = 20, int $paged = 1, string $orderby = 'last_seen', string $order = 'DESC' ): array {
         global $wpdb;
-        $offset = max( 0, ( $paged - 1 ) * $per_page );
+        $offset  = max( 0, ( $paged - 1 ) * $per_page );
+        $orderby = in_array( $orderby, self::LOG_404_SORTABLE_COLUMNS, true ) ? $orderby : 'last_seen';
+        $order   = ( 'ASC' === strtoupper( $order ) ) ? 'ASC' : 'DESC';
 
         $total = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$this->log_table}" );
         $rows  = $wpdb->get_results( $wpdb->prepare(
-            "SELECT * FROM {$this->log_table} ORDER BY last_seen DESC LIMIT %d OFFSET %d",
+            "SELECT * FROM {$this->log_table} ORDER BY {$orderby} {$order} LIMIT %d OFFSET %d",
             $per_page, $offset
         ), ARRAY_A );
 
         return [ 'rows' => $rows, 'total' => $total ];
+    }
+
+    /**
+     * Encabezado de columna ordenable con el mismo look nativo que las
+     * listas de WordPress (flecha de orden, toggle asc/desc al hacer clic).
+     * Preserva el resto de la query string actual (búsqueda, página, etc.).
+     */
+    public function render_sortable_th( string $label, string $column, string $current_orderby, string $current_order, string $width = '' ): void {
+        $is_current = ( $current_orderby === $column );
+        $next_order = ( $is_current && 'asc' === strtolower( $current_order ) ) ? 'desc' : 'asc';
+        $classes    = 'manage-column column-' . sanitize_html_class( $column ) . ' sortable ' . ( $is_current ? 'sorted ' . strtolower( $current_order ) : 'desc' );
+        $url        = add_query_arg( [ 'orderby' => $column, 'order' => $next_order ] );
+        $style      = $width ? ' style="width:' . esc_attr( $width ) . ';"' : '';
+        ?>
+        <th<?php echo $style; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?> class="<?php echo esc_attr( $classes ); ?>">
+            <a href="<?php echo esc_url( $url ); ?>">
+                <span><?php echo esc_html( $label ); ?></span>
+                <span class="sorting-indicators">
+                    <span class="sorting-indicator asc" aria-hidden="true"></span>
+                    <span class="sorting-indicator desc" aria-hidden="true"></span>
+                </span>
+            </a>
+        </th>
+        <?php
     }
 
     public function count_redirects(): int {

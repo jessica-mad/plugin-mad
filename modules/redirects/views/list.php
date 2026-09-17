@@ -2,11 +2,13 @@
 /** Vista: listado de redirecciones. */
 defined( 'ABSPATH' ) || exit;
 
-$search = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
-$paged  = max( 1, absint( $_GET['paged'] ?? 1 ) );
+$search  = isset( $_GET['s'] ) ? sanitize_text_field( wp_unslash( $_GET['s'] ) ) : '';
+$paged   = max( 1, absint( $_GET['paged'] ?? 1 ) );
+$orderby = isset( $_GET['orderby'] ) ? sanitize_key( $_GET['orderby'] ) : 'id';
+$order   = ( isset( $_GET['order'] ) && 'asc' === strtolower( (string) $_GET['order'] ) ) ? 'asc' : 'desc';
 $per_page = 20;
 
-$data  = $this->get_redirects( $search, $per_page, $paged );
+$data  = $this->get_redirects( $search, $per_page, $paged, $orderby, $order );
 $rows  = $data['rows'];
 $total = $data['total'];
 $pages = (int) ceil( $total / $per_page );
@@ -56,12 +58,12 @@ $status_labels = [ 301 => '301', 302 => '302', 307 => '307', 410 => '410 (Gone)'
     <table class="wp-list-table widefat fixed striped">
         <thead>
             <tr>
-                <th style="width:60px;"><?php esc_html_e( 'Estado', 'mad-suite' ); ?></th>
-                <th><?php esc_html_e( 'URL antigua', 'mad-suite' ); ?></th>
-                <th><?php esc_html_e( 'URL nueva', 'mad-suite' ); ?></th>
-                <th style="width:90px;"><?php esc_html_e( 'Código', 'mad-suite' ); ?></th>
-                <th style="width:80px;"><?php esc_html_e( 'Tipo', 'mad-suite' ); ?></th>
-                <th style="width:70px;"><?php esc_html_e( 'Hits', 'mad-suite' ); ?></th>
+                <?php $this->render_sortable_th( __( 'Estado', 'mad-suite' ), 'is_active', $orderby, $order, '60px' ); ?>
+                <?php $this->render_sortable_th( __( 'URL antigua', 'mad-suite' ), 'source_path', $orderby, $order ); ?>
+                <?php $this->render_sortable_th( __( 'URL nueva', 'mad-suite' ), 'destination', $orderby, $order ); ?>
+                <?php $this->render_sortable_th( __( 'Código', 'mad-suite' ), 'status_code', $orderby, $order, '90px' ); ?>
+                <?php $this->render_sortable_th( __( 'Tipo', 'mad-suite' ), 'match_type', $orderby, $order, '80px' ); ?>
+                <?php $this->render_sortable_th( __( 'Hits', 'mad-suite' ), 'hits', $orderby, $order, '70px' ); ?>
                 <th style="width:140px;"><?php esc_html_e( 'Acciones', 'mad-suite' ); ?></th>
             </tr>
         </thead>
