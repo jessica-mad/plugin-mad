@@ -643,9 +643,17 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     public function output_product_list_thumb_css(): void {
         $screen = get_current_screen();
         if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        // object-fit: cover recorta la imagen manteniendo su proporción en vez
+        // de estirarla para llenar la caja de 80×80 — sin esto, las fotos que
+        // no son cuadradas se deforman.
         echo '<style>
             .wp-list-table .column-thumb { width: 80px !important; }
-            .wp-list-table .column-thumb img { width: 80px !important; height: 80px !important; max-width: 80px !important; }
+            .wp-list-table .column-thumb img {
+                width: 80px !important;
+                height: 80px !important;
+                max-width: 80px !important;
+                object-fit: cover;
+            }
         </style>';
     }
 
