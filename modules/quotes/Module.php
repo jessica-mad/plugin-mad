@@ -586,6 +586,8 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     public function maybe_restore_price( $price, $product ) {
+        if ( is_admin() ) return $price;
+
         if ( $this->current_user_is_quote_role() ) {
             return $price;
         }
@@ -1158,6 +1160,11 @@ return new class( $core ) implements MAD_Suite_Module {
      * y antes de que maybe_restore_price los restaure para profesionales (999).
      */
     public function hide_price_for_quote_role( $price, $product ) {
+        // El admin necesita ver el precio real siempre — en el listado de
+        // Productos, en la ficha del producto, etc. Estos filtros son solo
+        // para la tienda de cara al cliente.
+        if ( is_admin() ) return $price;
+
         if ( $this->current_user_is_quote_role() ) {
             return '';
         }
