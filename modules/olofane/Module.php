@@ -44,6 +44,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'ai_prompt_translate_fr'   => "Traduis la description de produit suivante de l'espagnol vers le français. Retourne uniquement le texte traduit :\n\n{text}",
             'ai_wpml_enabled'          => true,
             'wpml_quotes_enabled'      => true,
+            'product_columns_enabled'  => true,
         ];
 
         $opts = get_option( self::OPTION_KEY, [] );
@@ -118,6 +119,15 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( is_admin() ) {
             add_action( 'add_meta_boxes', [ $this, 'register_post_author_meta_box' ] );
             add_action( 'save_post',      [ $this, 'save_post_author_meta_box' ], 10, 2 );
+        }
+
+        // Feature 8 – Columnas extra en el listado de Productos del admin:
+        // medidas (L×A×A nativas de WooCommerce), ubicación de stock (taxonomía
+        // "Ubicaciones" de ATUM Inventory) y miniatura al doble de tamaño.
+        if ( is_admin() && ! empty( $s['product_columns_enabled'] ) ) {
+            add_filter( 'manage_edit-product_columns',        [ $this, 'add_product_list_columns' ] );
+            add_action( 'manage_product_posts_custom_column',  [ $this, 'render_product_list_column' ], 10, 2 );
+            add_action( 'admin_head',                          [ $this, 'output_product_list_thumb_css' ] );
         }
     }
 
@@ -561,6 +571,84 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         add_action( 'save_post', [ $this, 'save_post_author_meta_box' ], 10, 2 );
     }
 
+    // ── Feature 8: Columnas extra en el listado de Productos ─────────────────
+
+    /** Inserta "Medidas" y "Ubicación" justo después del nombre del producto. */
+    public function add_product_list_columns( array $columns ): array {
+        $new = [];
+        foreach ( $columns as $key => $label ) {
+            $new[ $key ] = $label;
+            if ( 'name' === $key ) {
+                $new['mad_dimensions']    = __( 'Medidas', 'mad-suite' );
+                $new['mad_atum_location'] = __( 'Ubicación', 'mad-suite' );
+            }
+        }
+        return $new;
+    }
+
+    public function render_product_list_column( string $column, int $post_id ): void {
+        if ( 'mad_dimensions' === $column ) {
+            $this->render_dimensions_column( $post_id );
+            return;
+        }
+        if ( 'mad_atum_location' === $column ) {
+            $this->render_atum_location_column( $post_id );
+            return;
+        }
+    }
+
+    /** Largo × Ancho × Alto nativos de WooCommerce (pestaña "Envío" del producto). */
+    private function render_dimensions_column( int $post_id ): void {
+        $product = wc_get_product( $post_id );
+        if ( ! $product ) {
+            echo '—';
+            return;
+        }
+
+        $dims = array_filter(
+            [ $product->get_length(), $product->get_width(), $product->get_height() ],
+            static function ( $v ) { return '' !== $v && null !== $v; }
+        );
+
+        if ( empty( $dims ) ) {
+            echo '—';
+            return;
+        }
+
+        $unit = get_option( 'woocommerce_dimension_unit', 'cm' );
+        echo esc_html( implode( ' × ', $dims ) . ' ' . $unit );
+    }
+
+    /**
+     * Ubicación de stock — taxonomía "Ubicaciones" del plugin ATUM Inventory
+     * Manager (atum_location, función gratuita). Si ATUM no está activo, se
+     * avisa en la columna en vez de fallar.
+     */
+    private function render_atum_location_column( int $post_id ): void {
+        if ( ! taxonomy_exists( 'atum_location' ) ) {
+            echo '<span style="color:#999;">' . esc_html__( 'ATUM no activo', 'mad-suite' ) . '</span>';
+            return;
+        }
+
+        $terms = get_the_terms( $post_id, 'atum_location' );
+        if ( empty( $terms ) || is_wp_error( $terms ) ) {
+            echo '—';
+            return;
+        }
+
+        echo esc_html( implode( ', ', wp_list_pluck( $terms, 'name' ) ) );
+    }
+
+    /** Miniatura del listado de Productos al doble del tamaño por defecto (40px → 80px). */
+    public function output_product_list_thumb_css(): void {
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        echo '<style>
+            .wp-list-table .column-thumb { width: 80px !important; }
+            .wp-list-table .column-thumb img { width: 80px !important; height: 80px !important; max-width: 80px !important; }
+        </style>';
+    }
+
     // ── Settings save ────────────────────────────────────────────────────────
 
     public function handle_save_settings(): void {
@@ -588,6 +676,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'ai_prompt_translate_fr'   => sanitize_textarea_field( $post['ai_prompt_translate_fr'] ?? '' ),
             'ai_wpml_enabled'          => ! empty( $post['ai_wpml_enabled'] ),
             'wpml_quotes_enabled'      => ! empty( $post['wpml_quotes_enabled'] ),
+            'product_columns_enabled'  => ! empty( $post['product_columns_enabled'] ),
         ];
 
         update_option( self::OPTION_KEY, $data );
@@ -780,6 +869,24 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                                     <?php checked( ! empty( $s['wpml_quotes_enabled'] ) ); ?>>
                                 <?php esc_html_e( 'Meta box de respuesta/traducción en todos los pedidos de WooCommerce', 'mad-suite' ); ?>
                             </label>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- ── 7: Columnas de producto ──────────────────────────── -->
+                <h2><?php esc_html_e( '7. Columnas extra en el listado de Productos', 'mad-suite' ); ?></h2>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th><?php esc_html_e( 'Activar columnas', 'mad-suite' ); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="product_columns_enabled" value="1"
+                                    <?php checked( ! empty( $s['product_columns_enabled'] ) ); ?>>
+                                <?php esc_html_e( 'Agregar columnas "Medidas" (L×A×A de WooCommerce) y "Ubicación" (taxonomía de ATUM Inventory) en WooCommerce → Productos, y mostrar la miniatura al doble de tamaño.', 'mad-suite' ); ?>
+                            </label>
+                            <p class="description">
+                                <?php esc_html_e( 'La ubicación usa la función gratuita de ATUM ("Ubicaciones de producto"). Si ATUM no está activo, esa columna avisa en vez de mostrar datos.', 'mad-suite' ); ?>
+                            </p>
                         </td>
                     </tr>
                 </table>
