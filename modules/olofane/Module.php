@@ -10,6 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 require_once __DIR__ . '/includes/AI_Description.php';
 require_once __DIR__ . '/includes/WPML_Quotes.php';
 require_once __DIR__ . '/includes/Menu_Duplicator.php';
+require_once __DIR__ . '/includes/CSV_User_Import.php';
 
 return new class ( $core ?? null ) implements MAD_Suite_Module {
 
@@ -99,6 +100,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
 
             $menu_dup = new MAD_Olofane_Menu_Duplicator();
             $menu_dup->init();
+
+            $csv_import = new MAD_Olofane_CSV_User_Import();
+            $csv_import->init();
         }
 
         // Feature 6 – NIF in WP admin user profiles
