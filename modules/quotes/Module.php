@@ -144,6 +144,7 @@ return new class( $core ) implements MAD_Suite_Module {
         // (30, que solo aplica a rol presupuesto — mutuamente excluyentes).
         add_action( 'woocommerce_before_calculate_totals', [ $this, 'apply_real_price_to_cart' ], 25 );
         add_action( 'wp_head',                                     [ $this, 'b2b_price_labels_css' ] );
+        add_action( 'wp_head',                                     [ $this, 'store_manager_price_css' ] );
         add_filter( 'woocommerce_product_add_to_cart_text',        [ $this, 'maybe_restore_button' ], 999, 2 );
         add_filter( 'woocommerce_product_single_add_to_cart_text', [ $this, 'maybe_restore_button' ], 999, 2 );
         add_filter( 'wc_add_to_cart_message_html',                 [ $this, 'rename_cart_in_add_to_cart_message' ], 20, 2 );
@@ -884,6 +885,29 @@ return new class( $core ) implements MAD_Suite_Module {
     font-size: 0.9em;
     font-style: italic;
     color: #555;
+}
+</style>';
+    }
+
+    /** CSS del desglose Base/IVA/Total de Gestión de tienda — sin esto los 3 <span> quedan pegados en una sola línea. */
+    public function store_manager_price_css(): void {
+        if ( ! $this->current_user_is_store_manager_role() ) return;
+        echo '<style>
+.mad-store-manager-price {
+    display: block;
+}
+.mad-smp-line {
+    display: block;
+    line-height: 1.5;
+}
+.mad-smp-base,
+.mad-smp-iva {
+    font-size: 0.85em;
+    color: #666;
+}
+.mad-smp-total {
+    margin-top: 3px;
+    font-size: 1.05em;
 }
 </style>';
     }
