@@ -128,6 +128,13 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_get_price_html',                  [ $this, 'add_b2b_price_labels' ], 1000, 2 );
         add_filter( 'woocommerce_variable_price_html',             [ $this, 'add_b2b_price_labels' ], 1000, 2 );
 
+        // ── Gestión de tienda: precio base real (no oferta) + desglose de IVA.
+        // Prioridad 1100: corre después de todo lo anterior y reemplaza el
+        // HTML entero, así que no importa qué hayan dejado los filtros previos.
+        add_filter( 'woocommerce_get_price_html',      [ $this, 'show_price_breakdown_for_store_manager' ], 1100, 2 );
+        add_filter( 'woocommerce_variable_price_html', [ $this, 'show_price_breakdown_for_store_manager' ], 1100, 2 );
+        add_action( 'woocommerce_before_calculate_totals', [ $this, 'apply_regular_price_for_store_manager' ], 35 );
+
         // ── Precio real por rol: el precio nativo de WooCommerce es un valor
         // simbólico (para poder usar el carrito y para el feed de Google
         // Shopping sin publicar el precio real). Los roles configurados en
@@ -310,6 +317,23 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_button_text',
             'mad_quotes_roles',
             __( 'Texto del botón en la ficha de producto (agrega el producto a la lista). Ej: "Añadir a la lista de precios". Deja en blanco para usar el texto por defecto del plugin.', 'mad-suite' )
+        );
+
+        // ── Sección: Gestión de tienda ──────────────────────────────────
+        add_settings_section(
+            'mad_quotes_store_manager',
+            __( 'Gestión de tienda', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Roles que ven el precio BASE real (nunca la oferta de profesionales) con desglose de IVA y total, y que pueden armar una lista de productos en el front y enviarla como presupuesto ya con precio final directo al email de un cliente — pensado para armar presupuestos en vivo en la tienda física. Si no marcas ninguno, esta función queda desactivada para todos.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'store_manager_roles',
+            __( 'Roles habilitados', 'mad-suite' ),
+            'field_store_manager_roles_multiselect',
+            'mad_quotes_store_manager',
+            __( 'Estos roles NO deben estar también marcados arriba en "Acceso por rol" (esos ocultan el precio); son casos distintos y mutuamente excluyentes.', 'mad-suite' )
         );
         $this->register_field(
             'quote_submit_button_text',
@@ -576,8 +600,81 @@ return new class( $core ) implements MAD_Suite_Module {
     /*  Rol: control de acceso                                           */
     /* ================================================================ */
 
-    private function current_user_is_quote_role(): bool {
+    public function current_user_is_quote_role(): bool {
         return mad_quotes_current_user_is_quote_role();
+    }
+
+    /**
+     * "Gestión de tienda": ve el precio base real (no la oferta de
+     * profesionales) con desglose de IVA, y puede armar y enviar
+     * presupuestos con precio final directo al email del cliente, todo
+     * desde el front. A diferencia de quote_roles, vacío = nadie (no todos).
+     */
+    public function current_user_is_store_manager_role(): bool {
+        $settings = mad_quotes_get_settings();
+        $roles    = array_filter( (array) ( $settings['store_manager_roles'] ?? [] ) );
+        if ( empty( $roles ) ) return false;
+
+        $user = wp_get_current_user();
+        if ( ! $user->ID ) return false;
+
+        return (bool) array_intersect( $roles, (array) $user->roles );
+    }
+
+    /**
+     * Desglose base/IVA/total del precio REGULAR de WooCommerce (nunca la
+     * oferta) para un producto, usando las tarifas de impuesto reales
+     * configuradas en WooCommerce. Null si el producto no tiene precio
+     * regular numérico (p.ej. variables, donde el precio es un rango).
+     *
+     * @return array{excl: float, iva: float, incl: float}|null
+     */
+    public function get_store_manager_price_breakdown( WC_Product $product ): ?array {
+        if ( $product->is_type( 'variable' ) ) return null;
+
+        $regular = $product->get_regular_price();
+        if ( '' === $regular || ! is_numeric( $regular ) ) return null;
+
+        $regular = (float) $regular;
+        $excl    = (float) wc_get_price_excluding_tax( $product, [ 'price' => $regular ] );
+        $incl    = (float) wc_get_price_including_tax( $product, [ 'price' => $regular ] );
+
+        return [ 'excl' => $excl, 'iva' => max( 0, $incl - $excl ), 'incl' => $incl ];
+    }
+
+    /** HTML de precio base + IVA + total para "Gestión de tienda", reemplazando la oferta de profesionales. */
+    public function show_price_breakdown_for_store_manager( string $price_html, $product ): string {
+        if ( is_admin() ) return $price_html;
+        // Por si un rol queda marcado en ambas listas por error: rol de
+        // presupuesto (precio oculto) manda siempre sobre gestión de tienda.
+        if ( $this->current_user_is_quote_role() ) return $price_html;
+        if ( ! $this->current_user_is_store_manager_role() ) return $price_html;
+        if ( ! $product instanceof WC_Product ) return $price_html;
+
+        $breakdown = $this->get_store_manager_price_breakdown( $product );
+        if ( null === $breakdown ) return $price_html;
+
+        return '<span class="mad-store-manager-price">'
+            . '<span class="mad-smp-line mad-smp-base">' . esc_html__( 'Base:', 'mad-suite' ) . ' ' . wc_price( $breakdown['excl'] ) . '</span>'
+            . '<span class="mad-smp-line mad-smp-iva">' . esc_html__( 'IVA:', 'mad-suite' ) . ' ' . wc_price( $breakdown['iva'] ) . '</span>'
+            . '<span class="mad-smp-line mad-smp-total"><strong>' . esc_html__( 'Total:', 'mad-suite' ) . ' ' . wc_price( $breakdown['incl'] ) . '</strong></span>'
+            . '</span>';
+    }
+
+    /** Fuerza el precio del carrito al precio REGULAR (no oferta) para Gestión de tienda. */
+    public function apply_regular_price_for_store_manager( $cart ): void {
+        if ( is_admin() && ! defined( 'DOING_AJAX' ) ) return;
+        if ( $this->current_user_is_quote_role() ) return;
+        if ( ! $this->current_user_is_store_manager_role() ) return;
+
+        foreach ( $cart->get_cart() as $cart_item ) {
+            if ( empty( $cart_item['data'] ) || ! is_object( $cart_item['data'] ) ) continue;
+
+            $regular = $cart_item['data']->get_regular_price();
+            if ( '' === $regular || ! is_numeric( $regular ) ) continue;
+
+            $cart_item['data']->set_price( (float) $regular );
+        }
     }
 
     public function cache_original_price( $price, $product ) {
@@ -943,8 +1040,11 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( empty( $_POST['mad_create_quote_nonce'] ) ) return;
 
         $back_url = $this->get_quote_cart_url();
+        // Si un rol quedó marcado en ambas listas por error, el de presupuesto
+        // (precio oculto) manda siempre sobre gestión de tienda.
+        $is_store_manager = $this->current_user_is_store_manager_role() && ! $this->current_user_is_quote_role();
 
-        if ( ! $this->current_user_is_quote_role() && ! $this->cart_is_quote_experience() ) {
+        if ( ! $this->current_user_is_quote_role() && ! $this->cart_is_quote_experience() && ! $is_store_manager ) {
             wp_safe_redirect( $back_url );
             exit;
         }
@@ -972,7 +1072,7 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         $user  = wp_get_current_user();
-        $order = wc_create_order( [ 'customer_id' => $user->ID ] );
+        $order = wc_create_order( [ 'customer_id' => $is_store_manager ? 0 : $user->ID ] );
 
         foreach ( WC()->cart->get_cart() as $item ) {
             $item_id = $order->add_product( $item['data'], $item['quantity'] );
@@ -988,16 +1088,26 @@ return new class( $core ) implements MAD_Suite_Module {
         // El admin puede modificarlos en el meta box antes de enviar el presupuesto.
         $order_total = $this->populate_quote_line_prices( $order );
 
+        if ( $is_store_manager ) {
+            // Gestión de tienda arma el presupuesto EN NOMBRE del cliente que
+            // tiene delante, no del suyo propio — el nombre va en un campo
+            // aparte del formulario, no es el usuario logueado (personal).
+            $client_name = sanitize_text_field( wp_unslash( $_POST['mad_client_name'] ?? '' ) );
+            $name_parts  = $client_name !== '' ? explode( ' ', $client_name, 2 ) : [ '', '' ];
+            $order->set_billing_first_name( $name_parts[0] ?? '' );
+            $order->set_billing_last_name( $name_parts[1] ?? '' );
+        } else {
+            $order->set_billing_first_name( $user->first_name ?: $user->display_name );
+            $order->set_billing_last_name( $user->last_name ?: '' );
+        }
+
         $order->set_billing_email( $email );
-        $order->set_billing_first_name( $user->first_name ?: $user->display_name );
-        $order->set_billing_last_name( $user->last_name ?: '' );
         $order->set_payment_method( 'quotes-gateway' );
         $order->set_cart_tax( 0 );
         $order->set_shipping_total( 0 );
         $order->set_shipping_tax( 0 );
         $order->set_total( $order_total );
         $order->update_meta_data( '_mad_qwc_quote', '1' );
-        $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
         $lang = apply_filters( 'wpml_current_language', null );
         if ( $lang ) {
             $order->update_meta_data( '_mad_quote_lang', sanitize_key( $lang ) );
@@ -1007,22 +1117,31 @@ return new class( $core ) implements MAD_Suite_Module {
             $order->add_order_note( esc_html( $notas ), true );
         }
 
-        $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
-        $order->save();
+        if ( $is_store_manager ) {
+            // Gestión de tienda ya vio precio real + IVA al armar la lista en
+            // vivo con el cliente delante — el presupuesto sale enviado
+            // directo, sin pasar por la revisión de "presupuesto pendiente".
+            $order->save();
+            $this->send_quote_email( $order->get_id(), $notas );
+        } else {
+            $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
+            $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+            $order->save();
+
+            // Emails: confirmación al cliente + aviso al admin.
+            if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
+                $order->update_meta_data( '_mad_quote_emails_sent', '1' );
+                $order->save();
+                WC_Emails::instance();
+                wc_get_logger()->info(
+                    sprintf( 'mad_quotes_new_request disparado — pedido #%d → destinatario: %s', $order->get_id(), $email ),
+                    [ 'source' => 'mad-quotes-email' ]
+                );
+                do_action( 'mad_quotes_new_request', $order->get_id() );
+            }
+        }
 
         WC()->cart->empty_cart();
-
-        // Emails: confirmación al cliente + aviso al admin.
-        if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
-            $order->update_meta_data( '_mad_quote_emails_sent', '1' );
-            $order->save();
-            WC_Emails::instance();
-            wc_get_logger()->info(
-                sprintf( 'mad_quotes_new_request disparado — pedido #%d → destinatario: %s', $order->get_id(), $email ),
-                [ 'source' => 'mad-quotes-email' ]
-            );
-            do_action( 'mad_quotes_new_request', $order->get_id() );
-        }
 
         wp_safe_redirect( $order->get_checkout_order_received_url() );
         exit;
@@ -1102,7 +1221,7 @@ return new class( $core ) implements MAD_Suite_Module {
      */
     public function serve_quote_cart_template(): void {
         if ( ! is_cart() ) return;
-        if ( ! $this->current_user_is_quote_role() && ! $this->cart_is_quote_experience() ) return;
+        if ( ! $this->current_user_is_quote_role() && ! $this->cart_is_quote_experience() && ! $this->current_user_is_store_manager_role() ) return;
         if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return;
 
         // Si hay una página configurada con el shortcode, redirigir allí.
@@ -1650,7 +1769,10 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
 
         // Si el pedido ya está en un estado de pago legítimo, no tocarlo.
-        $paid_statuses = [ 'on-hold', 'processing', 'completed', 'quote-pending', 'cancelled', 'refunded', 'failed' ];
+        // "quote-sent" se incluye porque Gestión de tienda llega a esta misma
+        // página de confirmación con el presupuesto ya enviado directo (sin
+        // pasar por quote-pending) — si no, este guard lo revertiría.
+        $paid_statuses = [ 'on-hold', 'processing', 'completed', 'quote-pending', 'quote-sent', 'cancelled', 'refunded', 'failed' ];
         if ( in_array( $order->get_status(), $paid_statuses, true ) ) return;
 
         self::$enforcing_status = true;
@@ -2777,6 +2899,30 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<p class="description">' . esc_html( $args['desc'] ?? '' ) . '</p>';
     }
 
+    /** Igual que field_roles_multiselect() pero para "store_manager_roles" (sin opción de invitados). */
+    public function field_store_manager_roles_multiselect( $args ) {
+        $settings = mad_quotes_get_settings();
+        $selected = array_filter( (array) ( $settings['store_manager_roles'] ?? [] ) );
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $roles    = wp_roles()->roles;
+
+        echo '<fieldset>';
+
+        foreach ( $roles as $slug => $role ) {
+            $checked = in_array( $slug, $selected, true ) ? ' checked' : '';
+            printf(
+                '<label><input type="checkbox" name="%s[store_manager_roles][]" value="%s"%s> %s</label><br>',
+                esc_attr( $opt_key ),
+                esc_attr( $slug ),
+                $checked,
+                esc_html( translate_user_role( $role['name'] ) )
+            );
+        }
+
+        echo '</fieldset>';
+        echo '<p class="description">' . esc_html( $args['desc'] ?? '' ) . '</p>';
+    }
+
     public function field_real_price_roles( $args ) {
         $settings = mad_quotes_get_settings();
         $map      = (array) ( $settings['real_price_roles'] ?? [] );
@@ -2811,13 +2957,20 @@ return new class( $core ) implements MAD_Suite_Module {
 
     /** Renderiza el shortcode [mad_quote_cart] para incrustar en cualquier página. */
     public function shortcode_quote_cart(): string {
-        if ( ! $this->current_user_is_quote_role() ) return '';
+        if ( ! $this->current_user_is_quote_role() && ! $this->current_user_is_store_manager_role() ) return '';
         if ( ! function_exists( 'WC' ) || ! isset( WC()->cart ) ) return '';
 
         $settings  = mad_quotes_get_settings();
         $btn_label = trim( $this->resolve_lang_text( $settings['quote_submit_button_text'] ?? [] ) );
         if ( $btn_label === '' ) {
             $btn_label = __( 'Enviar solicitud de lista de precios', 'mad-suite' );
+        }
+
+        // Si un rol quedó marcado en ambas listas por error, el de presupuesto
+        // (precio oculto) manda siempre sobre gestión de tienda.
+        $is_store_manager = $this->current_user_is_store_manager_role() && ! $this->current_user_is_quote_role();
+        if ( $is_store_manager ) {
+            $btn_label = __( 'Enviar presupuesto al cliente', 'mad-suite' );
         }
 
         ob_start();
@@ -2836,6 +2989,7 @@ return new class( $core ) implements MAD_Suite_Module {
             <form class="mad-quote-cart__form"
                   action="<?php echo esc_url( wc_get_cart_url() ); ?>"
                   method="post">
+                <?php if ( $is_store_manager ) : $grand_total = [ 'excl' => 0.0, 'iva' => 0.0, 'incl' => 0.0 ]; endif; ?>
                 <table class="mad-quote-cart__table">
                     <thead>
                         <tr>
@@ -2843,6 +2997,11 @@ return new class( $core ) implements MAD_Suite_Module {
                             <th class="product-thumbnail">&nbsp;</th>
                             <th class="product-name"><?php esc_html_e( 'Producto', 'mad-suite' ); ?></th>
                             <th class="product-quantity"><?php esc_html_e( 'Cantidad', 'mad-suite' ); ?></th>
+                            <?php if ( $is_store_manager ) : ?>
+                                <th class="product-price"><?php esc_html_e( 'Precio base', 'mad-suite' ); ?></th>
+                                <th class="product-iva"><?php esc_html_e( 'IVA', 'mad-suite' ); ?></th>
+                                <th class="product-subtotal"><?php esc_html_e( 'Total línea', 'mad-suite' ); ?></th>
+                            <?php endif; ?>
                         </tr>
                     </thead>
                     <tbody>
@@ -2851,6 +3010,16 @@ return new class( $core ) implements MAD_Suite_Module {
                         $product_id = apply_filters( 'woocommerce_cart_item_product_id', $cart_item['product_id'], $cart_item, $cart_item_key );
                         if ( ! $product || ! $product->exists() || 0 === $cart_item['quantity'] ) continue;
                         $product_permalink = apply_filters( 'woocommerce_cart_item_permalink', $product->is_visible() ? $product->get_permalink( $cart_item ) : '', $cart_item, $cart_item_key );
+
+                        if ( $is_store_manager ) {
+                            $breakdown = $this->get_store_manager_price_breakdown( $product );
+                            if ( $breakdown ) {
+                                $qty = (int) $cart_item['quantity'];
+                                $grand_total['excl'] += $breakdown['excl'] * $qty;
+                                $grand_total['iva']  += $breakdown['iva']  * $qty;
+                                $grand_total['incl'] += $breakdown['incl'] * $qty;
+                            }
+                        }
                     ?>
                         <tr class="woocommerce-cart-form__cart-item <?php echo esc_attr( apply_filters( 'woocommerce_cart_item_class', 'cart_item', $cart_item, $cart_item_key ) ); ?>">
                             <td class="product-remove">
@@ -2898,9 +3067,30 @@ return new class( $core ) implements MAD_Suite_Module {
                                     ], $product );
                                 } ?>
                             </td>
+                            <?php if ( $is_store_manager ) : ?>
+                                <td class="product-price" data-title="<?php esc_attr_e( 'Precio base', 'mad-suite' ); ?>">
+                                    <?php echo $breakdown ? wc_price( $breakdown['excl'] ) : '—'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                                </td>
+                                <td class="product-iva" data-title="<?php esc_attr_e( 'IVA', 'mad-suite' ); ?>">
+                                    <?php echo $breakdown ? wc_price( $breakdown['iva'] ) : '—'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                                </td>
+                                <td class="product-subtotal" data-title="<?php esc_attr_e( 'Total línea', 'mad-suite' ); ?>">
+                                    <?php echo $breakdown ? wc_price( $breakdown['incl'] * (int) $cart_item['quantity'] ) : '—'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                                </td>
+                            <?php endif; ?>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
+                    <?php if ( $is_store_manager ) : ?>
+                        <tfoot>
+                            <tr class="mad-quote-cart__grand-total">
+                                <td colspan="4" style="text-align:right;"><strong><?php esc_html_e( 'Total presupuesto:', 'mad-suite' ); ?></strong></td>
+                                <td><?php echo wc_price( $grand_total['excl'] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
+                                <td><?php echo wc_price( $grand_total['iva'] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
+                                <td><strong><?php echo wc_price( $grand_total['incl'] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></strong></td>
+                            </tr>
+                        </tfoot>
+                    <?php endif; ?>
                 </table>
                 <div class="mad-quote-cart__update">
                     <button type="submit" class="mad-quote-cart__btn-update" name="update_cart"
@@ -2915,10 +3105,16 @@ return new class( $core ) implements MAD_Suite_Module {
                 <form method="post" class="mad-quote-submit-form">
                     <?php wp_nonce_field( 'mad_create_quote', 'mad_create_quote_nonce' ); ?>
                     <?php $current_user = wp_get_current_user(); ?>
+                    <?php if ( $is_store_manager ) : ?>
+                        <p class="mad-quote-cart__field">
+                            <label for="mad-quote-client-name"><?php esc_html_e( 'Nombre del cliente', 'mad-suite' ); ?></label>
+                            <input type="text" id="mad-quote-client-name" name="mad_client_name" required>
+                        </p>
+                    <?php endif; ?>
                     <p class="mad-quote-cart__field">
-                        <label for="mad-quote-email"><?php esc_html_e( 'Email', 'mad-suite' ); ?></label>
+                        <label for="mad-quote-email"><?php $is_store_manager ? esc_html_e( 'Email del cliente', 'mad-suite' ) : esc_html_e( 'Email', 'mad-suite' ); ?></label>
                         <input type="email" id="mad-quote-email" name="olofane_email"
-                               value="<?php echo esc_attr( $current_user->user_email ); ?>" required>
+                               value="<?php echo esc_attr( $is_store_manager ? '' : $current_user->user_email ); ?>" required>
                     </p>
                     <p class="mad-quote-cart__field">
                         <label for="mad-quote-notas"><?php esc_html_e( 'Notas (opcional)', 'mad-suite' ); ?></label>
@@ -2976,6 +3172,10 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $clean['quote_roles'] = isset( $input['quote_roles'] )
             ? array_values( array_map( 'sanitize_text_field', (array) $input['quote_roles'] ) )
+            : [];
+
+        $clean['store_manager_roles'] = isset( $input['store_manager_roles'] )
+            ? array_values( array_map( 'sanitize_text_field', (array) $input['store_manager_roles'] ) )
             : [];
 
         $clean['quote_expiry_days']       = absint( $input['quote_expiry_days'] ?? 0 );

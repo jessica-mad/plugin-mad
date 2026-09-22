@@ -27,6 +27,13 @@ if ( is_string( $_btn_stored ) ) {
 unset( $_btn_stored, $_lang, $_def_lang );
 $btn_label = trim( $btn_text ) !== '' ? $btn_text : __( 'Enviar solicitud de lista de precios', 'mad-suite' );
 
+// Si un rol quedó marcado en ambas listas por error, el de presupuesto
+// (precio oculto) manda siempre sobre gestión de tienda.
+$is_store_manager = $this->current_user_is_store_manager_role() && ! $this->current_user_is_quote_role();
+if ( $is_store_manager ) {
+    $btn_label = __( 'Enviar presupuesto al cliente', 'mad-suite' );
+}
+
 get_header( 'shop' );
 ?>
 
@@ -55,6 +62,7 @@ get_header( 'shop' );
               action="<?php echo esc_url( wc_get_cart_url() ); ?>"
               method="post">
 
+            <?php if ( $is_store_manager ) : $grand_total = [ 'excl' => 0.0, 'iva' => 0.0, 'incl' => 0.0 ]; endif; ?>
             <table class="mad-quote-cart__table">
                 <thead>
                     <tr>
@@ -62,6 +70,11 @@ get_header( 'shop' );
                         <th class="product-thumbnail">&nbsp;</th>
                         <th class="product-name"><?php esc_html_e( 'Producto', 'mad-suite' ); ?></th>
                         <th class="product-quantity"><?php esc_html_e( 'Cantidad', 'mad-suite' ); ?></th>
+                        <?php if ( $is_store_manager ) : ?>
+                            <th class="product-price"><?php esc_html_e( 'Precio base', 'mad-suite' ); ?></th>
+                            <th class="product-iva"><?php esc_html_e( 'IVA', 'mad-suite' ); ?></th>
+                            <th class="product-subtotal"><?php esc_html_e( 'Total línea', 'mad-suite' ); ?></th>
+                        <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -70,6 +83,16 @@ get_header( 'shop' );
                     $product_id = apply_filters( 'woocommerce_cart_item_product_id', $cart_item['product_id'], $cart_item, $cart_item_key );
                     if ( ! $product || ! $product->exists() || 0 === $cart_item['quantity'] ) continue;
                     $product_permalink = apply_filters( 'woocommerce_cart_item_permalink', $product->is_visible() ? $product->get_permalink( $cart_item ) : '', $cart_item, $cart_item_key );
+
+                    if ( $is_store_manager ) {
+                        $breakdown = $this->get_store_manager_price_breakdown( $product );
+                        if ( $breakdown ) {
+                            $qty = (int) $cart_item['quantity'];
+                            $grand_total['excl'] += $breakdown['excl'] * $qty;
+                            $grand_total['iva']  += $breakdown['iva']  * $qty;
+                            $grand_total['incl'] += $breakdown['incl'] * $qty;
+                        }
+                    }
                 ?>
                     <tr class="woocommerce-cart-form__cart-item <?php echo esc_attr( apply_filters( 'woocommerce_cart_item_class', 'cart_item', $cart_item, $cart_item_key ) ); ?>">
 
@@ -136,9 +159,31 @@ get_header( 'shop' );
                             ?>
                         </td>
 
+                        <?php if ( $is_store_manager ) : ?>
+                            <td class="product-price" data-title="<?php esc_attr_e( 'Precio base', 'mad-suite' ); ?>">
+                                <?php echo $breakdown ? wc_price( $breakdown['excl'] ) : '—'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                            </td>
+                            <td class="product-iva" data-title="<?php esc_attr_e( 'IVA', 'mad-suite' ); ?>">
+                                <?php echo $breakdown ? wc_price( $breakdown['iva'] ) : '—'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                            </td>
+                            <td class="product-subtotal" data-title="<?php esc_attr_e( 'Total línea', 'mad-suite' ); ?>">
+                                <?php echo $breakdown ? wc_price( $breakdown['incl'] * (int) $cart_item['quantity'] ) : '—'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+                            </td>
+                        <?php endif; ?>
+
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
+                <?php if ( $is_store_manager ) : ?>
+                    <tfoot>
+                        <tr class="mad-quote-cart__grand-total">
+                            <td colspan="4" style="text-align:right;"><strong><?php esc_html_e( 'Total presupuesto:', 'mad-suite' ); ?></strong></td>
+                            <td><?php echo wc_price( $grand_total['excl'] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
+                            <td><?php echo wc_price( $grand_total['iva'] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></td>
+                            <td><strong><?php echo wc_price( $grand_total['incl'] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?></strong></td>
+                        </tr>
+                    </tfoot>
+                <?php endif; ?>
             </table>
 
             <!-- Botones del formulario -->
@@ -160,14 +205,26 @@ get_header( 'shop' );
                 <?php wp_nonce_field( 'mad_create_quote', 'mad_create_quote_nonce' ); ?>
                 <?php $current_user = wp_get_current_user(); ?>
 
+                <?php if ( $is_store_manager ) : ?>
+                    <p class="mad-quote-cart__field">
+                        <label for="mad-quote-client-name">
+                            <?php esc_html_e( 'Nombre del cliente', 'mad-suite' ); ?>
+                        </label>
+                        <input type="text"
+                               id="mad-quote-client-name"
+                               name="mad_client_name"
+                               required>
+                    </p>
+                <?php endif; ?>
+
                 <p class="mad-quote-cart__field">
                     <label for="mad-quote-email">
-                        <?php esc_html_e( 'Email', 'mad-suite' ); ?>
+                        <?php $is_store_manager ? esc_html_e( 'Email del cliente', 'mad-suite' ) : esc_html_e( 'Email', 'mad-suite' ); ?>
                     </label>
                     <input type="email"
                            id="mad-quote-email"
                            name="olofane_email"
-                           value="<?php echo esc_attr( $current_user->user_email ); ?>"
+                           value="<?php echo esc_attr( $is_store_manager ? '' : $current_user->user_email ); ?>"
                            required>
                 </p>
 

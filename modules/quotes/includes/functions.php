@@ -144,6 +144,11 @@ function mad_quotes_get_settings() {
         'payment_proof_strict'     => false,
         'real_price_roles'         => [],
         'add_to_cart_notice_text'  => __( 'a tu lista de precios', 'mad-suite' ),
+        // A diferencia de quote_roles (vacío = todos), acá vacío = nadie:
+        // este rol ve precio base real + IVA y puede enviar presupuestos ya
+        // con precio final directo al cliente, así que el default seguro es
+        // que no aplique a nadie hasta que se configure explícitamente.
+        'store_manager_roles'      => [],
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );
