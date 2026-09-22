@@ -207,6 +207,18 @@ get_header( 'shop' );
 
                 <?php if ( $is_store_manager ) : ?>
                     <p class="mad-quote-cart__field">
+                        <label>
+                            <input type="radio" name="mad_order_mode" value="email" id="mad-mode-email" checked>
+                            <?php esc_html_e( 'Enviar presupuesto por email', 'mad-suite' ); ?>
+                        </label>
+                        <br>
+                        <label>
+                            <input type="radio" name="mad_order_mode" value="direct" id="mad-mode-direct">
+                            <?php esc_html_e( 'Venta directa (ya cobrado en tienda)', 'mad-suite' ); ?>
+                        </label>
+                    </p>
+
+                    <p class="mad-quote-cart__field">
                         <label for="mad-quote-client-name">
                             <?php esc_html_e( 'Nombre del cliente', 'mad-suite' ); ?>
                         </label>
@@ -215,9 +227,21 @@ get_header( 'shop' );
                                name="mad_client_name"
                                required>
                     </p>
+
+                    <p class="mad-quote-cart__field" id="mad-payment-method-field" style="display:none;">
+                        <label for="mad-payment-method">
+                            <?php esc_html_e( 'Método de pago', 'mad-suite' ); ?>
+                        </label>
+                        <select id="mad-payment-method" name="mad_payment_method">
+                            <option value="efectivo"><?php esc_html_e( 'Efectivo', 'mad-suite' ); ?></option>
+                            <option value="tarjeta"><?php esc_html_e( 'Tarjeta (datáfono en tienda)', 'mad-suite' ); ?></option>
+                            <option value="transferencia"><?php esc_html_e( 'Transferencia', 'mad-suite' ); ?></option>
+                            <option value="otro"><?php esc_html_e( 'Otro', 'mad-suite' ); ?></option>
+                        </select>
+                    </p>
                 <?php endif; ?>
 
-                <p class="mad-quote-cart__field">
+                <p class="mad-quote-cart__field" id="mad-email-field">
                     <label for="mad-quote-email">
                         <?php $is_store_manager ? esc_html_e( 'Email del cliente', 'mad-suite' ) : esc_html_e( 'Email', 'mad-suite' ); ?>
                     </label>
@@ -225,7 +249,7 @@ get_header( 'shop' );
                            id="mad-quote-email"
                            name="olofane_email"
                            value="<?php echo esc_attr( $is_store_manager ? '' : $current_user->user_email ); ?>"
-                           required>
+                           <?php echo $is_store_manager ? '' : 'required'; ?>>
                 </p>
 
                 <p class="mad-quote-cart__field">
@@ -243,6 +267,27 @@ get_header( 'shop' );
                     <?php echo esc_html( $btn_label ); ?>
                 </button>
             </form>
+
+            <?php if ( $is_store_manager ) : ?>
+                <script>
+                (function () {
+                    var directRadio = document.getElementById( 'mad-mode-direct' );
+                    var emailRadio  = document.getElementById( 'mad-mode-email' );
+                    var payField    = document.getElementById( 'mad-payment-method-field' );
+                    var emailInput  = document.getElementById( 'mad-quote-email' );
+                    if ( ! directRadio || ! emailRadio || ! payField || ! emailInput ) return;
+
+                    function toggle() {
+                        var isDirect = directRadio.checked;
+                        payField.style.display = isDirect ? '' : 'none';
+                        emailInput.required = ! isDirect;
+                    }
+                    directRadio.addEventListener( 'change', toggle );
+                    emailRadio.addEventListener( 'change', toggle );
+                    toggle();
+                })();
+                </script>
+            <?php endif; ?>
 
             <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
                class="mad-quote-cart__back">

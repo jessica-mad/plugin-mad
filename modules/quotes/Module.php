@@ -1062,13 +1062,33 @@ return new class( $core ) implements MAD_Suite_Module {
             exit;
         }
 
+        // Gestión de tienda elige entre mandar un presupuesto por email o
+        // registrar la venta directa (ya cobrada en la tienda física).
+        $direct_sale = $is_store_manager && 'direct' === sanitize_key( wp_unslash( $_POST['mad_order_mode'] ?? 'email' ) );
+
         $email = sanitize_email( wp_unslash( $_POST['olofane_email'] ?? '' ) );
         $notas = sanitize_textarea_field( wp_unslash( $_POST['olofane_notas'] ?? '' ) );
 
-        if ( ! is_email( $email ) ) {
+        if ( '' !== $email && ! is_email( $email ) ) {
             wc_add_notice( __( 'Por favor, introduce un email válido.', 'mad-suite' ), 'error' );
             wp_safe_redirect( $back_url );
             exit;
+        }
+        if ( ! $direct_sale && '' === $email ) {
+            wc_add_notice( __( 'Por favor, introduce un email válido.', 'mad-suite' ), 'error' );
+            wp_safe_redirect( $back_url );
+            exit;
+        }
+
+        $payment_methods = [
+            'efectivo'      => __( 'Efectivo', 'mad-suite' ),
+            'tarjeta'       => __( 'Tarjeta (datáfono en tienda)', 'mad-suite' ),
+            'transferencia' => __( 'Transferencia', 'mad-suite' ),
+            'otro'          => __( 'Otro', 'mad-suite' ),
+        ];
+        $payment_method = sanitize_key( wp_unslash( $_POST['mad_payment_method'] ?? '' ) );
+        if ( ! isset( $payment_methods[ $payment_method ] ) ) {
+            $payment_method = 'efectivo';
         }
 
         $user  = wp_get_current_user();
@@ -1084,14 +1104,15 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         // Pre-poblar con precio regular de cada producto (o el sugerido por un
-        // configurador de opciones, si lo hay) como punto de partida.
-        // El admin puede modificarlos en el meta box antes de enviar el presupuesto.
+        // configurador de opciones, si lo hay) como punto de partida. En el
+        // flujo de presupuesto el admin puede ajustarlos después desde el
+        // meta box; en una venta directa quedan tal cual, sin pasar por ahí.
         $order_total = $this->populate_quote_line_prices( $order );
 
         if ( $is_store_manager ) {
-            // Gestión de tienda arma el presupuesto EN NOMBRE del cliente que
-            // tiene delante, no del suyo propio — el nombre va en un campo
-            // aparte del formulario, no es el usuario logueado (personal).
+            // Gestión de tienda arma esto EN NOMBRE del cliente que tiene
+            // delante, no del suyo propio — el nombre va en un campo aparte
+            // del formulario, no es el usuario logueado (personal).
             $client_name = sanitize_text_field( wp_unslash( $_POST['mad_client_name'] ?? '' ) );
             $name_parts  = $client_name !== '' ? explode( ' ', $client_name, 2 ) : [ '', '' ];
             $order->set_billing_first_name( $name_parts[0] ?? '' );
@@ -1101,43 +1122,68 @@ return new class( $core ) implements MAD_Suite_Module {
             $order->set_billing_last_name( $user->last_name ?: '' );
         }
 
-        $order->set_billing_email( $email );
-        $order->set_payment_method( 'quotes-gateway' );
-        $order->set_cart_tax( 0 );
-        $order->set_shipping_total( 0 );
-        $order->set_shipping_tax( 0 );
-        $order->set_total( $order_total );
-        $order->update_meta_data( '_mad_qwc_quote', '1' );
+        if ( '' !== $email ) {
+            $order->set_billing_email( $email );
+        }
+
         $lang = apply_filters( 'wpml_current_language', null );
         if ( $lang ) {
             $order->update_meta_data( '_mad_quote_lang', sanitize_key( $lang ) );
         }
-
         if ( $notas ) {
             $order->add_order_note( esc_html( $notas ), true );
         }
 
-        if ( $is_store_manager ) {
-            // Gestión de tienda ya vio precio real + IVA al armar la lista en
-            // vivo con el cliente delante — el presupuesto sale enviado
-            // directo, sin pasar por la revisión de "presupuesto pendiente".
+        if ( $direct_sale ) {
+            // Venta confirmada ahí mismo, ya cobrada fuera de la web (efectivo
+            // o datáfono de la tienda) — a diferencia de un presupuesto, esto
+            // SÍ lleva IVA real (calculate_totals) y SÍ descuenta stock como
+            // una venta normal. Por eso NO se marca con _mad_qwc_quote: ese
+            // meta es lo que activa todo el comportamiento especial de
+            // presupuestos (stock bloqueado, precios ocultos en la página de
+            // confirmación, etc.), que acá no corresponde — es una venta real.
+            $order->set_payment_method( $payment_method );
+            $order->set_payment_method_title( $payment_methods[ $payment_method ] );
+            $order->set_shipping_total( 0 );
+            $order->set_shipping_tax( 0 );
+            $order->calculate_totals();
             $order->save();
-            $this->send_quote_email( $order->get_id(), $notas );
+            $order->update_status( 'completed', sprintf(
+                /* translators: %s: método de pago */
+                __( 'Venta directa en tienda física — cobrado con %s.', 'mad-suite' ),
+                $payment_methods[ $payment_method ]
+            ) );
+            $order->save();
         } else {
-            $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
-            $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
-            $order->save();
+            $order->set_payment_method( 'quotes-gateway' );
+            $order->set_cart_tax( 0 );
+            $order->set_shipping_total( 0 );
+            $order->set_shipping_tax( 0 );
+            $order->set_total( $order_total );
+            $order->update_meta_data( '_mad_qwc_quote', '1' );
 
-            // Emails: confirmación al cliente + aviso al admin.
-            if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
-                $order->update_meta_data( '_mad_quote_emails_sent', '1' );
+            if ( $is_store_manager ) {
+                // Gestión de tienda ya vio precio real + IVA al armar la lista
+                // en vivo con el cliente delante — el presupuesto sale enviado
+                // directo, sin pasar por la revisión de "presupuesto pendiente".
                 $order->save();
-                WC_Emails::instance();
-                wc_get_logger()->info(
-                    sprintf( 'mad_quotes_new_request disparado — pedido #%d → destinatario: %s', $order->get_id(), $email ),
-                    [ 'source' => 'mad-quotes-email' ]
-                );
-                do_action( 'mad_quotes_new_request', $order->get_id() );
+                $this->send_quote_email( $order->get_id(), $notas );
+            } else {
+                $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
+                $order->update_status( 'quote-pending', __( 'Solicitud de presupuesto recibida.', 'mad-suite' ) );
+                $order->save();
+
+                // Emails: confirmación al cliente + aviso al admin.
+                if ( ! $order->get_meta( '_mad_quote_emails_sent' ) ) {
+                    $order->update_meta_data( '_mad_quote_emails_sent', '1' );
+                    $order->save();
+                    WC_Emails::instance();
+                    wc_get_logger()->info(
+                        sprintf( 'mad_quotes_new_request disparado — pedido #%d → destinatario: %s', $order->get_id(), $email ),
+                        [ 'source' => 'mad-quotes-email' ]
+                    );
+                    do_action( 'mad_quotes_new_request', $order->get_id() );
+                }
             }
         }
 
@@ -3107,14 +3153,34 @@ return new class( $core ) implements MAD_Suite_Module {
                     <?php $current_user = wp_get_current_user(); ?>
                     <?php if ( $is_store_manager ) : ?>
                         <p class="mad-quote-cart__field">
+                            <label>
+                                <input type="radio" name="mad_order_mode" value="email" id="mad-mode-email" checked>
+                                <?php esc_html_e( 'Enviar presupuesto por email', 'mad-suite' ); ?>
+                            </label>
+                            <br>
+                            <label>
+                                <input type="radio" name="mad_order_mode" value="direct" id="mad-mode-direct">
+                                <?php esc_html_e( 'Venta directa (ya cobrado en tienda)', 'mad-suite' ); ?>
+                            </label>
+                        </p>
+                        <p class="mad-quote-cart__field">
                             <label for="mad-quote-client-name"><?php esc_html_e( 'Nombre del cliente', 'mad-suite' ); ?></label>
                             <input type="text" id="mad-quote-client-name" name="mad_client_name" required>
                         </p>
+                        <p class="mad-quote-cart__field" id="mad-payment-method-field" style="display:none;">
+                            <label for="mad-payment-method"><?php esc_html_e( 'Método de pago', 'mad-suite' ); ?></label>
+                            <select id="mad-payment-method" name="mad_payment_method">
+                                <option value="efectivo"><?php esc_html_e( 'Efectivo', 'mad-suite' ); ?></option>
+                                <option value="tarjeta"><?php esc_html_e( 'Tarjeta (datáfono en tienda)', 'mad-suite' ); ?></option>
+                                <option value="transferencia"><?php esc_html_e( 'Transferencia', 'mad-suite' ); ?></option>
+                                <option value="otro"><?php esc_html_e( 'Otro', 'mad-suite' ); ?></option>
+                            </select>
+                        </p>
                     <?php endif; ?>
-                    <p class="mad-quote-cart__field">
+                    <p class="mad-quote-cart__field" id="mad-email-field">
                         <label for="mad-quote-email"><?php $is_store_manager ? esc_html_e( 'Email del cliente', 'mad-suite' ) : esc_html_e( 'Email', 'mad-suite' ); ?></label>
                         <input type="email" id="mad-quote-email" name="olofane_email"
-                               value="<?php echo esc_attr( $is_store_manager ? '' : $current_user->user_email ); ?>" required>
+                               value="<?php echo esc_attr( $is_store_manager ? '' : $current_user->user_email ); ?>" <?php echo $is_store_manager ? '' : 'required'; ?>>
                     </p>
                     <p class="mad-quote-cart__field">
                         <label for="mad-quote-notas"><?php esc_html_e( 'Notas (opcional)', 'mad-suite' ); ?></label>
@@ -3124,6 +3190,27 @@ return new class( $core ) implements MAD_Suite_Module {
                         <?php echo esc_html( $btn_label ); ?>
                     </button>
                 </form>
+
+                <?php if ( $is_store_manager ) : ?>
+                    <script>
+                    (function () {
+                        var directRadio = document.getElementById( 'mad-mode-direct' );
+                        var emailRadio  = document.getElementById( 'mad-mode-email' );
+                        var payField    = document.getElementById( 'mad-payment-method-field' );
+                        var emailInput  = document.getElementById( 'mad-quote-email' );
+                        if ( ! directRadio || ! emailRadio || ! payField || ! emailInput ) return;
+
+                        function toggle() {
+                            var isDirect = directRadio.checked;
+                            payField.style.display = isDirect ? '' : 'none';
+                            emailInput.required = ! isDirect;
+                        }
+                        directRadio.addEventListener( 'change', toggle );
+                        emailRadio.addEventListener( 'change', toggle );
+                        toggle();
+                    })();
+                    </script>
+                <?php endif; ?>
                 <a href="<?php echo esc_url( wc_get_page_permalink( 'shop' ) ); ?>"
                    class="mad-quote-cart__back">
                     <?php esc_html_e( 'Seguir viendo productos', 'mad-suite' ); ?>
