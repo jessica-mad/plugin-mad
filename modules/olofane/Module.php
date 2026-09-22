@@ -650,12 +650,18 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         // object-fit: cover recorta la imagen manteniendo su proporción en vez
         // de estirarla para llenar la caja de 110×110 — sin esto, las fotos que
         // no son cuadradas se deforman.
+        // max-width/max-height explícitos porque WooCommerce trae su propio
+        // max-height fijo en esta columna — sin pisarlo, "height" no alcanza
+        // (max-height siempre gana sobre height) y la imagen queda achatada.
         echo '<style>
             .wp-list-table .column-thumb { width: 110px !important; }
             .wp-list-table .column-thumb img {
                 width: 110px !important;
                 height: 110px !important;
                 max-width: 110px !important;
+                max-height: 110px !important;
+                min-width: 110px !important;
+                min-height: 110px !important;
                 object-fit: cover;
             }
         </style>';
