@@ -33,6 +33,54 @@
     } );
 
     // ------------------------------------------------------------------ //
+    //  Resumen de IVA en vivo (Base / IVA / Total) al editar precios      //
+    //  Usa la tarifa (%) real de cada producto, embebida en data-tax-rate //
+    //  por el servidor — es la misma que ya usa el email del presupuesto. //
+    // ------------------------------------------------------------------ //
+    function madQuotesRecalcIva() {
+        var base = 0;
+        var totalWithTax = 0;
+
+        $( '.mad-quote-line-price' ).each( function () {
+            var $input = $( this );
+            var price = parseFloat( $input.val() ) || 0;
+            var qty = parseFloat( $input.data( 'qty' ) ) || 0;
+            var rate = parseFloat( $input.data( 'tax-rate' ) ) || 0;
+
+            var lineBase = price * qty;
+            base += lineBase;
+            totalWithTax += lineBase * ( 1 + rate / 100 );
+        } );
+
+        var iva = totalWithTax - base;
+
+        if ( ! params.currency_format ) return;
+
+        $( '#mad_quote_iva_base' ).html( madQuotesFormatPrice( base ) );
+        $( '#mad_quote_iva_amount' ).html( madQuotesFormatPrice( iva ) );
+        $( '#mad_quote_iva_total' ).html( madQuotesFormatPrice( totalWithTax ) );
+    }
+
+    function madQuotesFormatPrice( amount ) {
+        var f = params.currency_format;
+        var fixed = ( Math.round( amount * Math.pow( 10, f.decimals ) ) / Math.pow( 10, f.decimals ) ).toFixed( f.decimals );
+        var parts = fixed.split( '.' );
+        var intPart = parts[ 0 ].replace( /\B(?=(\d{3})+(?!\d))/g, f.thousand_sep );
+        var formatted = ( parts[ 1 ] !== undefined && f.decimals > 0 )
+            ? intPart + f.decimal_sep + parts[ 1 ]
+            : intPart;
+
+        switch ( f.symbol_pos ) {
+            case 'right':       return formatted + f.symbol;
+            case 'right_space': return formatted + ' ' + f.symbol;
+            case 'left_space':  return f.symbol + ' ' + formatted;
+            default:            return f.symbol + formatted; // 'left'
+        }
+    }
+
+    $( document ).on( 'input', '.mad-quote-line-price', madQuotesRecalcIva );
+
+    // ------------------------------------------------------------------ //
     //  "Send Quote" / "Resend Quote" button                               //
     //  Collects editable line prices before posting.                      //
     // ------------------------------------------------------------------ //

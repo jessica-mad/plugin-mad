@@ -1991,6 +1991,17 @@ return new class( $core ) implements MAD_Suite_Module {
     /*  Admin: botones y tabla de precios en el pedido                   */
     /* ================================================================ */
 
+    /** Tarifa de IVA (%) aplicable a un producto, según las tarifas reales configuradas en WooCommerce. */
+    private function get_product_tax_rate_percent( $product ): float {
+        if ( ! $product instanceof WC_Product ) return 0.0;
+        if ( ! wc_tax_enabled() || ! $product->is_taxable() ) return 0.0;
+
+        $rates = WC_Tax::get_rates( $product->get_tax_class() );
+        if ( empty( $rates ) ) return 0.0;
+
+        return (float) array_sum( wp_list_pluck( $rates, 'rate' ) );
+    }
+
     public function add_order_buttons( $order ) {
         if ( $order->get_payment_method() !== 'quotes-gateway' && ! $order->get_meta( '_mad_qwc_quote' ) ) {
             return;
@@ -2024,23 +2035,36 @@ return new class( $core ) implements MAD_Suite_Module {
                         </tr>
                     </thead>
                     <tbody>
-                    <?php foreach ( $order->get_items() as $item_id => $item ) :
+                    <?php
+                    $iva_base = 0.0;
+                    $iva_incl = 0.0;
+                    foreach ( $order->get_items() as $item_id => $item ) :
                         $product_id  = $item->get_product_id();
+                        $product     = wc_get_product( $product_id );
+                        $qty         = $item->get_quantity();
                         $saved_price = $item->get_meta( '_mad_quote_line_price' );
                         $suggested   = $item->get_meta( '_mad_dt_suggested_price' );
                         $default     = ( $saved_price !== '' && false !== $saved_price )
                             ? $saved_price
                             : mad_quotes_get_product_quote_price( $product_id );
+                        $tax_rate    = $this->get_product_tax_rate_percent( $product );
+
+                        $iva_base += (float) $default * $qty;
+                        $iva_incl += $product
+                            ? wc_get_price_including_tax( $product, [ 'qty' => $qty, 'price' => (float) $default ] )
+                            : ( (float) $default * $qty );
                     ?>
                         <tr>
                             <td><?php echo esc_html( $item->get_name() ); ?></td>
-                            <td><?php echo esc_html( $item->get_quantity() ); ?></td>
+                            <td><?php echo esc_html( $qty ); ?></td>
                             <td>
                                 <input type="number"
                                        step="0.01"
                                        min="0"
                                        class="mad-quote-line-price"
                                        data-item-id="<?php echo esc_attr( $item_id ); ?>"
+                                       data-qty="<?php echo esc_attr( $qty ); ?>"
+                                       data-tax-rate="<?php echo esc_attr( $tax_rate ); ?>"
                                        value="<?php echo esc_attr( $default ); ?>"
                                        style="width:110px;">
                                 <?php if ( '' !== $suggested && false !== $suggested ) : ?>
@@ -2058,7 +2082,24 @@ return new class( $core ) implements MAD_Suite_Module {
                         </tr>
                     <?php endforeach; ?>
                     </tbody>
+                    <tfoot>
+                        <tr>
+                            <th colspan="2" style="text-align:right;"><?php esc_html_e( 'Base imponible:', 'mad-suite' ); ?></th>
+                            <td id="mad_quote_iva_base"><?php echo wp_kses_post( wc_price( $iva_base ) ); ?></td>
+                        </tr>
+                        <tr>
+                            <th colspan="2" style="text-align:right;font-weight:normal;color:#666;"><?php esc_html_e( 'IVA:', 'mad-suite' ); ?></th>
+                            <td id="mad_quote_iva_amount" style="color:#666;"><?php echo wp_kses_post( wc_price( $iva_incl - $iva_base ) ); ?></td>
+                        </tr>
+                        <tr>
+                            <th colspan="2" style="text-align:right;"><?php esc_html_e( 'Total con IVA:', 'mad-suite' ); ?></th>
+                            <td id="mad_quote_iva_total" style="font-weight:bold;"><?php echo wp_kses_post( wc_price( $iva_incl ) ); ?></td>
+                        </tr>
+                    </tfoot>
                 </table>
+                <p class="description" style="max-width:480px;">
+                    <?php esc_html_e( 'Este desglose es informativo (igual que en el email al cliente) — el pedido sigue guardando el IVA en 0 hasta que se cobra de verdad al pagar.', 'mad-suite' ); ?>
+                </p>
             </div>
 
             <button id="mad_send_quote" type="button" class="button button-primary">
@@ -2096,6 +2137,13 @@ return new class( $core ) implements MAD_Suite_Module {
             'i18n_error'          => __( 'Error. Inténtalo de nuevo.', 'mad-suite' ),
             'i18n_uploading'      => __( 'Verificando…', 'mad-suite' ),
             'i18n_file_error'     => __( 'Tipo de archivo no permitido.', 'mad-suite' ),
+            'currency_format'     => [
+                'symbol'      => get_woocommerce_currency_symbol(),
+                'symbol_pos'  => get_option( 'woocommerce_currency_pos', 'left' ),
+                'decimal_sep' => wc_get_price_decimal_separator(),
+                'thousand_sep'=> wc_get_price_thousand_separator(),
+                'decimals'    => wc_get_price_decimals(),
+            ],
         ] );
         wp_enqueue_script( 'mad-quotes-admin' );
     }
