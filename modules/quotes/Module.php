@@ -272,7 +272,10 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'wp_ajax_nopriv_mad_upload_payment_proof', [ $this, 'ajax_upload_payment_proof' ] );
 
         // ── Email exclusivo MAD: presupuesto con precios y nota ────────
-        add_filter( 'woocommerce_email_classes', [ $this, 'register_emails' ] );
+        // Prioridad 999: tiene que correr DESPUÉS de que el plugin base
+        // "Quotes for WooCommerce" registre los suyos (prioridad 10 por
+        // defecto) para poder desengancharlos — ver disable_native_qwc_emails().
+        add_filter( 'woocommerce_email_classes', [ $this, 'register_emails' ], 999 );
 
         // ── Cron de expiración de presupuestos ────────────────────────
         if ( ! wp_next_scheduled( 'mad_quotes_check_expiry' ) ) {
@@ -594,7 +597,38 @@ return new class( $core ) implements MAD_Suite_Module {
         $email_classes['MAD_Quotes_Email_New_Request']  = new MAD_Quotes_Email_New_Request();
         $email_classes['MAD_Quotes_Email_Send_Quote']   = new MAD_Quotes_Email_Send_Quote();
 
+        $this->disable_native_qwc_emails( $email_classes );
+
         return $email_classes;
+    }
+
+    /**
+     * El plugin base "Quotes for WooCommerce" (quotes-for-woocommerce/) trae
+     * sus propios 3 emails nativos, enganchados a woocommerce_checkout_order_processed
+     * de forma totalmente independiente de este módulo — y su email al
+     * cliente (QWC_Request_Sent) manda una tabla de precios sin IVA en
+     * cuanto el pedido pasa por el checkout normal de WooCommerce, sin pasar
+     * por "Enviar presupuesto" ni por ningún control nuestro.
+     *
+     * MAD Suite reemplaza por completo esa funcionalidad (Confirmation/
+     * New_Request/Send_Quote arriba), así que hay que desactivar los 3
+     * nativos. No alcanza con sacarlos de $email_classes: cada archivo del
+     * plugin base termina en "return new QWC_X();", así que el solo hecho
+     * de incluirlos ya los instanció y ya registró su add_action — hay que
+     * desengancharlo explícitamente con esa misma instancia.
+     */
+    private function disable_native_qwc_emails( array $email_classes ): void {
+        $native = [
+            'QWC_Request_New_Quote' => 'qwc_pending_quote_notification',
+            'QWC_Request_Sent'      => 'qwc_request_sent_notification',
+            'QWC_Send_Quote'        => 'qwc_send_quote_notification',
+        ];
+
+        foreach ( $native as $class_key => $hook ) {
+            if ( isset( $email_classes[ $class_key ] ) && is_object( $email_classes[ $class_key ] ) ) {
+                remove_action( $hook, [ $email_classes[ $class_key ], 'trigger' ] );
+            }
+        }
     }
 
     /* ================================================================ */
