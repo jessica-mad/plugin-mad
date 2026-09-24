@@ -1,0 +1,285 @@
+/* Calculadora de Interés Compuesto — estilos del widget */
+
+.mad-cic {
+    --mad-cic-surface:     #fcfcfb;
+    --mad-cic-surface-2:   #f3f2ef;
+    --mad-cic-border:      #e2e0da;
+    --mad-cic-text:        #0b0b0b;
+    --mad-cic-text-muted:  #52514e;
+    --mad-cic-compound:    #2a78d6; /* serie 1 — interés compuesto */
+    --mad-cic-simple:      #eb6834; /* serie 2 — ahorro sin invertir */
+    --mad-cic-grid:        #d9d7d0;
+
+    box-sizing: border-box;
+    max-width: 960px;
+    margin: 24px auto;
+    padding: 24px;
+    background: var(--mad-cic-surface);
+    border: 1px solid var(--mad-cic-border);
+    border-radius: 12px;
+    color: var(--mad-cic-text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+    .mad-cic {
+        --mad-cic-surface:    #1a1a19;
+        --mad-cic-surface-2:  #242422;
+        --mad-cic-border:     #37362f;
+        --mad-cic-text:       #ffffff;
+        --mad-cic-text-muted: #c3c2b7;
+        --mad-cic-compound:   #3987e5;
+        --mad-cic-simple:     #d95926;
+        --mad-cic-grid:       #37362f;
+    }
+}
+
+.mad-cic *,
+.mad-cic *::before,
+.mad-cic *::after {
+    box-sizing: inherit;
+}
+
+/* ── Controles / sliders ─────────────────────────────────────────────── */
+
+.mad-cic__controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 20px 28px;
+    margin-bottom: 28px;
+}
+
+.mad-cic__field-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.mad-cic__field label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--mad-cic-text-muted);
+}
+
+.mad-cic__value {
+    font-size: 15px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--mad-cic-text);
+}
+
+.mad-cic__field input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--mad-cic-grid);
+    outline: none;
+}
+
+.mad-cic__field input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--mad-cic-compound);
+    border: 2px solid var(--mad-cic-surface);
+    box-shadow: 0 0 0 1px var(--mad-cic-compound);
+    cursor: pointer;
+}
+
+.mad-cic__field input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--mad-cic-compound);
+    border: 2px solid var(--mad-cic-surface);
+    box-shadow: 0 0 0 1px var(--mad-cic-compound);
+    cursor: pointer;
+}
+
+.mad-cic__risk {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.mad-cic__risk-btn {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--mad-cic-border);
+    background: var(--mad-cic-surface-2);
+    color: var(--mad-cic-text-muted);
+    cursor: pointer;
+}
+
+.mad-cic__risk-btn:hover,
+.mad-cic__risk-btn:focus-visible {
+    border-color: var(--mad-cic-compound);
+    color: var(--mad-cic-compound);
+}
+
+.mad-cic__risk-btn[aria-pressed="true"] {
+    background: var(--mad-cic-compound);
+    border-color: var(--mad-cic-compound);
+    color: #fff;
+}
+
+.mad-cic__disclaimer {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--mad-cic-text-muted);
+}
+
+/* ── Resultados ───────────────────────────────────────────────────────── */
+
+.mad-cic__results {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 28px;
+}
+
+.mad-cic__stat {
+    padding: 14px 16px;
+    background: var(--mad-cic-surface-2);
+    border: 1px solid var(--mad-cic-border);
+    border-radius: 10px;
+}
+
+.mad-cic__stat--highlight {
+    border-color: var(--mad-cic-compound);
+    box-shadow: inset 0 0 0 1px var(--mad-cic-compound);
+}
+
+.mad-cic__stat-label {
+    display: block;
+    font-size: 12px;
+    color: var(--mad-cic-text-muted);
+    margin-bottom: 4px;
+}
+
+.mad-cic__stat-value {
+    display: block;
+    font-size: 20px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Gráfica ──────────────────────────────────────────────────────────── */
+
+.mad-cic__legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 10px;
+}
+
+.mad-cic__legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--mad-cic-text-muted);
+}
+
+.mad-cic__swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    display: inline-block;
+}
+
+.mad-cic__swatch--compound { background: var(--mad-cic-compound); }
+.mad-cic__swatch--simple   { background: var(--mad-cic-simple); }
+
+.mad-cic__table-toggle {
+    margin-left: auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mad-cic-compound);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+}
+
+.mad-cic__canvas-holder {
+    position: relative;
+    width: 100%;
+    height: 340px;
+}
+
+.mad-cic__canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.mad-cic__tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--mad-cic-text);
+    color: var(--mad-cic-surface);
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 8px 10px;
+    border-radius: 8px;
+    white-space: nowrap;
+    transform: translate(-50%, calc(-100% - 10px));
+    z-index: 2;
+}
+
+.mad-cic__tooltip strong {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Tabla accesible ──────────────────────────────────────────────────── */
+
+.mad-cic__table-wrap {
+    margin-top: 16px;
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--mad-cic-border);
+    border-radius: 8px;
+}
+
+.mad-cic__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.mad-cic__table th,
+.mad-cic__table td {
+    padding: 8px 12px;
+    text-align: right;
+    border-bottom: 1px solid var(--mad-cic-border);
+    font-variant-numeric: tabular-nums;
+}
+
+.mad-cic__table th:first-child,
+.mad-cic__table td:first-child {
+    text-align: left;
+}
+
+.mad-cic__table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--mad-cic-surface-2);
+}
+
+@media (max-width: 480px) {
+    .mad-cic { padding: 16px; }
+    .mad-cic__canvas-holder { height: 260px; }
+}
