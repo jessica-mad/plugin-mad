@@ -44,17 +44,23 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
 
         $orig_lang = $this->switch_to_order_language( $this->object );
 
+        // Capturado ANTES de restaurar el idioma: es el HTML exacto que se
+        // manda por send() más abajo, en el idioma real del pedido — si se
+        // regenerara después de restore_order_language() quedaría guardada
+        // una copia en el idioma del admin, no la que realmente recibió el cliente.
+        $content = $this->get_content();
+
         $sent = $this->send(
             $this->get_recipient(),
             $this->get_subject(),
-            $this->get_content(),
+            $content,
             $this->get_headers(),
             $this->get_attachments()
         );
 
         $this->restore_order_language( $orig_lang );
 
-        do_action( 'mad_quotes_email_logged', $order_id, $this->id, $this->get_recipient(), (bool) $sent );
+        do_action( 'mad_quotes_email_logged', $order_id, $this->id, $this->get_recipient(), (bool) $sent, $content );
     }
 
     public function get_content_html() {

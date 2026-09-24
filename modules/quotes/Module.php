@@ -267,7 +267,8 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'add_meta_boxes',                            [ $this, 'register_email_log_meta_box' ] );
 
         // ── Historial de emails: cada MAD_Quotes_Email_* dispara esto tras enviar ──
-        add_action( 'mad_quotes_email_logged', [ $this, 'log_email_sent' ], 10, 4 );
+        add_action( 'mad_quotes_email_logged', [ $this, 'log_email_sent' ], 10, 5 );
+        add_action( 'admin_post_mad_quotes_view_email_copy', [ $this, 'view_email_copy' ] );
 
         // ── Comprobante de transferencia bancaria ─────────────────────
         add_action( 'woocommerce_view_order',        [ $this, 'inject_payment_proof_upload' ] );
@@ -2184,7 +2185,7 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     /** Guarda cada envío (éxito o falla) en meta del pedido, sea cual sea el email MAD que lo disparó. */
-    public function log_email_sent( int $order_id, string $email_id, string $recipient, bool $success ): void {
+    public function log_email_sent( int $order_id, string $email_id, string $recipient, bool $success, string $content = '' ): void {
         if ( ! $order_id ) return;
 
         $order = wc_get_order( $order_id );
@@ -2196,6 +2197,7 @@ return new class( $core ) implements MAD_Suite_Module {
             'recipient' => $recipient,
             'success'   => $success,
             'time'      => time(),
+            'content'   => $content,
         ];
 
         // Evitar crecimiento sin límite en pedidos con muchos reenvíos.
@@ -2205,6 +2207,35 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $order->update_meta_data( '_mad_email_log', $log );
         $order->save();
+    }
+
+    /**
+     * Sirve la copia guardada de un email como HTML crudo en una pestaña
+     * nueva — igual a lo que WooCommerce hace con "Preview email".
+     */
+    public function view_email_copy(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_die( esc_html__( 'No tienes permisos suficientes.', 'mad-suite' ) );
+        }
+
+        $order_id = absint( $_GET['order_id'] ?? 0 );
+        $index    = isset( $_GET['index'] ) ? absint( $_GET['index'] ) : null;
+        if ( null === $index ) wp_die( esc_html__( 'Falta el índice del email.', 'mad-suite' ) );
+
+        check_admin_referer( 'mad_quotes_view_email_copy_' . $order_id . '_' . $index );
+
+        $order = $order_id ? wc_get_order( $order_id ) : false;
+        if ( ! $order ) wp_die( esc_html__( 'Pedido no encontrado.', 'mad-suite' ) );
+
+        $log = (array) $order->get_meta( '_mad_email_log' );
+        if ( ! isset( $log[ $index ]['content'] ) || '' === $log[ $index ]['content'] ) {
+            wp_die( esc_html__( 'No se guardó una copia de este email.', 'mad-suite' ) );
+        }
+
+        nocache_headers();
+        header( 'Content-Type: text/html; charset=utf-8' );
+        echo $log[ $index ]['content']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped — es el HTML del email tal cual se mandó.
+        exit;
     }
 
     public function register_email_log_meta_box(): void {
@@ -2243,16 +2274,18 @@ return new class( $core ) implements MAD_Suite_Module {
             'mad_quotes_send_quote'   => __( 'Presupuesto enviado (cliente)', 'mad-suite' ),
         ];
 
-        $log = array_reverse( $log ); // Más reciente primero.
+        $order_id = $order->get_id();
+        $log      = array_reverse( $log, true ); // Más reciente primero, conservando el índice original.
         $has_failure = false;
 
         echo '<ul style="margin:0;padding:0;list-style:none;">';
-        foreach ( $log as $entry ) {
+        foreach ( $log as $index => $entry ) {
             $id        = (string) ( $entry['id'] ?? '' );
             $label     = $labels[ $id ] ?? $id;
             $recipient = (string) ( $entry['recipient'] ?? '' );
             $success   = ! empty( $entry['success'] );
             $time      = ! empty( $entry['time'] ) ? date_i18n( 'd/m/Y H:i', (int) $entry['time'] ) : '';
+            $has_copy  = ! empty( $entry['content'] );
 
             if ( ! $success ) $has_failure = true;
 
@@ -2264,6 +2297,17 @@ return new class( $core ) implements MAD_Suite_Module {
             }
             if ( $time ) {
                 echo '<span style="display:block;font-size:11px;color:#999;">' . esc_html( $time ) . '</span>';
+            }
+            if ( $has_copy ) {
+                $view_url = wp_nonce_url(
+                    add_query_arg(
+                        [ 'action' => 'mad_quotes_view_email_copy', 'order_id' => $order_id, 'index' => $index ],
+                        admin_url( 'admin-post.php' )
+                    ),
+                    'mad_quotes_view_email_copy_' . $order_id . '_' . $index
+                );
+                echo '<a href="' . esc_url( $view_url ) . '" target="_blank" rel="noopener" style="display:inline-block;margin-top:4px;font-size:12px;">'
+                    . esc_html__( 'Ver copia →', 'mad-suite' ) . '</a>';
             }
             echo '</li>';
         }
