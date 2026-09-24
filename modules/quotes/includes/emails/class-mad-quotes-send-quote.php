@@ -58,7 +58,7 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
 
         $orig_lang = $this->switch_to_order_language( $this->object );
 
-        $this->send(
+        $sent = $this->send(
             $this->get_recipient(),
             $this->get_subject(),
             $this->get_content(),
@@ -67,6 +67,8 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
         );
 
         $this->restore_order_language( $orig_lang );
+
+        do_action( 'mad_quotes_email_logged', $order_id, $this->id, $this->get_recipient(), (bool) $sent );
     }
 
     public function get_content_html() {

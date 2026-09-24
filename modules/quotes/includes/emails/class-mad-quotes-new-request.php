@@ -48,13 +48,15 @@ class MAD_Quotes_Email_New_Request extends WC_Email {
         $this->placeholders['{order_number}']  = $this->object->get_order_number();
         $this->placeholders['{customer_name}'] = $this->object->get_formatted_billing_full_name();
 
-        $this->send(
+        $sent = $this->send(
             $this->get_recipient(),
             $this->get_subject(),
             $this->get_content(),
             $this->get_headers(),
             $this->get_attachments()
         );
+
+        do_action( 'mad_quotes_email_logged', $order_id, $this->id, $this->get_recipient(), (bool) $sent );
     }
 
     public function get_content_html() {

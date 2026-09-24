@@ -264,6 +264,10 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'woocommerce_order_item_add_action_buttons', [ $this, 'add_order_buttons' ] );
         add_action( 'admin_enqueue_scripts',                     [ $this, 'enqueue_admin_js' ] );
         add_action( 'add_meta_boxes',                            [ $this, 'register_payment_proof_meta_box' ] );
+        add_action( 'add_meta_boxes',                            [ $this, 'register_email_log_meta_box' ] );
+
+        // ── Historial de emails: cada MAD_Quotes_Email_* dispara esto tras enviar ──
+        add_action( 'mad_quotes_email_logged', [ $this, 'log_email_sent' ], 10, 4 );
 
         // ── Comprobante de transferencia bancaria ─────────────────────
         add_action( 'woocommerce_view_order',        [ $this, 'inject_payment_proof_upload' ] );
@@ -2173,6 +2177,103 @@ return new class( $core ) implements MAD_Suite_Module {
             'side',
             'default'
         );
+    }
+
+    /* ================================================================ */
+    /*  Historial visual de emails enviados por pedido                    */
+    /* ================================================================ */
+
+    /** Guarda cada envío (éxito o falla) en meta del pedido, sea cual sea el email MAD que lo disparó. */
+    public function log_email_sent( int $order_id, string $email_id, string $recipient, bool $success ): void {
+        if ( ! $order_id ) return;
+
+        $order = wc_get_order( $order_id );
+        if ( ! $order ) return;
+
+        $log   = (array) $order->get_meta( '_mad_email_log' );
+        $log[] = [
+            'id'        => $email_id,
+            'recipient' => $recipient,
+            'success'   => $success,
+            'time'      => time(),
+        ];
+
+        // Evitar crecimiento sin límite en pedidos con muchos reenvíos.
+        if ( count( $log ) > 50 ) {
+            $log = array_slice( $log, -50 );
+        }
+
+        $order->update_meta_data( '_mad_email_log', $log );
+        $order->save();
+    }
+
+    public function register_email_log_meta_box(): void {
+        $screen = function_exists( 'wc_get_page_screen_id' )
+            ? wc_get_page_screen_id( 'shop-order' )
+            : 'shop_order';
+
+        add_meta_box(
+            'mad-quotes-email-log',
+            __( 'Historial de emails', 'mad-suite' ),
+            [ $this, 'render_email_log_meta_box' ],
+            $screen,
+            'side',
+            'default'
+        );
+    }
+
+    /** Callback del meta box — acepta WP_Post o WC_Order según HPOS. */
+    public function render_email_log_meta_box( $post_or_order ): void {
+        $order = $post_or_order instanceof WC_Order
+            ? $post_or_order
+            : wc_get_order( $post_or_order->ID );
+
+        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+
+        $log = (array) $order->get_meta( '_mad_email_log' );
+
+        if ( empty( $log ) ) {
+            echo '<p style="color:#666;margin:0;">' . esc_html__( 'Todavía no se envió ningún email para este pedido.', 'mad-suite' ) . '</p>';
+            return;
+        }
+
+        $labels = [
+            'mad_quotes_confirmation' => __( 'Confirmación de solicitud (cliente)', 'mad-suite' ),
+            'mad_quotes_new_request'  => __( 'Nueva solicitud (aviso interno)', 'mad-suite' ),
+            'mad_quotes_send_quote'   => __( 'Presupuesto enviado (cliente)', 'mad-suite' ),
+        ];
+
+        $log = array_reverse( $log ); // Más reciente primero.
+        $has_failure = false;
+
+        echo '<ul style="margin:0;padding:0;list-style:none;">';
+        foreach ( $log as $entry ) {
+            $id        = (string) ( $entry['id'] ?? '' );
+            $label     = $labels[ $id ] ?? $id;
+            $recipient = (string) ( $entry['recipient'] ?? '' );
+            $success   = ! empty( $entry['success'] );
+            $time      = ! empty( $entry['time'] ) ? date_i18n( 'd/m/Y H:i', (int) $entry['time'] ) : '';
+
+            if ( ! $success ) $has_failure = true;
+
+            echo '<li style="padding:8px 0;border-bottom:1px solid #eee;">';
+            echo '<span style="display:block;font-weight:600;color:' . ( $success ? '#2e7d32' : '#c00' ) . ';">'
+                . ( $success ? '✔ ' : '✘ ' ) . esc_html( $label ) . '</span>';
+            if ( $recipient ) {
+                echo '<span style="display:block;font-size:12px;color:#666;">' . esc_html( $recipient ) . '</span>';
+            }
+            if ( $time ) {
+                echo '<span style="display:block;font-size:11px;color:#999;">' . esc_html( $time ) . '</span>';
+            }
+            echo '</li>';
+        }
+        echo '</ul>';
+
+        if ( $has_failure ) {
+            echo '<p style="margin:8px 0 0;font-size:12px;color:#c00;">'
+                . esc_html__( 'Algún envío falló — revisá WooCommerce → Estado → Registros (fuente "mad-quotes-email") para el detalle.', 'mad-suite' )
+                . '</p>';
+        }
     }
 
     /** Callback del meta box — acepta WP_Post o WC_Order según HPOS. */
