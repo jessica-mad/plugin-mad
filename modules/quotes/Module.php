@@ -282,6 +282,14 @@ return new class( $core ) implements MAD_Suite_Module {
         // defecto) para poder desengancharlos — ver disable_native_qwc_emails().
         add_filter( 'woocommerce_email_classes', [ $this, 'register_emails' ], 999 );
 
+        // ── Ocultar los botones nativos "Quote Complete"/"Send Quote" del
+        // plugin base: enganchan al MISMO hook que los nuestros, así que
+        // convivían los dos pares en la pantalla del pedido. Si alguien
+        // clickeaba el nativo, el pedido cambiaba de estado igual, pero
+        // dispara el email que ya desactivamos (el que filtraba precios sin
+        // IVA) — por eso "parecía" que dejó de enviar presupuestos.
+        $this->disable_native_qwc_buttons();
+
         // ── Cron de expiración de presupuestos ────────────────────────
         if ( ! wp_next_scheduled( 'mad_quotes_check_expiry' ) ) {
             wp_schedule_event( time(), 'daily', 'mad_quotes_check_expiry' );
@@ -634,6 +642,21 @@ return new class( $core ) implements MAD_Suite_Module {
                 remove_action( $hook, [ $email_classes[ $class_key ], 'trigger' ] );
             }
         }
+    }
+
+    /**
+     * El plugin base también pinta sus propios botones "Quote Complete" /
+     * "Send Quote" en la pantalla del pedido, enganchados al mismo hook que
+     * add_order_buttons() de acá — Quotes_WC::get_instance() resuelve (y de
+     * paso auto-instancia si todavía no corrió) el singleton exacto que los
+     * registró, así remove_action() siempre encuentra el callback real sin
+     * depender de qué plugin termina de cargar primero.
+     */
+    private function disable_native_qwc_buttons(): void {
+        if ( ! class_exists( 'Quotes_WC' ) || ! method_exists( 'Quotes_WC', 'get_instance' ) ) return;
+
+        $instance = Quotes_WC::get_instance();
+        remove_action( 'woocommerce_order_item_add_action_buttons', [ $instance, 'qwc_add_buttons' ], 10 );
     }
 
     /* ================================================================ */
