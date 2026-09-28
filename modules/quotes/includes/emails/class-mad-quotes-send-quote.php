@@ -27,7 +27,10 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
         $this->template_plain = 'emails/plain/mad-quote-send.php';
         $this->template_base  = MAD_QUOTES_TEMPLATE_PATH;
 
-        add_action( 'mad_quotes_send_quote_notification', [ $this, 'trigger' ] );
+        // accepted_args=2: sin esto, WordPress solo pasa $order_id a trigger()
+        // (el default es 1 argumento) y $admin_note se pierde siempre, por
+        // más que se escriba algo en el campo de nota del admin.
+        add_action( 'mad_quotes_send_quote_notification', [ $this, 'trigger' ], 10, 2 );
 
         parent::__construct();
     }

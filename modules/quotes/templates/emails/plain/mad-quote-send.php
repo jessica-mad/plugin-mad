@@ -17,11 +17,6 @@ echo wp_strip_all_tags( $body_text );
 
 echo "\n\n";
 
-if ( ! empty( $admin_note ) ) {
-    echo esc_html__( 'Nota del administrador:', 'mad-suite' ) . "\n";
-    echo esc_html( $admin_note ) . "\n\n";
-}
-
 // Tabla de artículos con precios de presupuesto
 echo esc_html__( 'DETALLE DEL PRESUPUESTO', 'mad-suite' ) . "\n";
 echo str_repeat( '-', 50 ) . "\n";
@@ -70,6 +65,12 @@ if ( $grand_total_incl_tax - $grand_total > 0.005 ) {
 }
 
 echo "\n";
+
+if ( ! empty( $admin_note ) ) {
+    echo esc_html__( 'Nota del administrador:', 'mad-suite' ) . "\n";
+    echo esc_html( $admin_note ) . "\n\n";
+}
+
 echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";
 
 if ( $additional_content ) {

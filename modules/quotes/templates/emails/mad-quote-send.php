@@ -17,12 +17,6 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
 
 <p><?php echo wp_kses_post( $body_text ); ?></p>
 
-<?php if ( ! empty( $admin_note ) ) : ?>
-<blockquote style="border-left:4px solid #ddd;margin:12px 0;padding:8px 16px;color:#555;">
-    <?php echo nl2br( esc_html( $admin_note ) ); ?>
-</blockquote>
-<?php endif; ?>
-
 <!-- Tabla de artículos con precios de presupuesto -->
 <table cellspacing="0" cellpadding="6" style="width:100%;border-collapse:collapse;margin-bottom:20px;">
     <thead>
@@ -90,6 +84,12 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
         <?php endif; ?>
     </tfoot>
 </table>
+
+<?php if ( ! empty( $admin_note ) ) : ?>
+<blockquote style="border-left:4px solid #ddd;margin:12px 0;padding:8px 16px;color:#555;">
+    <?php echo nl2br( esc_html( $admin_note ) ); ?>
+</blockquote>
+<?php endif; ?>
 
 <p>
     <a href="<?php echo esc_url( $order->get_checkout_payment_url() ); ?>" style="display:inline-block;background:#0073aa;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;">
