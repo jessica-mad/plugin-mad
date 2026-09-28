@@ -172,6 +172,9 @@ return new class( $core ) implements MAD_Suite_Module {
         // ── Checkout presupuesto: cambiar texto del botón "Realizar pedido" ──────
         add_filter( 'woocommerce_order_button_text', [ $this, 'quote_checkout_button_text' ] );
 
+        // ── Texto de la página "Gracias por tu pedido" — override por estado + idioma ──
+        add_filter( 'woocommerce_thankyou_order_received_text', [ $this, 'filter_thankyou_text' ], 10, 2 );
+
         // ── Carrito: formulario de presupuesto propio (NO Blocks checkout) ──────────
         // Prioridad 1: interceptar el POST del formulario antes de que se cargue el template.
         add_action( 'template_redirect', [ $this, 'maybe_handle_create_quote' ],      1 );
@@ -441,6 +444,22 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_checkbox',
             'mad_quotes_payment_proof',
             __( 'Modo estricto (producción): Claude verifica además que el documento parezca un comprobante bancario real (logo, IBAN, número de operación…). Desactivado = modo prueba: solo comprueba el importe.', 'mad-suite' )
+        );
+
+        // ── Sección: Texto de la página de agradecimiento ──────────────
+        add_settings_section(
+            'mad_quotes_thankyou',
+            __( 'Texto de la página de agradecimiento', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Reemplaza el texto de "Gracias, tu pedido ha sido recibido" según el estado exacto en el que quede el pedido justo en ese momento. Dejalo vacío para un estado o idioma y se usa el texto por defecto de WooCommerce, sin tocarlo.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'thankyou_texts',
+            __( 'Textos por estado', 'mad-suite' ),
+            'field_thankyou_texts',
+            'mad_quotes_thankyou'
         );
 
         // ── AJAX ───────────────────────────────────────────────────────
@@ -1962,6 +1981,26 @@ return new class( $core ) implements MAD_Suite_Module {
         return __( 'Solicitar presupuesto', 'mad-suite' );
     }
 
+    /**
+     * Texto de "Gracias, tu pedido ha sido recibido" en la página de
+     * confirmación — permite un texto distinto por estado del pedido y por
+     * idioma (Ajustes → Texto de la página de agradecimiento). Si no hay
+     * override configurado para ese estado/idioma, se deja el texto
+     * original de WooCommerce sin tocar.
+     */
+    public function filter_thankyou_text( $text, $order ) {
+        if ( ! $order instanceof WC_Order ) return $text;
+
+        $settings = mad_quotes_get_settings();
+        $texts    = (array) ( $settings['thankyou_texts'] ?? [] );
+        $status   = $order->get_status();
+
+        if ( empty( $texts[ $status ] ) ) return $text;
+
+        $custom = $this->resolve_lang_text( $texts[ $status ] );
+        return '' !== $custom ? $custom : $text;
+    }
+
     public function prevent_cancel( $return, $order ) {
         $status = $order->get_status();
         if ( in_array( $status, [ 'quote-pending', 'quote-sent' ], true )
@@ -3114,6 +3153,52 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
     }
 
+    /** Tabla: una fila por estado de pedido, una columna por idioma (o una sola si no hay WPML). */
+    public function field_thankyou_texts( $args ) {
+        $settings = mad_quotes_get_settings();
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $stored   = (array) ( $settings['thankyou_texts'] ?? [] );
+
+        $languages = [];
+        if ( function_exists( 'icl_get_languages' ) ) {
+            $raw = icl_get_languages( 'skip_missing=0' );
+            foreach ( $raw as $code => $info ) {
+                $languages[ $code ] = $info['native_name'];
+            }
+        }
+        if ( empty( $languages ) ) {
+            $languages = [ 'default' => __( 'Texto', 'mad-suite' ) ];
+        }
+
+        // wc_get_order_statuses() incluye tanto los nativos de WooCommerce
+        // como los que este módulo registró (quote-pending, quote-sent).
+        $statuses = wc_get_order_statuses();
+
+        echo '<table class="widefat striped" style="max-width:820px;"><thead><tr><th>' . esc_html__( 'Estado del pedido', 'mad-suite' ) . '</th>';
+        foreach ( $languages as $code => $name ) {
+            echo '<th>' . esc_html( $name ) . ( 'default' !== $code ? ' <small>(' . esc_html( strtoupper( $code ) ) . ')</small>' : '' ) . '</th>';
+        }
+        echo '</tr></thead><tbody>';
+
+        foreach ( $statuses as $status_key => $status_label ) {
+            $slug = ( 0 === strpos( $status_key, 'wc-' ) ) ? substr( $status_key, 3 ) : $status_key;
+            echo '<tr><td>' . esc_html( $status_label ) . '<br><code style="font-size:11px;color:#888;">' . esc_html( $slug ) . '</code></td>';
+            foreach ( $languages as $code => $name ) {
+                $value = $stored[ $slug ][ $code ] ?? '';
+                printf(
+                    '<td><input type="text" name="%1$s[thankyou_texts][%2$s][%3$s]" value="%4$s" class="regular-text" placeholder="%5$s"></td>',
+                    esc_attr( $opt_key ),
+                    esc_attr( $slug ),
+                    esc_attr( $code ),
+                    esc_attr( $value ),
+                    esc_attr__( 'Texto por defecto de WooCommerce', 'mad-suite' )
+                );
+            }
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    }
+
     /** Generic per-language text field (reused for mini-cart button texts). */
     public function field_multilang_text( $args ) {
         $settings = mad_quotes_get_settings();
@@ -3541,6 +3626,15 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $clean['quote_expiry_days']       = absint( $input['quote_expiry_days'] ?? 0 );
         $clean['add_to_cart_notice_text'] = sanitize_text_field( $input['add_to_cart_notice_text'] ?? '' );
+
+        $clean['thankyou_texts'] = [];
+        $raw_thankyou = $input['thankyou_texts'] ?? [];
+        if ( is_array( $raw_thankyou ) ) {
+            foreach ( $raw_thankyou as $status_slug => $lang_map ) {
+                if ( ! is_array( $lang_map ) ) continue;
+                $clean['thankyou_texts'][ sanitize_key( $status_slug ) ] = array_map( 'sanitize_text_field', $lang_map );
+            }
+        }
 
         $raw_button = $input['quote_button_text'] ?? [];
         if ( is_array( $raw_button ) ) {

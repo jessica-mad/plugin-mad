@@ -149,6 +149,10 @@ function mad_quotes_get_settings() {
         // con precio final directo al cliente, así que el default seguro es
         // que no aplique a nadie hasta que se configure explícitamente.
         'store_manager_roles'      => [],
+        // Texto de la página "Gracias por tu pedido", override opcional por
+        // estado del pedido y por idioma. Vacío para un estado/idioma = se
+        // usa el texto por defecto de WooCommerce, sin tocarlo.
+        'thankyou_texts'           => [],
     ];
 
     return wp_parse_args( is_array( $opts ) ? $opts : [], $defaults );
