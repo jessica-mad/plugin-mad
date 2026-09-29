@@ -846,12 +846,21 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
 
     // ── Feature 11: Vista de cuadrícula + orden por arrastre + destacados ────
 
-    /** Recuerda la vista elegida (tabla/cuadrícula) por usuario, igual que la Biblioteca de medios. */
+    private const GRID_COLS_MIN = 2;
+    private const GRID_COLS_MAX = 6;
+
+    /** Recuerda la vista elegida (tabla/cuadrícula) y el número de columnas por usuario, igual que la Biblioteca de medios. */
     public function persist_grid_view_choice(): void {
         $screen = get_current_screen();
         if ( ! $screen || 'edit-product' !== $screen->id ) return;
         if ( isset( $_GET['mad_view'] ) && in_array( $_GET['mad_view'], [ 'grid', 'list' ], true ) ) {
             set_user_setting( 'mad_product_view', $_GET['mad_view'] );
+        }
+        if ( isset( $_GET['mad_cols'] ) ) {
+            $cols = absint( $_GET['mad_cols'] );
+            if ( $cols >= self::GRID_COLS_MIN && $cols <= self::GRID_COLS_MAX ) {
+                set_user_setting( 'mad_product_cols', (string) $cols );
+            }
         }
     }
 
@@ -860,6 +869,17 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             return $_GET['mad_view'];
         }
         return (string) get_user_setting( 'mad_product_view', 'list' );
+    }
+
+    private function get_grid_columns(): int {
+        if ( isset( $_GET['mad_cols'] ) ) {
+            $cols = absint( $_GET['mad_cols'] );
+            if ( $cols >= self::GRID_COLS_MIN && $cols <= self::GRID_COLS_MAX ) {
+                return $cols;
+            }
+        }
+        $cols = (int) get_user_setting( 'mad_product_cols', 4 );
+        return ( $cols >= self::GRID_COLS_MIN && $cols <= self::GRID_COLS_MAX ) ? $cols : 4;
     }
 
     public function add_grid_view_body_class( string $classes ): string {
@@ -895,6 +915,21 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             <a href="<?php echo esc_url( $featured_url ); ?>"
                class="button<?php echo $featured_on ? ' button-primary' : ''; ?>"
                title="<?php esc_attr_e( 'Mostrar solo productos destacados', 'mad-suite' ); ?>">★ <?php esc_html_e( 'Destacados', 'mad-suite' ); ?></a>
+
+            <?php if ( 'grid' === $view ) : ?>
+                <input type="hidden" name="mad_view" value="grid">
+                <?php if ( $featured_on ) : ?>
+                    <input type="hidden" name="mad_featured" value="1">
+                <?php endif; ?>
+                <label style="margin-left:2px;">
+                    <?php esc_html_e( 'Columnas:', 'mad-suite' ); ?>
+                    <select name="mad_cols" onchange="this.form.submit()">
+                        <?php for ( $n = self::GRID_COLS_MIN; $n <= self::GRID_COLS_MAX; $n++ ) : ?>
+                            <option value="<?php echo esc_attr( $n ); ?>" <?php selected( $this->get_grid_columns(), $n ); ?>><?php echo esc_html( $n ); ?></option>
+                        <?php endfor; ?>
+                    </select>
+                </label>
+            <?php endif; ?>
         </div>
         <?php
     }
@@ -951,11 +986,12 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( $can_sort ) {
             wp_enqueue_script( 'jquery-ui-sortable' );
         }
+        $cols = $this->get_grid_columns();
         ?>
         <style>
             body.mad-view-grid .wp-list-table.posts { border: 0; box-shadow: none; background: transparent; }
             body.mad-view-grid .wp-list-table thead, body.mad-view-grid .wp-list-table tfoot { display: none; }
-            body.mad-view-grid #the-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+            body.mad-view-grid #the-list { display: grid; grid-template-columns: repeat(<?php echo (int) $cols; ?>, 1fr); gap: 16px; }
             body.mad-view-grid #the-list tr.type-product { display: flex; flex-direction: column; background: #fff; border: 1px solid #dcdcde; border-radius: 6px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
             body.mad-view-grid #the-list tr.type-product.ui-sortable-helper { box-shadow: 0 4px 14px rgba(0,0,0,.18); }
             body.mad-view-grid #the-list .mad-sortable-placeholder { border: 2px dashed #c3c4c7; border-radius: 6px; background: #f6f7f7; }
