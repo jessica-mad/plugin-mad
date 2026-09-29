@@ -955,7 +955,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         <style>
             body.mad-view-grid .wp-list-table.posts { border: 0; box-shadow: none; background: transparent; }
             body.mad-view-grid .wp-list-table thead, body.mad-view-grid .wp-list-table tfoot { display: none; }
-            body.mad-view-grid #the-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+            body.mad-view-grid #the-list { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
             body.mad-view-grid #the-list tr.type-product { display: flex; flex-direction: column; background: #fff; border: 1px solid #dcdcde; border-radius: 6px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
             body.mad-view-grid #the-list tr.type-product.ui-sortable-helper { box-shadow: 0 4px 14px rgba(0,0,0,.18); }
             body.mad-view-grid #the-list .mad-sortable-placeholder { border: 2px dashed #c3c4c7; border-radius: 6px; background: #f6f7f7; }
