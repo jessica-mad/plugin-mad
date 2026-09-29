@@ -160,6 +160,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             add_filter( 'admin_body_class',         [ $this, 'add_grid_view_body_class' ] );
             add_action( 'restrict_manage_posts',    [ $this, 'render_grid_view_controls' ], 10, 2 );
             add_action( 'pre_get_posts',             [ $this, 'filter_featured_only' ], 20 );
+            add_action( 'pre_get_posts',             [ $this, 'filter_grid_view_stock_only' ], 20 );
             add_action( 'admin_footer-edit.php',    [ $this, 'output_grid_view_assets' ] );
             add_action( 'wp_ajax_mad_update_product_order', [ $this, 'ajax_update_product_order' ] );
         }
@@ -914,6 +915,22 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $query->set( 'tax_query', $tax_query );
     }
 
+    /** En vista de cuadrícula solo interesan los productos con existencia — los agotados quedan fuera. */
+    public function filter_grid_view_stock_only( $query ): void {
+        if ( ! is_admin() || ! $query->is_main_query() ) return;
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        if ( 'grid' !== $this->get_current_grid_view() ) return;
+
+        $meta_query   = (array) $query->get( 'meta_query' );
+        $meta_query[] = [
+            'key'     => '_stock_status',
+            'value'   => 'outofstock',
+            'compare' => '!=',
+        ];
+        $query->set( 'meta_query', $meta_query );
+    }
+
     /**
      * CSS que convierte la tabla nativa del listado en tarjetas de
      * cuadrícula (reutiliza las mismas celdas/columnas ya registradas, sin
@@ -945,8 +962,13 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             body.mad-view-grid #the-list tr.type-product .check-column,
             body.mad-view-grid #the-list tr.type-product .toggle-row { display: none; }
             body.mad-view-grid #the-list tr.type-product td { display: block; padding: 3px 0; border: 0; white-space: normal; overflow-wrap: break-word; }
-            body.mad-view-grid #the-list tr.type-product .column-name { order: -1; font-weight: 600; }
-            body.mad-view-grid #the-list tr.type-product .column-name img { display: block; width: 100%; height: 160px; object-fit: cover; border-radius: 4px; margin-bottom: 8px; }
+            /* En cuadrícula solo interesan la foto y el nombre — el resto de
+               columnas (precio, margen, medidas, ubicación...) se ocultan. */
+            body.mad-view-grid #the-list tr.type-product td:not(.column-thumb):not(.column-name) { display: none; }
+            body.mad-view-grid #the-list tr.type-product .column-thumb { text-align: center; }
+            body.mad-view-grid #the-list tr.type-product .column-thumb img { display: block; width: 100%; height: 180px; object-fit: cover; border-radius: 4px; margin: 0 auto; }
+            body.mad-view-grid #the-list tr.type-product .column-name { font-weight: 600; text-align: center; margin-top: 8px; }
+            body.mad-view-grid #the-list tr.type-product .column-name .row-actions { display: none; }
             <?php if ( $can_sort ) : ?>
             body.mad-view-grid #the-list tr.type-product { cursor: move; }
             <?php endif; ?>
@@ -1338,7 +1360,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                                 <?php esc_html_e( 'Añadir un selector Tabla/Cuadrícula sobre el listado de Productos, con un filtro para ver solo los destacados y organización manual arrastrando las tarjetas en la vista de cuadrícula.', 'mad-suite' ); ?>
                             </label>
                             <p class="description">
-                                <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa.', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa. La vista de cuadrícula solo muestra foto y nombre, y solo de los productos con existencia — los agotados no aparecen en esta vista.', 'mad-suite' ); ?>
                             </p>
                         </td>
                     </tr>
