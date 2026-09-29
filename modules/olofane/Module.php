@@ -133,6 +133,14 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             add_action( 'manage_product_posts_custom_column',  [ $this, 'render_product_list_column' ], 10, 2 );
             add_action( 'admin_head',                          [ $this, 'output_product_list_thumb_css' ] );
         }
+
+        // Feature 9 – Coste del proveedor: campo interno en la pestaña
+        // General del producto (junto a Precio regular/Rebajado), usado
+        // para calcular la columna "Margen" de la Feature 8.
+        if ( is_admin() ) {
+            add_action( 'woocommerce_product_options_pricing', [ $this, 'render_product_cost_field' ] );
+            add_action( 'woocommerce_process_product_meta',    [ $this, 'save_product_cost_field' ] );
+        }
     }
 
     public function admin_init(): void {
@@ -577,7 +585,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
 
     // ── Feature 8: Columnas extra en el listado de Productos ─────────────────
 
-    /** Inserta "Medidas" y "Ubicación" justo después del nombre del producto. */
+    /** Inserta "Medidas" y "Ubicación" justo después del nombre del producto, y "Margen" después del precio. */
     public function add_product_list_columns( array $columns ): array {
         $new = [];
         foreach ( $columns as $key => $label ) {
@@ -585,6 +593,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             if ( 'name' === $key ) {
                 $new['mad_dimensions']    = __( 'Medidas', 'mad-suite' );
                 $new['mad_atum_location'] = __( 'Ubicación', 'mad-suite' );
+            }
+            if ( 'price' === $key ) {
+                $new['mad_margin'] = __( 'Margen', 'mad-suite' );
             }
         }
         return $new;
@@ -597,6 +608,10 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         }
         if ( 'mad_atum_location' === $column ) {
             $this->render_atum_location_column( $post_id );
+            return;
+        }
+        if ( 'mad_margin' === $column ) {
+            $this->render_margin_column( $post_id );
             return;
         }
     }
@@ -641,6 +656,81 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         }
 
         echo esc_html( implode( ', ', wp_list_pluck( $terms, 'name' ) ) );
+    }
+
+    /**
+     * Margen sobre el precio regular (PVP) y sobre el precio rebajado (B2B),
+     * calculado como (precio - coste) / precio × 100 — el "margen comercial"
+     * estándar (qué porcentaje del precio de venta es ganancia), no el
+     * markup sobre coste. El coste se carga en la pestaña "General" del
+     * producto, campo "Coste (proveedor)".
+     */
+    private function render_margin_column( int $post_id ): void {
+        $product = wc_get_product( $post_id );
+        if ( ! $product || $product->is_type( 'variable' ) ) {
+            echo '—';
+            return;
+        }
+
+        $cost = get_post_meta( $post_id, '_mad_product_cost', true );
+        if ( '' === $cost || ! is_numeric( $cost ) ) {
+            echo '<span style="color:#999;">' . esc_html__( 'Sin coste', 'mad-suite' ) . '</span>';
+            return;
+        }
+        $cost = (float) $cost;
+
+        $regular = $product->get_regular_price();
+        $sale    = $product->get_sale_price();
+
+        $lines = [];
+        $lines[] = 'PVP: ' . $this->format_margin( $cost, $regular );
+        $lines[] = 'B2B: ' . ( '' !== $sale ? $this->format_margin( $cost, $sale ) : '—' );
+
+        echo wp_kses_post( implode( '<br>', $lines ) );
+    }
+
+    /** Devuelve el % de margen formateado (en rojo si es negativo: se vendería con pérdida). */
+    private function format_margin( float $cost, $price ): string {
+        if ( '' === $price || ! is_numeric( $price ) || (float) $price <= 0 ) {
+            return '—';
+        }
+
+        $price  = (float) $price;
+        $margin = ( $price - $cost ) / $price * 100;
+        $color  = $margin < 0 ? '#c00' : ( $margin < 15 ? '#b26a00' : '#2e7d32' );
+
+        return '<span style="color:' . $color . ';">' . esc_html( number_format_i18n( $margin, 1 ) ) . '%</span>';
+    }
+
+    /** Campo "Coste (proveedor)" — info interna, no se muestra nunca en la tienda. */
+    public function render_product_cost_field(): void {
+        global $post;
+        $cost = get_post_meta( $post->ID, '_mad_product_cost', true );
+        ?>
+        <div class="options_group">
+            <?php woocommerce_wp_text_input( [
+                'id'                => '_mad_product_cost',
+                'value'             => $cost,
+                'label'             => __( 'Coste (proveedor)', 'mad-suite' ) . ' (' . get_woocommerce_currency_symbol() . ')',
+                'description'       => __( 'Precio al que se adquirió este producto al proveedor. Uso interno — nunca se muestra en la tienda, solo en la columna "Margen" del listado de Productos.', 'mad-suite' ),
+                'desc_tip'          => true,
+                'data_type'         => 'price',
+                'custom_attributes' => [ 'step' => '0.01', 'min' => '0' ],
+            ] ); ?>
+        </div>
+        <?php
+    }
+
+    public function save_product_cost_field( int $post_id ): void {
+        if ( ! isset( $_POST['_mad_product_cost'] ) ) return;
+
+        $raw = wc_clean( wp_unslash( $_POST['_mad_product_cost'] ) );
+        if ( '' === $raw ) {
+            delete_post_meta( $post_id, '_mad_product_cost' );
+            return;
+        }
+
+        update_post_meta( $post_id, '_mad_product_cost', wc_format_decimal( $raw ) );
     }
 
     /** Miniatura del listado de Productos ampliada (40px por defecto → 110px). */
@@ -900,10 +990,10 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             <label>
                                 <input type="checkbox" name="product_columns_enabled" value="1"
                                     <?php checked( ! empty( $s['product_columns_enabled'] ) ); ?>>
-                                <?php esc_html_e( 'Agregar columnas "Medidas" (L×A×A de WooCommerce) y "Ubicación" (taxonomía de ATUM Inventory) en WooCommerce → Productos, y mostrar la miniatura al doble de tamaño.', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'Agregar columnas "Medidas" (L×A×A de WooCommerce), "Ubicación" (taxonomía de ATUM Inventory) y "Margen" (sobre precio regular y rebajado) en WooCommerce → Productos, y mostrar la miniatura al doble de tamaño.', 'mad-suite' ); ?>
                             </label>
                             <p class="description">
-                                <?php esc_html_e( 'La ubicación usa la función gratuita de ATUM ("Ubicaciones de producto"). Si ATUM no está activo, esa columna avisa en vez de mostrar datos.', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'La ubicación usa la función gratuita de ATUM ("Ubicaciones de producto"). Si ATUM no está activo, esa columna avisa en vez de mostrar datos. El margen se calcula con el campo "Coste (proveedor)" que aparece en la pestaña General de cada producto — si un producto no tiene coste cargado, la columna muestra "Sin coste".', 'mad-suite' ); ?>
                             </p>
                         </td>
                     </tr>

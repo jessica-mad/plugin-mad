@@ -472,10 +472,6 @@ return new class( $core ) implements MAD_Suite_Module {
         // del cliente) apenas su estado pasa a "Presupuesto pendiente".
         add_action( 'woocommerce_order_status_changed', [ $this, 'maybe_adopt_as_quote' ], 5, 3 );
 
-        // ── Panel de producto ──────────────────────────────────────────
-        add_action( 'woocommerce_product_data_tabs',    [ $this, 'product_data_tab' ] );
-        add_action( 'woocommerce_product_data_panels',  [ $this, 'product_data_panel' ] );
-        add_action( 'woocommerce_process_product_meta', [ $this, 'save_product_meta' ] );
     }
 
     /* ---------------------------------------------------------------- */
@@ -2924,79 +2920,6 @@ return new class( $core ) implements MAD_Suite_Module {
             $order->update_meta_data( '_mad_quote_status', 'quote-cancelled' );
             $order->update_status( 'cancelled', __( 'Presupuesto caducado automáticamente.', 'mad-suite' ) );
             $order->save();
-        }
-    }
-
-    /* ================================================================ */
-    /*  Panel de producto                                                 */
-    /* ================================================================ */
-
-    public function product_data_tab( $tabs ) {
-        $tabs['mad-quotes'] = [
-            'label'    => __( 'Presupuesto', 'mad-suite' ),
-            'target'   => 'mad_quotes_product_data',
-            'class'    => [],
-            'priority' => 90,
-        ];
-        return $tabs;
-    }
-
-    public function product_data_panel() {
-        $product_id = get_the_ID();
-        $real_pvp   = get_post_meta( $product_id, '_mad_real_pvp', true );
-        $valor_base = get_post_meta( $product_id, '_mad_valor_base', true );
-        ?>
-        <div id="mad_quotes_product_data" class="panel woocommerce_options_panel">
-            <div class="options_group">
-                <p class="form-field" style="padding:12px 12px 12px 162px;">
-                    <span style="display:block;background:#f0f6fc;border-left:4px solid #2980b9;padding:10px 14px;border-radius:2px;">
-                        <strong><?php esc_html_e( 'Precio de cotización', 'mad-suite' ); ?></strong>
-                        &rarr; <?php esc_html_e( 'Precio regular del producto.', 'mad-suite' ); ?><br>
-                        <?php esc_html_e( 'Es el precio que el admin enviará al cliente en el email de presupuesto (editable antes de enviar).', 'mad-suite' ); ?>
-                    </span>
-                    <span style="display:block;background:#f0faf0;border-left:4px solid #27ae60;padding:10px 14px;border-radius:2px;margin-top:8px;">
-                        <strong><?php esc_html_e( 'Precio de profesionales', 'mad-suite' ); ?></strong>
-                        &rarr; <?php esc_html_e( 'Precio de oferta del producto.', 'mad-suite' ); ?><br>
-                        <?php esc_html_e( 'Los usuarios con rol profesional ven y pagan este precio directamente, sin pasar por presupuesto.', 'mad-suite' ); ?>
-                    </span>
-                </p>
-            </div>
-            <div class="options_group">
-                <?php woocommerce_wp_text_input( [
-                    'id'                => 'mad_real_pvp',
-                    'value'             => $real_pvp,
-                    'label'             => __( 'PVP real (precio público)', 'mad-suite' ),
-                    'description'       => __( 'El precio real de este producto, aparte del precio de WooCommerce (que puede ser un valor simbólico usado para el carrito y el feed de Google Shopping). Los roles con "Precio real" activado en Ajustes ven y pagan este valor menos su descuento de rol.', 'mad-suite' ),
-                    'desc_tip'          => false,
-                    'data_type'         => 'price',
-                    'custom_attributes' => [ 'step' => '0.01', 'min' => '0' ],
-                ] ); ?>
-                <?php woocommerce_wp_text_input( [
-                    'id'                => 'mad_valor_base',
-                    'value'             => $valor_base,
-                    'label'             => __( 'Valor base / costo', 'mad-suite' ),
-                    'description'       => __( 'Referencia de costo, visible junto al precio real solo para los roles con "Precio real" activado. Déjalo vacío para no mostrarlo.', 'mad-suite' ),
-                    'desc_tip'          => false,
-                    'data_type'         => 'price',
-                    'custom_attributes' => [ 'step' => '0.01', 'min' => '0' ],
-                ] ); ?>
-            </div>
-        </div>
-        <?php
-    }
-
-    public function save_product_meta( $post_id ) {
-        // Precio de cotización/profesionales → campos nativos de WooCommerce (sin cambios).
-        foreach ( [ 'mad_real_pvp' => '_mad_real_pvp', 'mad_valor_base' => '_mad_valor_base' ] as $field => $meta_key ) {
-            if ( ! isset( $_POST[ $field ] ) ) continue;
-
-            $raw = wc_clean( wp_unslash( $_POST[ $field ] ) );
-            if ( '' === $raw ) {
-                delete_post_meta( $post_id, $meta_key );
-                continue;
-            }
-
-            update_post_meta( $post_id, $meta_key, wc_format_decimal( $raw ) );
         }
     }
 
