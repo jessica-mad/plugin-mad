@@ -46,6 +46,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'ai_wpml_enabled'          => true,
             'wpml_quotes_enabled'      => true,
             'product_columns_enabled'  => true,
+            'product_stock_sort_enabled' => true,
+            'product_grid_view_enabled'  => true,
         ];
 
         $opts = get_option( self::OPTION_KEY, [] );
@@ -140,6 +142,26 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( is_admin() ) {
             add_action( 'woocommerce_product_options_pricing', [ $this, 'render_product_cost_field' ] );
             add_action( 'woocommerce_process_product_meta',    [ $this, 'save_product_cost_field' ] );
+        }
+
+        // Feature 10 – Productos sin stock al final del listado de admin,
+        // por defecto (solo cuando no hay búsqueda ni orden explícito por
+        // columna, para no interferir si el usuario pidió otro orden).
+        if ( is_admin() && ! empty( $s['product_stock_sort_enabled'] ) ) {
+            add_action( 'pre_get_posts', [ $this, 'sort_outofstock_last' ], 20 );
+        }
+
+        // Feature 11 – Vista de cuadrícula del listado de Productos, con
+        // organización manual por arrastre (menu_order) y filtro "solo
+        // destacados". La vista elegida se recuerda por usuario (igual que
+        // la Biblioteca de medios de WordPress) vía get/set_user_setting().
+        if ( is_admin() && ! empty( $s['product_grid_view_enabled'] ) ) {
+            add_action( 'load-edit.php',            [ $this, 'persist_grid_view_choice' ] );
+            add_filter( 'admin_body_class',         [ $this, 'add_grid_view_body_class' ] );
+            add_action( 'restrict_manage_posts',    [ $this, 'render_grid_view_controls' ], 10, 2 );
+            add_action( 'pre_get_posts',             [ $this, 'filter_featured_only' ], 20 );
+            add_action( 'admin_footer-edit.php',    [ $this, 'output_grid_view_assets' ] );
+            add_action( 'wp_ajax_mad_update_product_order', [ $this, 'ajax_update_product_order' ] );
         }
     }
 
@@ -801,6 +823,228 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         update_post_meta( $post_id, 'cost value', wc_format_decimal( $raw ) );
     }
 
+    // ── Feature 10: Sin stock al final del listado ────────────────────────────
+
+    /**
+     * Ordena el listado de admin de Productos con "Agotado" siempre al
+     * final. _stock_status vale 'instock' | 'onbackorder' | 'outofstock';
+     * ordenando ASC alfabéticamente ya da el resultado deseado (outofstock
+     * es el último alfabéticamente). Solo se aplica cuando no hay búsqueda
+     * ni una columna de orden explícita, para no pisar lo que pida el
+     * usuario.
+     */
+    public function sort_outofstock_last( $query ): void {
+        if ( ! is_admin() || ! $query->is_main_query() ) return;
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        if ( ! empty( $_GET['orderby'] ) || ! empty( $_GET['s'] ) ) return;
+
+        $query->set( 'meta_key', '_stock_status' );
+        $query->set( 'orderby', [ 'meta_value' => 'ASC', 'menu_order' => 'ASC', 'title' => 'ASC' ] );
+    }
+
+    // ── Feature 11: Vista de cuadrícula + orden por arrastre + destacados ────
+
+    /** Recuerda la vista elegida (tabla/cuadrícula) por usuario, igual que la Biblioteca de medios. */
+    public function persist_grid_view_choice(): void {
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        if ( isset( $_GET['mad_view'] ) && in_array( $_GET['mad_view'], [ 'grid', 'list' ], true ) ) {
+            set_user_setting( 'mad_product_view', $_GET['mad_view'] );
+        }
+    }
+
+    private function get_current_grid_view(): string {
+        if ( isset( $_GET['mad_view'] ) && in_array( $_GET['mad_view'], [ 'grid', 'list' ], true ) ) {
+            return $_GET['mad_view'];
+        }
+        return (string) get_user_setting( 'mad_product_view', 'list' );
+    }
+
+    public function add_grid_view_body_class( string $classes ): string {
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return $classes;
+        return $classes . ' mad-view-' . $this->get_current_grid_view() . ' ';
+    }
+
+    /** Botones de Tabla/Cuadrícula + filtro de Destacados, sobre el listado de Productos. */
+    public function render_grid_view_controls( string $post_type, string $which ): void {
+        if ( 'product' !== $post_type || 'top' !== $which ) return;
+
+        $view     = $this->get_current_grid_view();
+        $base_url = remove_query_arg( [ 'mad_view', 'paged' ] );
+        $list_url = add_query_arg( 'mad_view', 'list', $base_url );
+        $grid_url = add_query_arg( 'mad_view', 'grid', $base_url );
+
+        $featured_on  = ! empty( $_GET['mad_featured'] );
+        $featured_url = $featured_on
+            ? remove_query_arg( [ 'mad_featured', 'paged' ] )
+            : add_query_arg( 'mad_featured', '1', remove_query_arg( 'paged' ) );
+        ?>
+        <div style="display:inline-flex;align-items:center;gap:6px;margin:1px 8px 0 0;">
+            <span style="display:inline-flex;border:1px solid #c3c4c7;border-radius:4px;overflow:hidden;">
+                <a href="<?php echo esc_url( $list_url ); ?>"
+                   class="button<?php echo 'grid' !== $view ? ' button-primary' : ''; ?>"
+                   style="border:0;border-radius:0;box-shadow:none;"
+                   title="<?php esc_attr_e( 'Vista de tabla', 'mad-suite' ); ?>">☰ <?php esc_html_e( 'Tabla', 'mad-suite' ); ?></a><a href="<?php echo esc_url( $grid_url ); ?>"
+                   class="button<?php echo 'grid' === $view ? ' button-primary' : ''; ?>"
+                   style="border:0;border-radius:0;box-shadow:none;"
+                   title="<?php esc_attr_e( 'Vista de cuadrícula', 'mad-suite' ); ?>">▦ <?php esc_html_e( 'Cuadrícula', 'mad-suite' ); ?></a>
+            </span>
+            <a href="<?php echo esc_url( $featured_url ); ?>"
+               class="button<?php echo $featured_on ? ' button-primary' : ''; ?>"
+               title="<?php esc_attr_e( 'Mostrar solo productos destacados', 'mad-suite' ); ?>">★ <?php esc_html_e( 'Destacados', 'mad-suite' ); ?></a>
+        </div>
+        <?php
+    }
+
+    /** Filtra el listado a solo productos marcados como "destacado" cuando el botón de arriba está activo. */
+    public function filter_featured_only( $query ): void {
+        if ( ! is_admin() || ! $query->is_main_query() ) return;
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        if ( empty( $_GET['mad_featured'] ) ) return;
+
+        $tax_query   = (array) $query->get( 'tax_query' );
+        $tax_query[] = [
+            'taxonomy' => 'product_visibility',
+            'field'    => 'name',
+            'terms'    => 'featured',
+        ];
+        $query->set( 'tax_query', $tax_query );
+    }
+
+    /**
+     * CSS que convierte la tabla nativa del listado en tarjetas de
+     * cuadrícula (reutiliza las mismas celdas/columnas ya registradas, sin
+     * duplicar la consulta ni el render), y JS de arrastre (jQuery UI
+     * Sortable) que persiste el nuevo orden en menu_order vía AJAX.
+     *
+     * El arrastre solo se activa si no hay una columna de orden explícita
+     * activa (orderby en la URL): si el listado no está en su orden por
+     * defecto, la posición visual no refleja menu_order y arrastrar
+     * confundiría más de lo que ayuda.
+     */
+    public function output_grid_view_assets(): void {
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        if ( 'grid' !== $this->get_current_grid_view() ) return;
+
+        $can_sort = empty( $_GET['orderby'] );
+        if ( $can_sort ) {
+            wp_enqueue_script( 'jquery-ui-sortable' );
+        }
+        ?>
+        <style>
+            body.mad-view-grid .wp-list-table.posts { border: 0; box-shadow: none; background: transparent; }
+            body.mad-view-grid .wp-list-table thead, body.mad-view-grid .wp-list-table tfoot { display: none; }
+            body.mad-view-grid #the-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+            body.mad-view-grid #the-list tr.type-product { display: flex; flex-direction: column; background: #fff; border: 1px solid #dcdcde; border-radius: 6px; padding: 10px 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+            body.mad-view-grid #the-list tr.type-product.ui-sortable-helper { box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+            body.mad-view-grid #the-list .mad-sortable-placeholder { border: 2px dashed #c3c4c7; border-radius: 6px; background: #f6f7f7; }
+            body.mad-view-grid #the-list tr.type-product .check-column,
+            body.mad-view-grid #the-list tr.type-product .toggle-row { display: none; }
+            body.mad-view-grid #the-list tr.type-product td { display: block; padding: 3px 0; border: 0; white-space: normal; overflow-wrap: break-word; }
+            body.mad-view-grid #the-list tr.type-product .column-name { order: -1; font-weight: 600; }
+            body.mad-view-grid #the-list tr.type-product .column-name img { display: block; width: 100%; height: 160px; object-fit: cover; border-radius: 4px; margin-bottom: 8px; }
+            <?php if ( $can_sort ) : ?>
+            body.mad-view-grid #the-list tr.type-product { cursor: move; }
+            <?php endif; ?>
+        </style>
+        <?php if ( $can_sort ) : ?>
+        <script>
+        jQuery( function( $ ) {
+            $( '#the-list' ).sortable( {
+                items:       '> tr.type-product',
+                placeholder: 'mad-sortable-placeholder',
+                opacity:     0.7,
+                start: function( e, ui ) {
+                    ui.placeholder.height( ui.item.outerHeight() );
+                },
+                update: function( e, ui ) {
+                    var $row  = ui.item;
+                    var id    = ( $row.attr( 'id' ) || '' ).replace( 'post-', '' );
+                    var $prev = $row.prev( 'tr.type-product' );
+                    var $next = $row.next( 'tr.type-product' );
+
+                    $.post( ajaxurl, {
+                        action:  'mad_update_product_order',
+                        nonce:   '<?php echo esc_js( wp_create_nonce( 'mad_product_order' ) ); ?>',
+                        post_id: id,
+                        prev_id: $prev.length ? ( $prev.attr( 'id' ) || '' ).replace( 'post-', '' ) : 0,
+                        next_id: $next.length ? ( $next.attr( 'id' ) || '' ).replace( 'post-', '' ) : 0
+                    } );
+                }
+            } );
+        } );
+        </script>
+        <?php endif;
+    }
+
+    /**
+     * Guarda el nuevo orden de un producto arrastrado, insertándolo entre
+     * los menu_order de sus vecinos visuales (prev_id/next_id). Si no queda
+     * hueco numérico entre ambos, reespacia todo el catálogo antes de
+     * insertar (poco frecuente: solo pasa cuando se agotan los múltiplos
+     * de 10 entre dos productos concretos).
+     */
+    public function ajax_update_product_order(): void {
+        check_ajax_referer( 'mad_product_order', 'nonce' );
+        if ( ! current_user_can( 'edit_products' ) ) {
+            wp_send_json_error( 'forbidden' );
+        }
+
+        $post_id = absint( $_POST['post_id'] ?? 0 );
+        $prev_id = absint( $_POST['prev_id'] ?? 0 );
+        $next_id = absint( $_POST['next_id'] ?? 0 );
+        if ( ! $post_id ) {
+            wp_send_json_error( 'missing post_id' );
+        }
+
+        $prev_order = $prev_id ? (int) get_post_field( 'menu_order', $prev_id ) : null;
+        $next_order = $next_id ? (int) get_post_field( 'menu_order', $next_id ) : null;
+
+        $needs_renumber = ( null !== $prev_order && null !== $next_order && ( $next_order - $prev_order ) < 2 )
+            || ( null === $prev_order && null !== $next_order && $next_order < 1 );
+
+        if ( $needs_renumber ) {
+            $this->renumber_product_menu_order();
+            $prev_order = $prev_id ? (int) get_post_field( 'menu_order', $prev_id ) : null;
+            $next_order = $next_id ? (int) get_post_field( 'menu_order', $next_id ) : null;
+        }
+
+        if ( null !== $prev_order && null !== $next_order ) {
+            $new_order = (int) floor( ( $prev_order + $next_order ) / 2 );
+        } elseif ( null !== $prev_order ) {
+            $new_order = $prev_order + 10;
+        } elseif ( null !== $next_order ) {
+            $new_order = $next_order - 10;
+        } else {
+            $new_order = 0;
+        }
+
+        wp_update_post( [ 'ID' => $post_id, 'menu_order' => $new_order ] );
+        wp_send_json_success( [ 'menu_order' => $new_order ] );
+    }
+
+    /** Reespacia el menu_order de todos los productos (de 10 en 10), respetando el orden por defecto (sin stock al final). */
+    private function renumber_product_menu_order(): void {
+        global $wpdb;
+        $ids = $wpdb->get_col( "
+            SELECT p.ID FROM {$wpdb->posts} p
+            LEFT JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = '_stock_status'
+            WHERE p.post_type = 'product' AND p.post_status IN ('publish','draft','pending','private','future')
+            ORDER BY pm.meta_value ASC, p.menu_order ASC, p.post_title ASC
+        " );
+
+        $order = 0;
+        foreach ( $ids as $id ) {
+            $wpdb->update( $wpdb->posts, [ 'menu_order' => $order ], [ 'ID' => $id ] );
+            clean_post_cache( (int) $id );
+            $order += 10;
+        }
+    }
+
     /** Miniatura del listado de Productos ampliada (40px por defecto → 110px). */
     public function output_product_list_thumb_css(): void {
         $screen = get_current_screen();
@@ -853,6 +1097,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'ai_wpml_enabled'          => ! empty( $post['ai_wpml_enabled'] ),
             'wpml_quotes_enabled'      => ! empty( $post['wpml_quotes_enabled'] ),
             'product_columns_enabled'  => ! empty( $post['product_columns_enabled'] ),
+            'product_stock_sort_enabled' => ! empty( $post['product_stock_sort_enabled'] ),
+            'product_grid_view_enabled'  => ! empty( $post['product_grid_view_enabled'] ),
         ];
 
         update_option( self::OPTION_KEY, $data );
@@ -1062,6 +1308,37 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             </label>
                             <p class="description">
                                 <?php esc_html_e( 'La ubicación usa la función gratuita de ATUM ("Ubicaciones de producto"). Si ATUM no está activo, esa columna avisa en vez de mostrar datos. El margen se calcula con el campo "Coste (proveedor)" que aparece en la pestaña General de cada producto — si un producto no tiene coste cargado, la columna muestra "Sin coste".', 'mad-suite' ); ?>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- ── 8: Orden y vista del listado de Productos ──────────── -->
+                <h2><?php esc_html_e( '8. Orden y vista del listado de Productos', 'mad-suite' ); ?></h2>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th><?php esc_html_e( 'Sin stock al final', 'mad-suite' ); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="product_stock_sort_enabled" value="1"
+                                    <?php checked( ! empty( $s['product_stock_sort_enabled'] ) ); ?>>
+                                <?php esc_html_e( 'Por defecto, mostrar los productos agotados al final del listado de Productos.', 'mad-suite' ); ?>
+                            </label>
+                            <p class="description">
+                                <?php esc_html_e( 'Solo aplica cuando no se ha pulsado ninguna columna de orden ni hay una búsqueda activa — si el usuario ordena manualmente por otra columna, se respeta ese orden.', 'mad-suite' ); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><?php esc_html_e( 'Vista de cuadrícula', 'mad-suite' ); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="product_grid_view_enabled" value="1"
+                                    <?php checked( ! empty( $s['product_grid_view_enabled'] ) ); ?>>
+                                <?php esc_html_e( 'Añadir un selector Tabla/Cuadrícula sobre el listado de Productos, con un filtro para ver solo los destacados y organización manual arrastrando las tarjetas en la vista de cuadrícula.', 'mad-suite' ); ?>
+                            </label>
+                            <p class="description">
+                                <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa.', 'mad-suite' ); ?>
                             </p>
                         </td>
                     </tr>
