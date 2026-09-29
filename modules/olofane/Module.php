@@ -965,9 +965,32 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             /* En cuadrícula solo interesan la foto y el nombre — el resto de
                columnas (precio, margen, medidas, ubicación...) se ocultan. */
             body.mad-view-grid #the-list tr.type-product td:not(.column-thumb):not(.column-name) { display: none; }
-            body.mad-view-grid #the-list tr.type-product .column-thumb { text-align: center; }
-            body.mad-view-grid #the-list tr.type-product .column-thumb img { display: block; width: 100%; height: 180px; object-fit: cover; border-radius: 4px; margin: 0 auto; }
-            body.mad-view-grid #the-list tr.type-product .column-name { font-weight: 600; text-align: center; margin-top: 8px; }
+            /* width:auto y las reglas de imagen con !important pisan tanto el
+               ancho de columna fijo de tabla (heredado de WP core, en % del
+               ancho de la tabla) como el tamaño 110×110 de la Feature 8
+               (output_product_list_thumb_css), pensado para la vista de tabla. */
+            body.mad-view-grid #the-list tr.type-product .column-thumb {
+                width: auto !important;
+                text-align: center;
+            }
+            body.mad-view-grid #the-list tr.type-product .column-thumb img {
+                display: block !important;
+                width: 100% !important;
+                height: 180px !important;
+                max-width: none !important;
+                max-height: none !important;
+                min-width: 0 !important;
+                min-height: 0 !important;
+                object-fit: cover;
+                border-radius: 4px;
+                margin: 0 auto;
+            }
+            body.mad-view-grid #the-list tr.type-product .column-name {
+                width: auto !important;
+                font-weight: 600;
+                text-align: center;
+                margin-top: 8px;
+            }
             body.mad-view-grid #the-list tr.type-product .column-name .row-actions { display: none; }
             <?php if ( $can_sort ) : ?>
             body.mad-view-grid #the-list tr.type-product { cursor: move; }
