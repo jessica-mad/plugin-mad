@@ -672,12 +672,11 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             return;
         }
 
-        $cost = get_post_meta( $post_id, '_mad_product_cost', true );
-        if ( '' === $cost || ! is_numeric( $cost ) ) {
+        $cost = $this->get_product_cost( $post_id );
+        if ( null === $cost ) {
             echo '<span style="color:#999;">' . esc_html__( 'Sin coste', 'mad-suite' ) . '</span>';
             return;
         }
-        $cost = (float) $cost;
 
         $regular = $product->get_regular_price();
         $sale    = $product->get_sale_price();
@@ -702,35 +701,104 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         return '<span style="color:' . $color . ';">' . esc_html( number_format_i18n( $margin, 1 ) ) . '%</span>';
     }
 
-    /** Campo "Coste (proveedor)" — info interna, no se muestra nunca en la tienda. */
+    /**
+     * Coste del proveedor. Se importó vía el importador nativo de CSV de
+     * WooCommerce bajo la meta key literal "cost value" (con espacio — así
+     * la generó el importador, no es un campo ACF). Se comprueba también
+     * "cost_value" (guion bajo) como respaldo, por si en algún producto se
+     * hubiera guardado normalizada.
+     *
+     * @return float|null Null si no hay coste cargado.
+     */
+    private function get_product_cost( int $product_id ) {
+        $cost = get_post_meta( $product_id, 'cost value', true );
+        if ( '' === $cost ) {
+            $cost = get_post_meta( $product_id, 'cost_value', true );
+        }
+        return ( '' !== $cost && is_numeric( $cost ) ) ? (float) $cost : null;
+    }
+
+    /**
+     * Campo "Coste (proveedor)" — info interna, no se muestra nunca en la
+     * tienda. Reutiliza la meta "cost value" ya cargada por el cliente vía
+     * importador CSV. Incluye una calculadora de margen en tiempo real
+     * (PVP y B2B) que se actualiza mientras se edita el coste o los precios,
+     * sin recargar la página.
+     *
+     * Nota: el <input> no puede llamarse "cost value" (con espacio) porque
+     * PHP convierte automáticamente los espacios de los nombres de campo en
+     * guiones bajos al poblar $_POST. Por eso el campo usa el id/name
+     * "mad_cost_value" y es save_product_cost_field() quien escribe
+     * explícitamente en la meta key real "cost value".
+     */
     public function render_product_cost_field(): void {
         global $post;
-        $cost = get_post_meta( $post->ID, '_mad_product_cost', true );
+        $cost = $this->get_product_cost( $post->ID );
         ?>
         <div class="options_group">
             <?php woocommerce_wp_text_input( [
-                'id'                => '_mad_product_cost',
-                'value'             => $cost,
+                'id'                => 'mad_cost_value',
+                'value'             => null !== $cost ? $cost : '',
                 'label'             => __( 'Coste (proveedor)', 'mad-suite' ) . ' (' . get_woocommerce_currency_symbol() . ')',
-                'description'       => __( 'Precio al que se adquirió este producto al proveedor. Uso interno — nunca se muestra en la tienda, solo en la columna "Margen" del listado de Productos.', 'mad-suite' ),
+                'description'       => __( 'Precio al que se adquirió este producto al proveedor. Uso interno — nunca se muestra en la tienda, solo en la columna "Margen" del listado de Productos y en la calculadora de abajo.', 'mad-suite' ),
                 'desc_tip'          => true,
                 'data_type'         => 'price',
                 'custom_attributes' => [ 'step' => '0.01', 'min' => '0' ],
             ] ); ?>
+            <p class="form-field mad_margin_calc_field">
+                <label><?php esc_html_e( 'Margen (calculadora en tiempo real)', 'mad-suite' ); ?></label>
+                <span class="description">
+                    PVP: <strong id="mad_margin_pvp">—</strong>
+                    &nbsp;&nbsp;&nbsp;
+                    B2B: <strong id="mad_margin_b2b">—</strong>
+                </span>
+            </p>
         </div>
+        <script>
+        jQuery( function( $ ) {
+            function parseNum( val ) {
+                if ( ! val ) return null;
+                var n = parseFloat( String( val ).replace( ',', '.' ) );
+                return isNaN( n ) ? null : n;
+            }
+            function colorFor( margin ) {
+                if ( margin < 0 ) return '#c00';
+                if ( margin < 15 ) return '#b26a00';
+                return '#2e7d32';
+            }
+            function renderMargin( id, cost, price ) {
+                var $el = $( '#' + id );
+                if ( null === cost || null === price || price <= 0 ) {
+                    $el.text( '—' ).css( 'color', '' );
+                    return;
+                }
+                var margin = ( price - cost ) / price * 100;
+                $el.text( margin.toFixed( 1 ) + '%' ).css( 'color', colorFor( margin ) );
+            }
+            function updateMargins() {
+                var cost    = parseNum( $( '#mad_cost_value' ).val() );
+                var regular = parseNum( $( '#_regular_price' ).val() );
+                var sale    = parseNum( $( '#_sale_price' ).val() );
+                renderMargin( 'mad_margin_pvp', cost, regular );
+                renderMargin( 'mad_margin_b2b', cost, sale );
+            }
+            $( document ).on( 'input change', '#mad_cost_value, #_regular_price, #_sale_price', updateMargins );
+            updateMargins();
+        } );
+        </script>
         <?php
     }
 
     public function save_product_cost_field( int $post_id ): void {
-        if ( ! isset( $_POST['_mad_product_cost'] ) ) return;
+        if ( ! isset( $_POST['mad_cost_value'] ) ) return;
 
-        $raw = wc_clean( wp_unslash( $_POST['_mad_product_cost'] ) );
+        $raw = wc_clean( wp_unslash( $_POST['mad_cost_value'] ) );
         if ( '' === $raw ) {
-            delete_post_meta( $post_id, '_mad_product_cost' );
+            delete_post_meta( $post_id, 'cost value' );
             return;
         }
 
-        update_post_meta( $post_id, '_mad_product_cost', wc_format_decimal( $raw ) );
+        update_post_meta( $post_id, 'cost value', wc_format_decimal( $raw ) );
     }
 
     /** Miniatura del listado de Productos ampliada (40px por defecto → 110px). */
