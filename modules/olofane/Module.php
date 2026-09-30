@@ -163,6 +163,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             add_filter( 'post_class',                [ $this, 'tag_outofstock_row_class' ], 10, 3 );
             add_action( 'admin_footer-edit.php',    [ $this, 'output_grid_view_assets' ] );
             add_action( 'wp_ajax_mad_update_product_order', [ $this, 'ajax_update_product_order' ] );
+            add_action( 'admin_post_mad_reorder_products_by_date', [ $this, 'handle_reorder_products_by_date' ] );
+            add_action( 'admin_notices',            [ $this, 'render_reorder_success_notice' ] );
         }
     }
 
@@ -966,6 +968,67 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                     </select>
                 </label>
             <?php endif; ?>
+
+            <a href="<?php echo esc_url( $this->get_reorder_by_date_url() ); ?>"
+               class="button"
+               onclick="return confirm('<?php echo esc_js( __( 'Esto reorganiza todos los productos por fecha de publicación (más recientes primero). El orden manual actual se perderá. ¿Continuar?', 'mad-suite' ) ); ?>');"
+               title="<?php esc_attr_e( 'Reorganizar todos los productos por fecha de publicación, con los más recientes primero', 'mad-suite' ); ?>">
+               ↓ <?php esc_html_e( 'Más recientes primero', 'mad-suite' ); ?>
+            </a>
+        </div>
+        <?php
+    }
+
+    private function get_reorder_by_date_url(): string {
+        return wp_nonce_url(
+            admin_url( 'admin-post.php?action=mad_reorder_products_by_date' ),
+            'mad_reorder_products_by_date'
+        );
+    }
+
+    /** Reordena admin-post.php?action=mad_reorder_products_by_date → reespacia menu_order por fecha de publicación descendente. */
+    public function handle_reorder_products_by_date(): void {
+        if ( ! current_user_can( 'edit_products' ) ) wp_die( 'Sin permisos.' );
+        check_admin_referer( 'mad_reorder_products_by_date' );
+
+        $this->reorder_products_by_date();
+
+        $redirect = wp_get_referer() ?: admin_url( 'edit.php?post_type=product' );
+        wp_safe_redirect( add_query_arg( 'mad_reordered', '1', remove_query_arg( 'mad_reordered', $redirect ) ) );
+        exit;
+    }
+
+    /**
+     * Reespacia el menu_order de todos los productos (de 10 en 10) según su
+     * fecha de publicación, más recientes primero, respetando que los
+     * agotados queden siempre al final (misma agrupación que usa la
+     * Feature 10 en el orden por defecto).
+     */
+    private function reorder_products_by_date(): void {
+        global $wpdb;
+        $ids = $wpdb->get_col( "
+            SELECT p.ID FROM {$wpdb->posts} p
+            LEFT JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = '_stock_status'
+            WHERE p.post_type = 'product' AND p.post_status IN ('publish','draft','pending','private','future')
+            ORDER BY pm.meta_value ASC, p.post_date DESC
+        " );
+
+        $order = 0;
+        foreach ( $ids as $id ) {
+            $wpdb->update( $wpdb->posts, [ 'menu_order' => $order ], [ 'ID' => $id ] );
+            clean_post_cache( (int) $id );
+            $order += 10;
+        }
+    }
+
+    /** Aviso de "reordenado con éxito" tras usar el botón de arriba. */
+    public function render_reorder_success_notice(): void {
+        $screen = get_current_screen();
+        if ( ! $screen || 'edit-product' !== $screen->id ) return;
+        if ( empty( $_GET['mad_reordered'] ) ) return;
+        ?>
+        <div class="notice notice-success is-dismissible">
+            <p><?php esc_html_e( 'Productos reorganizados por fecha de publicación (más recientes primero).', 'mad-suite' ); ?></p>
         </div>
         <?php
     }
@@ -1475,7 +1538,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                                 <?php esc_html_e( 'Añadir un selector Tabla/Cuadrícula sobre el listado de Productos, con un filtro para ver solo los destacados y organización manual arrastrando las tarjetas en la vista de cuadrícula.', 'mad-suite' ); ?>
                             </label>
                             <p class="description">
-                                <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa. La vista de cuadrícula solo muestra foto y nombre. Los productos agotados quedan siempre al final, bloqueados (no se pueden arrastrar) y marcados con la etiqueta "SOLD" en rojo.', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa. La vista de cuadrícula solo muestra foto y nombre. Los productos agotados quedan siempre al final, bloqueados (no se pueden arrastrar) y marcados con la etiqueta "SOLD" en rojo. El botón "Más recientes primero" reorganiza automáticamente todos los productos por fecha de publicación (perdiendo el orden manual anterior).', 'mad-suite' ); ?>
                             </p>
                         </td>
                     </tr>
