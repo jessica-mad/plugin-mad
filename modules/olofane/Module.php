@@ -306,7 +306,17 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                 .mad-olofane-price-incl { display:block; font-size:0.85em; color:#666; margin-top:3px; }
                 .mad-olofane-price-incl small { font-size:0.9em; }
                 .mad-olofane-price-divider { border:0; border-top:1px solid #ddd; margin:10px 0 6px; }
-                .mad-olofane-price-pvp-strike { display:block; text-decoration:line-through; opacity:.6; }
+                /* text-decoration no se aplica en un solo punto: al heredarse
+                   sobre texto de tamaños muy distintos (precio grande + label
+                   pequeño), el navegador dibuja la línea a una altura fija que
+                   queda mal centrada en el texto pequeño y parece un subrayado
+                   en vez de un tachado. Se declara en cada tamaño por separado
+                   para que cada uno dibuje su propia línea centrada. */
+                .mad-olofane-price-pvp-strike { display:block; opacity:.6; }
+                .mad-olofane-price-pvp-strike .mad-olofane-price-excl,
+                .mad-olofane-price-pvp-strike .mad-olofane-price-excl small,
+                .mad-olofane-price-pvp-strike .mad-olofane-price-incl,
+                .mad-olofane-price-pvp-strike .mad-olofane-price-incl small { text-decoration: line-through; }
                 .mad-olofane-price-pro-label { display:block; font-size:.75em; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#888; margin-bottom:2px; }
             </style>';
         }
