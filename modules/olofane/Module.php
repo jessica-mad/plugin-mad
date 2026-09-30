@@ -160,7 +160,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             add_filter( 'admin_body_class',         [ $this, 'add_grid_view_body_class' ] );
             add_action( 'restrict_manage_posts',    [ $this, 'render_grid_view_controls' ], 10, 2 );
             add_action( 'pre_get_posts',             [ $this, 'filter_featured_only' ], 20 );
-            add_action( 'pre_get_posts',             [ $this, 'filter_grid_view_stock_only' ], 20 );
+            add_filter( 'post_class',                [ $this, 'tag_outofstock_row_class' ], 10, 3 );
             add_action( 'admin_footer-edit.php',    [ $this, 'output_grid_view_assets' ] );
             add_action( 'wp_ajax_mad_update_product_order', [ $this, 'ajax_update_product_order' ] );
         }
@@ -950,20 +950,23 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $query->set( 'tax_query', $tax_query );
     }
 
-    /** En vista de cuadrícula solo interesan los productos con existencia — los agotados quedan fuera. */
-    public function filter_grid_view_stock_only( $query ): void {
-        if ( ! is_admin() || ! $query->is_main_query() ) return;
+    /**
+     * Marca las filas de productos agotados con la clase "mad-outofstock"
+     * en el listado de admin, para que la vista de cuadrícula pueda
+     * bloquear su arrastre y ponerles la etiqueta "SOLD" en rojo. La
+     * Feature 10 (sort_outofstock_last) ya se encarga de que queden al
+     * final del orden por defecto; esto solo los distingue visualmente.
+     */
+    public function tag_outofstock_row_class( array $classes, $class, int $post_id ): array {
+        if ( ! is_admin() ) return $classes;
         $screen = get_current_screen();
-        if ( ! $screen || 'edit-product' !== $screen->id ) return;
-        if ( 'grid' !== $this->get_current_grid_view() ) return;
+        if ( ! $screen || 'edit-product' !== $screen->id ) return $classes;
 
-        $meta_query   = (array) $query->get( 'meta_query' );
-        $meta_query[] = [
-            'key'     => '_stock_status',
-            'value'   => 'outofstock',
-            'compare' => '!=',
-        ];
-        $query->set( 'meta_query', $meta_query );
+        $product = wc_get_product( $post_id );
+        if ( $product && 'outofstock' === $product->get_stock_status() ) {
+            $classes[] = 'mad-outofstock';
+        }
+        return $classes;
     }
 
     /**
@@ -1028,15 +1031,32 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                 margin-top: 8px;
             }
             body.mad-view-grid #the-list tr.type-product .column-name .row-actions { display: none; }
+            /* Agotados: bloqueados al final (Feature 10 ya los ordena ahí por
+               defecto), sin arrastre y con etiqueta "SOLD" en rojo. */
+            body.mad-view-grid #the-list tr.type-product.mad-outofstock { opacity: .55; cursor: default; }
+            body.mad-view-grid #the-list tr.type-product.mad-outofstock .column-thumb { position: relative; }
+            body.mad-view-grid #the-list tr.type-product.mad-outofstock .column-thumb::after {
+                content: "SOLD";
+                position: absolute;
+                top: 8px;
+                right: 8px;
+                color: #fff;
+                background: #c00;
+                font-weight: 700;
+                font-size: 11px;
+                letter-spacing: .05em;
+                padding: 2px 7px;
+                border-radius: 3px;
+            }
             <?php if ( $can_sort ) : ?>
-            body.mad-view-grid #the-list tr.type-product { cursor: move; }
+            body.mad-view-grid #the-list tr.type-product:not(.mad-outofstock) { cursor: move; }
             <?php endif; ?>
         </style>
         <?php if ( $can_sort ) : ?>
         <script>
         jQuery( function( $ ) {
             $( '#the-list' ).sortable( {
-                items:       '> tr.type-product',
+                items:       '> tr.type-product:not(.mad-outofstock)',
                 placeholder: 'mad-sortable-placeholder',
                 opacity:     0.7,
                 start: function( e, ui ) {
@@ -1419,7 +1439,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                                 <?php esc_html_e( 'Añadir un selector Tabla/Cuadrícula sobre el listado de Productos, con un filtro para ver solo los destacados y organización manual arrastrando las tarjetas en la vista de cuadrícula.', 'mad-suite' ); ?>
                             </label>
                             <p class="description">
-                                <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa. La vista de cuadrícula solo muestra foto y nombre, y solo de los productos con existencia — los agotados no aparecen en esta vista.', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa. La vista de cuadrícula solo muestra foto y nombre. Los productos agotados quedan siempre al final, bloqueados (no se pueden arrastrar) y marcados con la etiqueta "SOLD" en rojo.', 'mad-suite' ); ?>
                             </p>
                         </td>
                     </tr>
