@@ -304,6 +304,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                 .mad-olofane-price-incl { display:block; font-size:0.85em; color:#666; margin-top:3px; }
                 .mad-olofane-price-incl small { font-size:0.9em; }
                 .mad-olofane-price-divider { border:0; border-top:1px solid #ddd; margin:10px 0 6px; }
+                .mad-olofane-price-pvp-strike { display:block; text-decoration:line-through; opacity:.6; }
                 .mad-olofane-price-pro-label { display:block; font-size:.75em; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#888; margin-bottom:2px; }
             </style>';
         }
@@ -337,7 +338,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                     __( 'incl. IVA', 'mad-suite' )
                 );
 
-            return $css . $pvp_block . '<hr class="mad-olofane-price-divider">' . $pro_block;
+            return $css . '<span class="mad-olofane-price-pvp-strike">' . $pvp_block . '</span>'
+                . '<hr class="mad-olofane-price-divider">' . $pro_block;
         }
 
         // Simple / external product
@@ -365,7 +367,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                 __( 'incl. IVA', 'mad-suite' )
             );
 
-        return $css . $pvp_block . '<hr class="mad-olofane-price-divider">' . $pro_block;
+        return $css . '<span class="mad-olofane-price-pvp-strike">' . $pvp_block . '</span>'
+            . '<hr class="mad-olofane-price-divider">' . $pro_block;
     }
 
     /** Línea "precio excl. IVA (grande) + precio incl. IVA (pequeño)" reutilizada por PVP y Profesionales. */
