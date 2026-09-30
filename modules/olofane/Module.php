@@ -325,9 +325,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                 '<span class="mad-olofane-price-excl">%s <small>%s</small></span>'
                 . '<span class="mad-olofane-price-incl">%s <small>%s</small></span>',
                 $excl_formatted,
-                esc_html__( 'excl. IVA', 'mad-suite' ),
+                esc_html__( 'PVP excl. IVA', 'mad-suite' ),
                 wc_price( $incl_min ),
-                esc_html__( 'incl. IVA', 'mad-suite' )
+                esc_html__( 'PVP incl. IVA', 'mad-suite' )
             );
         }
 
@@ -351,9 +351,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             '<span class="mad-olofane-price-excl">%s <small>%s</small></span>'
             . '<span class="mad-olofane-price-incl">%s <small>%s</small></span>',
             wc_price( $excl ),
-            esc_html__( 'excl. IVA', 'mad-suite' ),
+            esc_html__( 'PVP excl. IVA', 'mad-suite' ),
             wc_price( $incl ),
-            esc_html__( 'incl. IVA', 'mad-suite' )
+            esc_html__( 'PVP incl. IVA', 'mad-suite' )
         );
     }
 
