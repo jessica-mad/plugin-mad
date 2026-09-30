@@ -283,9 +283,12 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     // (priority 999), which otherwise overwrites our transformation.
     //
     // Price logic for this store:
-    //   Regular price = B2C price  (shown crossed-out so B2B sees the discount)
-    //   Sale price    = B2B price  (shown as excl. IVA big + incl. IVA small)
-    // If no sale price exists, only show excl/incl for the regular price.
+    //   Regular price = PVP (público), siempre se muestra con su propio
+    //                    desglose excl./incl. IVA.
+    //   Sale price     = precio de Profesionales — si existe, se añade un
+    //                    segundo bloque debajo (con su propio desglose),
+    //                    separado por una línea y el encabezado "PROFESIONALES".
+    // Si no hay precio de venta (sin rebaja), solo se muestra el bloque PVP.
 
     public function dual_price_display( string $price_html, WC_Product $product ): string {
         if ( ! is_product() ) return $price_html;
@@ -296,65 +299,95 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( ! $css_printed ) {
             $css_printed = true;
             $css = '<style>
-                .mad-olofane-price-b2c { display:block; font-size:.9em; opacity:.6; text-decoration:line-through; margin-bottom:4px; }
                 .mad-olofane-price-excl { display:block; font-size:1.5em; font-weight:700; line-height:1.15; }
                 .mad-olofane-price-excl small { font-size:0.5em; font-weight:400; opacity:.7; }
                 .mad-olofane-price-incl { display:block; font-size:0.85em; color:#666; margin-top:3px; }
                 .mad-olofane-price-incl small { font-size:0.9em; }
+                .mad-olofane-price-divider { border:0; border-top:1px solid #ddd; margin:10px 0 6px; }
+                .mad-olofane-price-pro-label { display:block; font-size:.75em; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#888; margin-bottom:2px; }
             </style>';
         }
 
-        // Variable products: show min–max excl. range + min incl.
-        // We don't show the B2C del for variables since the range already implies discount.
+        // Variable products: PVP = rango de precio regular de las variaciones,
+        // PROFESIONALES = rango de precio activo (rebajado si lo hay).
         if ( $product->is_type( 'variable' ) ) {
-            $min_price = (float) $product->get_variation_price( 'min' );
-            if ( $min_price <= 0 ) return $price_html;
+            $reg_min = (float) $product->get_variation_regular_price( 'min' );
+            if ( $reg_min <= 0 ) return $price_html;
+            $reg_max = (float) $product->get_variation_regular_price( 'max' );
 
-            $max_price = (float) $product->get_variation_price( 'max' );
-            $excl_min  = (float) wc_get_price_excluding_tax( $product, [ 'price' => $min_price ] );
-            $incl_min  = (float) wc_get_price_including_tax( $product, [ 'price' => $min_price ] );
+            $pvp_block = $this->price_pair_html(
+                $this->price_range_html_excl_tax( $product, $reg_min, $reg_max ),
+                wc_price( (float) wc_get_price_including_tax( $product, [ 'price' => $reg_min ] ) ),
+                __( 'PVP excl. IVA', 'mad-suite' ),
+                __( 'PVP incl. IVA', 'mad-suite' )
+            );
 
-            if ( $min_price !== $max_price ) {
-                $excl_max       = (float) wc_get_price_excluding_tax( $product, [ 'price' => $max_price ] );
-                $excl_formatted = wc_price( $excl_min ) . ' – ' . wc_price( $excl_max );
-            } else {
-                $excl_formatted = wc_price( $excl_min );
+            if ( ! $product->is_on_sale() ) {
+                return $css . $pvp_block;
             }
 
-            return $css . sprintf(
-                '<span class="mad-olofane-price-excl">%s <small>%s</small></span>'
-                . '<span class="mad-olofane-price-incl">%s <small>%s</small></span>',
-                $excl_formatted,
-                esc_html__( 'PVP excl. IVA', 'mad-suite' ),
-                wc_price( $incl_min ),
-                esc_html__( 'PVP incl. IVA', 'mad-suite' )
-            );
+            $pro_min = (float) $product->get_variation_price( 'min' );
+            $pro_max = (float) $product->get_variation_price( 'max' );
+
+            $pro_block = '<strong class="mad-olofane-price-pro-label">' . esc_html__( 'PROFESIONALES', 'mad-suite' ) . '</strong>'
+                . $this->price_pair_html(
+                    $this->price_range_html_excl_tax( $product, $pro_min, $pro_max ),
+                    wc_price( (float) wc_get_price_including_tax( $product, [ 'price' => $pro_min ] ) ),
+                    __( 'excl. IVA', 'mad-suite' ),
+                    __( 'incl. IVA', 'mad-suite' )
+                );
+
+            return $css . $pvp_block . '<hr class="mad-olofane-price-divider">' . $pro_block;
         }
 
         // Simple / external product
-        // The B2B price is the active price (sale price if set, else regular price)
-        $b2b_raw = (float) $product->get_price();
-        if ( $b2b_raw <= 0 ) return $price_html;
+        // PVP = precio regular, PROFESIONALES = precio de venta (si existe una rebaja).
+        $regular_raw = (float) $product->get_regular_price();
+        if ( $regular_raw <= 0 ) return $price_html;
 
-        $excl = (float) wc_get_price_excluding_tax( $product );
-        $incl = (float) wc_get_price_including_tax( $product );
+        $pvp_block = $this->price_pair_html(
+            wc_price( (float) wc_get_price_excluding_tax( $product, [ 'price' => $regular_raw ] ) ),
+            wc_price( (float) wc_get_price_including_tax( $product, [ 'price' => $regular_raw ] ) ),
+            __( 'PVP excl. IVA', 'mad-suite' ),
+            __( 'PVP incl. IVA', 'mad-suite' )
+        );
 
-        // B2C crossed-out price — only when there is a separate sale (B2B) price
-        $del_html = '';
-        if ( $product->is_on_sale() ) {
-            // Use WC's display-price logic so it respects the shop's tax display setting
-            $b2c_display = (float) wc_get_price_to_display( $product, [ 'price' => $product->get_regular_price() ] );
-            $del_html    = '<span class="mad-olofane-price-b2c">' . wc_price( $b2c_display ) . '</span>';
+        if ( ! $product->is_on_sale() ) {
+            return $css . $pvp_block;
         }
 
-        return $css . $del_html . sprintf(
+        $pro_raw   = (float) $product->get_sale_price();
+        $pro_block = '<strong class="mad-olofane-price-pro-label">' . esc_html__( 'PROFESIONALES', 'mad-suite' ) . '</strong>'
+            . $this->price_pair_html(
+                wc_price( (float) wc_get_price_excluding_tax( $product, [ 'price' => $pro_raw ] ) ),
+                wc_price( (float) wc_get_price_including_tax( $product, [ 'price' => $pro_raw ] ) ),
+                __( 'excl. IVA', 'mad-suite' ),
+                __( 'incl. IVA', 'mad-suite' )
+            );
+
+        return $css . $pvp_block . '<hr class="mad-olofane-price-divider">' . $pro_block;
+    }
+
+    /** Línea "precio excl. IVA (grande) + precio incl. IVA (pequeño)" reutilizada por PVP y Profesionales. */
+    private function price_pair_html( string $excl_price_html, string $incl_price_html, string $excl_label, string $incl_label ): string {
+        return sprintf(
             '<span class="mad-olofane-price-excl">%s <small>%s</small></span>'
             . '<span class="mad-olofane-price-incl">%s <small>%s</small></span>',
-            wc_price( $excl ),
-            esc_html__( 'PVP excl. IVA', 'mad-suite' ),
-            wc_price( $incl ),
-            esc_html__( 'PVP incl. IVA', 'mad-suite' )
+            $excl_price_html,
+            esc_html( $excl_label ),
+            $incl_price_html,
+            esc_html( $incl_label )
         );
+    }
+
+    /** Precio (o rango min–max) sin IVA, formateado, para productos variables. */
+    private function price_range_html_excl_tax( WC_Product $product, float $min, float $max ): string {
+        $excl_min = (float) wc_get_price_excluding_tax( $product, [ 'price' => $min ] );
+        if ( $min === $max ) {
+            return wc_price( $excl_min );
+        }
+        $excl_max = (float) wc_get_price_excluding_tax( $product, [ 'price' => $max ] );
+        return wc_price( $excl_min ) . ' – ' . wc_price( $excl_max );
     }
 
     // ── Feature 4: VAT / NIF — classic checkout ───────────────────────────────
@@ -1265,7 +1298,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             <label>
                                 <input type="checkbox" name="dual_price_enabled" value="1"
                                     <?php checked( ! empty( $s['dual_price_enabled'] ) ); ?>>
-                                <?php esc_html_e( 'Mostrar precio excl. IVA (grande) + incl. IVA (pequeño)', 'mad-suite' ); ?>
+                                <?php esc_html_e( 'Mostrar precio PVP (excl./incl. IVA) y, si hay una rebaja, un segundo bloque "PROFESIONALES" (excl./incl. IVA) debajo', 'mad-suite' ); ?>
                             </label>
                         </td>
                     </tr>
