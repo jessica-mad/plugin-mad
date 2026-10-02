@@ -11,6 +11,7 @@ require_once __DIR__ . '/includes/AI_Description.php';
 require_once __DIR__ . '/includes/WPML_Quotes.php';
 require_once __DIR__ . '/includes/Menu_Duplicator.php';
 require_once __DIR__ . '/includes/CSV_User_Import.php';
+require_once __DIR__ . '/includes/FK_Destacados.php';
 
 return new class ( $core ?? null ) implements MAD_Suite_Module {
 
@@ -48,6 +49,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'product_columns_enabled'  => true,
             'product_stock_sort_enabled' => true,
             'product_grid_view_enabled'  => true,
+            'fk_destacados_enabled'      => true,
         ];
 
         $opts = get_option( self::OPTION_KEY, [] );
@@ -165,6 +167,17 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             add_action( 'wp_ajax_mad_update_product_order', [ $this, 'ajax_update_product_order' ] );
             add_action( 'admin_post_mad_reorder_products_by_date', [ $this, 'handle_reorder_products_by_date' ] );
             add_action( 'admin_notices',            [ $this, 'render_reorder_success_notice' ] );
+        }
+
+        // Feature 12 – FunnelKit: en el bloque "Product" de un email, si el
+        // admin configura Feed = "Specific Categories" + Sort by = "Random"
+        // (combo sin uso real, reutilizado como marcador), se envían solo
+        // los productos destacados en el mismo orden manual del backend
+        // (el de la Feature 11). No se restringe a is_admin(): FunnelKit
+        // renderiza y envía los emails fuera del admin (cron/REST).
+        if ( ! empty( $s['fk_destacados_enabled'] ) ) {
+            $fk_destacados = new MAD_Olofane_FK_Destacados();
+            $fk_destacados->init();
         }
     }
 
@@ -1309,6 +1322,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'product_columns_enabled'  => ! empty( $post['product_columns_enabled'] ),
             'product_stock_sort_enabled' => ! empty( $post['product_stock_sort_enabled'] ),
             'product_grid_view_enabled'  => ! empty( $post['product_grid_view_enabled'] ),
+            'fk_destacados_enabled'      => ! empty( $post['fk_destacados_enabled'] ),
         ];
 
         update_option( self::OPTION_KEY, $data );
@@ -1549,6 +1563,24 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             </label>
                             <p class="description">
                                 <?php esc_html_e( 'El arrastre reordena los productos (guardado en el campo nativo "menu_order" de WordPress) y solo está disponible cuando el listado está en su orden por defecto, sin una columna de orden explícita activa. La vista de cuadrícula solo muestra foto y nombre. Los productos agotados quedan siempre al final, bloqueados (no se pueden arrastrar) y marcados con la etiqueta "SOLD" en rojo. El botón "Más recientes primero" reorganiza automáticamente todos los productos por fecha de publicación (perdiendo el orden manual anterior).', 'mad-suite' ); ?>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- ── 9: Destacados en FunnelKit ──────────────────────────── -->
+                <h2><?php esc_html_e( '9. Productos destacados en emails de FunnelKit', 'mad-suite' ); ?></h2>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th><?php esc_html_e( 'Activar', 'mad-suite' ); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="fk_destacados_enabled" value="1"
+                                    <?php checked( ! empty( $s['fk_destacados_enabled'] ) ); ?>>
+                                <?php esc_html_e( 'En el bloque "Product" de un email de FunnelKit, si se configura Feed = "Specific Categories" y Sort by = "Random", enviar solo los productos destacados en el orden manual del listado de Productos (el mismo de la sección 8).', 'mad-suite' ); ?>
+                            </label>
+                            <p class="description">
+                                <?php esc_html_e( 'Ese combo de ajustes no tiene un uso real en FunnelKit — se reutiliza como marcador para activar este comportamiento sin depender de una opción nativa. En cualquier otra combinación, el bloque funciona como siempre.', 'mad-suite' ); ?>
                             </p>
                         </td>
                     </tr>
