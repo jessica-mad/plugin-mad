@@ -90,5 +90,11 @@ class MAD_Olofane_FK_Destacados {
         $query->set( 'meta_key', '' );
         $query->set( 'orderby', [ 'menu_order' => 'ASC', 'title' => 'ASC' ] );
         $query->set( 'order', 'ASC' );
+
+        // Sin límite: el "número de productos" del bloque de FunnelKit (pensado
+        // para un feed aleatorio) no debe recortar la lista de destacados —
+        // deben salir todos los que estén marcados como destacado.
+        $query->set( 'posts_per_page', -1 );
+        $query->set( 'nopaging', true );
     }
 }
