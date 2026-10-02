@@ -102,19 +102,6 @@ class MAD_Olofane_FK_Destacados {
                 $settings['productFeedType'] ?? '',
                 $settings['sortBy'] ?? ''
             );
-
-            // TEMPORAL: diagnóstico — quitar una vez confirmado en un envío real.
-            // Solo loguea cuando de verdad estamos dentro del bloque (evita el
-            // ruido de otras consultas de producto del sitio que no tienen
-            // nada que ver con esto).
-            if ( null !== $settings ) {
-                $this->log( sprintf(
-                    'modify_query: en_bloque=true feed=%s sort=%s marcado=%s',
-                    var_export( $settings['productFeedType'] ?? null, true ),
-                    var_export( $settings['sortBy'] ?? null, true ),
-                    $marked ? 'true' : 'false'
-                ) );
-            }
         }
 
         if ( ! $marked ) {
@@ -141,15 +128,5 @@ class MAD_Olofane_FK_Destacados {
         // deben salir todos los que estén marcados como destacado.
         $query->set( 'posts_per_page', -1 );
         $query->set( 'nopaging', true );
-
-        // TEMPORAL: diagnóstico — quitar una vez confirmado en un envío real.
-        $this->log( 'modify_query: override aplicado — posts_per_page=-1' );
-    }
-
-    /** TEMPORAL: log de diagnóstico — quitar junto con las llamadas de arriba una vez confirmado el fix. */
-    private function log( string $message ): void {
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            error_log( '[MAD FK Destacados] ' . $message );
-        }
     }
 }
