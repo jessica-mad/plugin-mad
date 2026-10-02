@@ -9,14 +9,21 @@
  * este bloque — se reutiliza como marcador para activar este
  * comportamiento sin tener que esperar una opción nativa de FunnelKit.
  *
- * NOTA sobre el enganche: inicialmente se interceptaba vía los filtros
- * nativos de shortcodes de WordPress (pre_do_shortcode_tag /
- * do_shortcode_tag), pero el envío real del email de FunnelKit NO pasa
- * por do_shortcode() — llama al callback del bloque directamente. Por
- * eso esos filtros nunca se disparaban en un envío real (solo, quizás,
- * en alguna vista previa). Se reemplaza en su lugar el propio callback
- * registrado del shortcode (bwfbe_multi_product) por un wrapper propio,
- * que sí se ejecuta sin importar cómo FunnelKit termine invocándolo.
+ * NOTA sobre el enganche: se probaron dos enfoques antes de este.
+ * 1) Los filtros nativos de shortcodes (pre_do_shortcode_tag /
+ *    do_shortcode_tag) nunca se disparan en el envío real del email —
+ *    FunnelKit llama al callback del bloque directamente.
+ * 2) Reemplazar el callback del shortcode en el hook 'init' tampoco
+ *    sirvió: el envío real corre (aparentemente vía WP-Cron) en un
+ *    contexto donde la clase del bloque de FunnelKit ni siquiera está
+ *    cargada todavía cuando 'init' se dispara.
+ * Lo único que se confirmó que SIEMPRE se dispara, en cualquier
+ * contexto, es pre_get_posts en el momento exacto en que el bloque
+ * ejecuta su WP_Query. Así que en vez de intentar "engancharnos antes"
+ * del bloque, se detecta ahí mismo —dentro de pre_get_posts— si la
+ * consulta actual viene de BWFBE_WC_Multi_Product_Template (vía
+ * debug_backtrace) y, si es así, se leen sus settings privados (feed,
+ * sort) por Reflection directamente de la instancia en curso.
  *
  * @package MAD_Suite/Olofane
  */
@@ -25,61 +32,11 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_Olofane_FK_Destacados {
 
-    /** true mientras se renderiza un bloque marcado. */
-    private $active = false;
-
     public function init(): void {
-        // Se reemplaza el callback del shortcode en cuanto la clase del
-        // bloque esté disponible — en 'init' (tarde) para dar tiempo a que
-        // FunnelKit ya se haya cargado, sin depender de en qué hook exacto
-        // decida registrar su propio shortcode.
-        add_action( 'init', [ $this, 'maybe_override_shortcode' ], 20 );
-
-        // Consulta de productos.
         add_action( 'pre_get_posts', [ $this, 'modify_query' ], 999 );
 
-        // TEMPORAL: diagnóstico — quitar una vez confirmado que el override funciona.
+        // TEMPORAL: diagnóstico — quitar una vez confirmado que el detector funciona.
         add_filter( 'the_posts', [ $this, 'log_final_post_count' ], 999, 2 );
-    }
-
-    /** Reemplaza el callback de [bwfbe_multi_product] por nuestro wrapper. */
-    public function maybe_override_shortcode(): void {
-        if ( ! class_exists( 'BWFBE_WC_Multi_Product_Template' ) || ! class_exists( 'BWFCRM_Block_Editor' ) ) {
-            return;
-        }
-        // get_instance() crea la instancia si todavía no existe (su propio
-        // constructor registra el shortcode original); la reemplazamos acto
-        // seguido por nuestro wrapper, que al final llama al método real.
-        $instance = BWFBE_WC_Multi_Product_Template::get_instance();
-        add_shortcode( 'bwfbe_multi_product', function ( $atts, $content = '', $tag = '' ) use ( $instance ) {
-            return $this->render_wrapped_block( $instance, $atts, $content, $tag );
-        } );
-
-        // TEMPORAL: diagnóstico — quitar una vez confirmado que el override funciona.
-        $this->log( 'maybe_override_shortcode: wrapper instalado sobre bwfbe_multi_product' );
-    }
-
-    /** Detecta el marcador, delega al render original con el flag activo, y lo limpia al terminar. */
-    private function render_wrapped_block( $instance, $atts, $content, $tag ) {
-        $settings     = json_decode( BWFCRM_Block_Editor::decode_content( (string) $content ), true );
-        $this->active = is_array( $settings ) && $this->is_marked(
-            $settings['productFeedType'] ?? '',
-            $settings['sortBy'] ?? ''
-        );
-
-        // TEMPORAL: diagnóstico — quitar una vez confirmado que el override funciona.
-        $this->log( sprintf(
-            'render_wrapped_block: wrapper ejecutado — feed=%s sort=%s active=%s',
-            var_export( $settings['productFeedType'] ?? null, true ),
-            var_export( $settings['sortBy'] ?? null, true ),
-            $this->active ? 'true' : 'false'
-        ) );
-
-        $output = $instance->multi_products_block( $atts, $content, $tag );
-
-        $this->active = false;
-
-        return $output;
     }
 
     /** Marcador: Feed "Specific Categories" + Sort by "Random". */
@@ -101,12 +58,66 @@ class MAD_Olofane_FK_Destacados {
         return $this->is_marked( $type, $sort );
     }
 
-    public function modify_query( $query ): void {
-        if ( ! $this->active && ! $this->is_editor_preview() ) {
-            return;
+    /**
+     * Si la pila de llamadas actual viene de
+     * BWFBE_WC_Multi_Product_Template (su método get_product_data(),
+     * llamado desde multi_products_block()), lee su propiedad privada
+     * $settings por Reflection, directamente de la instancia en curso.
+     * Devuelve null si no estamos dentro de ese flujo.
+     */
+    private function get_active_block_settings(): ?array {
+        if ( ! class_exists( 'BWFBE_WC_Multi_Product_Template' ) ) {
+            return null;
         }
+
+        $in_block = false;
+        foreach ( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS, 25 ) as $frame ) {
+            if ( isset( $frame['class'] ) && 'BWFBE_WC_Multi_Product_Template' === $frame['class'] ) {
+                $in_block = true;
+                break;
+            }
+        }
+        if ( ! $in_block ) {
+            return null;
+        }
+
+        try {
+            $instance = BWFBE_WC_Multi_Product_Template::get_instance();
+            $prop     = new ReflectionProperty( $instance, 'settings' );
+            $prop->setAccessible( true );
+            $settings = $prop->getValue( $instance );
+            return is_array( $settings ) ? $settings : null;
+        } catch ( \Throwable $e ) {
+            return null;
+        }
+    }
+
+    public function modify_query( $query ): void {
         $pt = (array) $query->get( 'post_type' );
         if ( ! in_array( 'product', $pt, true ) ) {
+            return;
+        }
+
+        if ( $this->is_editor_preview() ) {
+            $marked = true;
+        } else {
+            $settings = $this->get_active_block_settings();
+            $marked   = null !== $settings && $this->is_marked(
+                $settings['productFeedType'] ?? '',
+                $settings['sortBy'] ?? ''
+            );
+
+            // TEMPORAL: diagnóstico — quitar una vez confirmado que el detector funciona.
+            $this->log( sprintf(
+                'modify_query: en_bloque=%s feed=%s sort=%s marcado=%s',
+                null !== $settings ? 'true' : 'false',
+                var_export( $settings['productFeedType'] ?? null, true ),
+                var_export( $settings['sortBy'] ?? null, true ),
+                $marked ? 'true' : 'false'
+            ) );
+        }
+
+        if ( ! $marked ) {
             return;
         }
 
@@ -130,13 +141,16 @@ class MAD_Olofane_FK_Destacados {
         // deben salir todos los que estén marcados como destacado.
         $query->set( 'posts_per_page', -1 );
         $query->set( 'nopaging', true );
+
+        // TEMPORAL: diagnóstico — quitar una vez confirmado que el detector funciona.
+        $this->log( 'modify_query: override aplicado — posts_per_page=-1' );
     }
 
     /** TEMPORAL: diagnóstico — quitar junto con las demás llamadas de log una vez confirmado el fix. */
     public function log_final_post_count( $posts, $query ) {
         $pt = (array) $query->get( 'post_type' );
         if ( in_array( 'product', $pt, true ) ) {
-            $this->log( 'the_posts: post_type=product, active=' . ( $this->active ? 'true' : 'false' ) . ', total devueltos = ' . count( (array) $posts ) . ', posts_per_page final = ' . var_export( $query->get( 'posts_per_page' ), true ) );
+            $this->log( 'the_posts: post_type=product, total devueltos = ' . count( (array) $posts ) . ', posts_per_page final = ' . var_export( $query->get( 'posts_per_page' ), true ) );
         }
         return $posts;
     }
