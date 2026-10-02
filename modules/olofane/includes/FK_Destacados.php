@@ -9,21 +9,20 @@
  * este bloque — se reutiliza como marcador para activar este
  * comportamiento sin tener que esperar una opción nativa de FunnelKit.
  *
- * NOTA sobre el enganche: se probaron dos enfoques antes de este.
- * 1) Los filtros nativos de shortcodes (pre_do_shortcode_tag /
- *    do_shortcode_tag) nunca se disparan en el envío real del email —
- *    FunnelKit llama al callback del bloque directamente.
- * 2) Reemplazar el callback del shortcode en el hook 'init' tampoco
- *    sirvió: el envío real corre (aparentemente vía WP-Cron) en un
- *    contexto donde la clase del bloque de FunnelKit ni siquiera está
- *    cargada todavía cuando 'init' se dispara.
- * Lo único que se confirmó que SIEMPRE se dispara, en cualquier
- * contexto, es pre_get_posts en el momento exacto en que el bloque
- * ejecuta su WP_Query. Así que en vez de intentar "engancharnos antes"
- * del bloque, se detecta ahí mismo —dentro de pre_get_posts— si la
- * consulta actual viene de BWFBE_WC_Multi_Product_Template (vía
- * debug_backtrace) y, si es así, se leen sus settings privados (feed,
- * sort) por Reflection directamente de la instancia en curso.
+ * NOTA sobre el enganche: "Preview and Test" del editor de FunnelKit NO
+ * ejecuta PHP — el editor externo (app.wpmailkit.com, en un iframe) arma
+ * el HTML del bloque en el navegador (ya recortado a columns×rows) y lo
+ * manda tal cual a /wp-json/autonami-app/send-test-email/. Por eso
+ * ningún hook de este archivo se dispara nunca en una prueba; eso es
+ * esperado, no un bug. El ENVÍO REAL de un broadcast/automatización sí
+ * ejecuta el shortcode [bwfbe_multi_product] en el servidor (vía
+ * do_shortcode(), dos veces por contacto), que es donde interviene este
+ * código: se detecta dentro de pre_get_posts, en el momento exacto en
+ * que BWFBE_WC_Multi_Product_Template ejecuta su WP_Query, inspeccionando
+ * la pila de llamadas (debug_backtrace) y leyendo sus settings privados
+ * (feed, sort) por Reflection directamente de la instancia en curso —
+ * así no depende de en qué hook ni en qué momento FunnelKit decida
+ * registrar o invocar el shortcode.
  *
  * @package MAD_Suite/Olofane
  */
@@ -34,9 +33,6 @@ class MAD_Olofane_FK_Destacados {
 
     public function init(): void {
         add_action( 'pre_get_posts', [ $this, 'modify_query' ], 999 );
-
-        // TEMPORAL: diagnóstico — quitar una vez confirmado que el detector funciona.
-        add_filter( 'the_posts', [ $this, 'log_final_post_count' ], 999, 2 );
     }
 
     /** Marcador: Feed "Specific Categories" + Sort by "Random". */
@@ -107,14 +103,18 @@ class MAD_Olofane_FK_Destacados {
                 $settings['sortBy'] ?? ''
             );
 
-            // TEMPORAL: diagnóstico — quitar una vez confirmado que el detector funciona.
-            $this->log( sprintf(
-                'modify_query: en_bloque=%s feed=%s sort=%s marcado=%s',
-                null !== $settings ? 'true' : 'false',
-                var_export( $settings['productFeedType'] ?? null, true ),
-                var_export( $settings['sortBy'] ?? null, true ),
-                $marked ? 'true' : 'false'
-            ) );
+            // TEMPORAL: diagnóstico — quitar una vez confirmado en un envío real.
+            // Solo loguea cuando de verdad estamos dentro del bloque (evita el
+            // ruido de otras consultas de producto del sitio que no tienen
+            // nada que ver con esto).
+            if ( null !== $settings ) {
+                $this->log( sprintf(
+                    'modify_query: en_bloque=true feed=%s sort=%s marcado=%s',
+                    var_export( $settings['productFeedType'] ?? null, true ),
+                    var_export( $settings['sortBy'] ?? null, true ),
+                    $marked ? 'true' : 'false'
+                ) );
+            }
         }
 
         if ( ! $marked ) {
@@ -142,17 +142,8 @@ class MAD_Olofane_FK_Destacados {
         $query->set( 'posts_per_page', -1 );
         $query->set( 'nopaging', true );
 
-        // TEMPORAL: diagnóstico — quitar una vez confirmado que el detector funciona.
+        // TEMPORAL: diagnóstico — quitar una vez confirmado en un envío real.
         $this->log( 'modify_query: override aplicado — posts_per_page=-1' );
-    }
-
-    /** TEMPORAL: diagnóstico — quitar junto con las demás llamadas de log una vez confirmado el fix. */
-    public function log_final_post_count( $posts, $query ) {
-        $pt = (array) $query->get( 'post_type' );
-        if ( in_array( 'product', $pt, true ) ) {
-            $this->log( 'the_posts: post_type=product, total devueltos = ' . count( (array) $posts ) . ', posts_per_page final = ' . var_export( $query->get( 'posts_per_page' ), true ) );
-        }
-        return $posts;
     }
 
     /** TEMPORAL: log de diagnóstico — quitar junto con las llamadas de arriba una vez confirmado el fix. */
