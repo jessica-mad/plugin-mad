@@ -3,7 +3,8 @@
  * Vista del dashboard. Variables disponibles (ver Module::render_settings_page()):
  * $segment, $from, $to, $kpis, $login_avg_days, $monthly, $cohort_grid,
  * $rfm_breakdown, $top_customers, $at_risk, $top_products, $last_updated,
- * $recalc_status, $recalc_url. $this = la instancia del módulo (para menu_slug()).
+ * $recalc_status, $recalc_stuck, $recalc_action_url, $recalc_nonce_field,
+ * $recalc_hidden_args. $this = la instancia del módulo (para menu_slug()).
  *
  * @package MAD_Suite/Customer_Insights
  */
@@ -16,7 +17,14 @@ $segment_labels = [
     'professional' => __( 'Profesionales', 'mad-suite' ),
 ];
 
-$base_url  = remove_query_arg( [ 'mad_ci_segment', 'mad_ci_notice' ] );
+$window_labels = [
+    0  => __( 'Todo el histórico', 'mad-suite' ),
+    3  => __( 'Últimos 3 meses', 'mad-suite' ),
+    6  => __( 'Últimos 6 meses', 'mad-suite' ),
+    12 => __( 'Últimos 12 meses', 'mad-suite' ),
+];
+
+$base_url   = remove_query_arg( [ 'mad_ci_segment', 'mad_ci_notice' ] );
 $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ], true );
 ?>
 <div class="wrap">
@@ -26,6 +34,10 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
         <?php if ( 'started' === $_GET['mad_ci_notice'] ) : ?>
             <div class="notice notice-info is-dismissible">
                 <p><?php esc_html_e( 'Recálculo iniciado en segundo plano. Puedes seguir usando esta página mientras tanto — los números se actualizarán solos cuando termine.', 'mad-suite' ); ?></p>
+            </div>
+        <?php elseif ( 'sync_done' === $_GET['mad_ci_notice'] ) : ?>
+            <div class="notice notice-success is-dismissible">
+                <p><?php esc_html_e( 'Recálculo de prueba terminado — ya puedes ver los números abajo.', 'mad-suite' ); ?></p>
             </div>
         <?php elseif ( 'already_running' === $_GET['mad_ci_notice'] ) : ?>
             <div class="notice notice-warning mad-ci-notice-rate-limited is-dismissible">
@@ -39,9 +51,11 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
     <?php endif; ?>
 
     <?php if ( $is_running ) : ?>
-        <div class="notice notice-info">
+        <div class="notice <?php echo $recalc_stuck ? 'notice-error' : 'notice-info'; ?>">
             <p>
-                <?php if ( 'collecting' === $recalc_status['state'] ) : ?>
+                <?php if ( $recalc_stuck ) : ?>
+                    <?php esc_html_e( 'Esto lleva varios minutos sin avanzar — probablemente Action Scheduler no está procesando acciones en segundo plano en este sitio. Revisa WooCommerce → Estado → Acciones programadas (busca "mad_ci_process_batch" o "mad_ci_finalize_recalculation") para ver si quedaron en pausa o fallidas.', 'mad-suite' ); ?>
+                <?php elseif ( 'collecting' === $recalc_status['state'] ) : ?>
                     <?php
                     printf(
                         /* translators: %s: número de pedidos ya procesados */
@@ -65,21 +79,42 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
                 esc_html( wp_date( 'd/m/Y H:i', $last_updated ) )
             );
         } else {
-            esc_html_e( 'Todavía no se ha calculado nada — pulsa "Recalcular ahora" o espera al proceso nocturno.', 'mad-suite' );
+            esc_html_e( 'Todavía no se ha calculado nada.', 'mad-suite' );
         }
         ?>
-        &nbsp;
-        <?php if ( $is_running ) : ?>
-            <button type="button" class="button button-secondary" disabled>
-                <?php esc_html_e( 'Recalculando…', 'mad-suite' ); ?>
-            </button>
-        <?php else : ?>
-            <a href="<?php echo esc_url( $recalc_url ); ?>" class="button button-secondary"
-               onclick="return confirm('<?php echo esc_js( __( 'Esto arranca el recálculo en lotes pequeños en segundo plano — no bloquea el sitio, pero puede tardar varios minutos en tiendas con muchos pedidos. ¿Continuar?', 'mad-suite' ) ); ?>');">
-                <?php esc_html_e( 'Recalcular ahora', 'mad-suite' ); ?>
-            </a>
-        <?php endif; ?>
     </p>
+
+    <form method="post" action="<?php echo esc_url( $recalc_action_url ); ?>" class="mad-ci-recalc-form">
+        <?php echo $recalc_nonce_field; // phpcs:ignore WordPress.Security.EscapeOutput ?>
+        <?php foreach ( $recalc_hidden_args as $key => $value ) : ?>
+            <input type="hidden" name="<?php echo esc_attr( $key ); ?>" value="<?php echo esc_attr( $value ); ?>">
+        <?php endforeach; ?>
+
+        <label>
+            <?php esc_html_e( 'Rango a recalcular:', 'mad-suite' ); ?>
+            <select name="mad_ci_window">
+                <?php foreach ( $window_labels as $value => $label ) : ?>
+                    <option value="<?php echo esc_attr( $value ); ?>"><?php echo esc_html( $label ); ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+
+        <?php if ( $is_running ) : ?>
+            <button type="button" class="button button-secondary" disabled><?php esc_html_e( 'Recalculando…', 'mad-suite' ); ?></button>
+        <?php else : ?>
+            <button type="submit" name="mad_ci_mode" value="background" class="button button-secondary"
+                    onclick="return confirm('<?php echo esc_js( __( 'Arranca el recálculo en segundo plano (no bloquea el sitio). Para "Todo el histórico" en una tienda con muchos pedidos puede tardar varios minutos. ¿Continuar?', 'mad-suite' ) ); ?>');">
+                <?php esc_html_e( 'Recalcular en segundo plano', 'mad-suite' ); ?>
+            </button>
+            <button type="submit" name="mad_ci_mode" value="sync" class="button">
+                <?php esc_html_e( 'Probar ahora (rango corto, directo)', 'mad-suite' ); ?>
+            </button>
+        <?php endif; ?>
+        <p class="description">
+            <?php esc_html_e( '"Probar ahora" corre de inmediato, en la misma petición, sin pasar por el procesamiento en segundo plano — solo funciona con un rango acotado (no con el histórico completo), pensado para probar rápido sin esperar.', 'mad-suite' ); ?>
+            <br><?php esc_html_e( 'Aviso: con un rango acotado, un cliente cuya primera compra real fue antes de ese rango puede aparecer incorrectamente como "nuevo".', 'mad-suite' ); ?>
+        </p>
+    </form>
 
     <div class="mad-ci-toolbar">
         <span class="button-group">

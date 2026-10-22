@@ -85,12 +85,30 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         }
         check_admin_referer( 'mad_ci_recalculate' );
 
+        $window = isset( $_POST['mad_ci_window'] ) ? (int) $_POST['mad_ci_window'] : 0;
+        if ( ! in_array( $window, [ 0, 3, 6, 12 ], true ) ) $window = 0;
+
+        $mode = isset( $_POST['mad_ci_mode'] ) ? sanitize_key( $_POST['mad_ci_mode'] ) : 'background';
+
+        if ( 'sync' === $mode && 0 === $window ) {
+            // El modo directo (de prueba) nunca corre sobre el histórico completo
+            // — para eso está el modo en segundo plano.
+            $mode = 'background';
+        }
+
         if ( MAD_CI_Batch_Collector::is_running() ) {
             $notice = 'already_running';
         } elseif ( false === get_transient( self::RECALC_LOCK_KEY ) ) {
             set_transient( self::RECALC_LOCK_KEY, 1, self::RECALC_LOCK_TTL );
-            $this->batch_collector->start();
-            $notice = 'started';
+
+            if ( 'sync' === $mode ) {
+                if ( function_exists( 'set_time_limit' ) ) @set_time_limit( 180 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+                $this->batch_collector->run_sync( $window );
+                $notice = 'sync_done';
+            } else {
+                $this->batch_collector->start( $window );
+                $notice = 'started';
+            }
         } else {
             $notice = 'rate_limited';
         }
@@ -132,14 +150,11 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $top_products   = $data->get_top_repurchased_products();
         $last_updated   = $data->get_last_recalculated();
         $recalc_status  = MAD_CI_Batch_Collector::get_status();
+        $recalc_stuck   = MAD_CI_Batch_Collector::is_stuck();
 
-        $recalc_url = wp_nonce_url(
-            add_query_arg(
-                $this->current_dashboard_query_args(),
-                admin_url( 'admin-post.php?action=mad_ci_recalculate' )
-            ),
-            'mad_ci_recalculate'
-        );
+        $recalc_action_url  = admin_url( 'admin-post.php' );
+        $recalc_nonce_field = wp_nonce_field( 'mad_ci_recalculate', '_wpnonce', true, false );
+        $recalc_hidden_args = array_merge( $this->current_dashboard_query_args(), [ 'action' => 'mad_ci_recalculate' ] );
 
         wp_add_inline_script( 'mad-ci-dashboard', 'window.madCIData = ' . wp_json_encode( [
             'monthly' => array_map( static function ( $row ) {
@@ -159,9 +174,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     }
 
     private function get_current_segment(): string {
-        if ( isset( $_GET['mad_ci_segment'] ) && in_array( $_GET['mad_ci_segment'], [ 'all', 'public', 'professional' ], true ) ) {
-            set_user_setting( 'mad_ci_segment', $_GET['mad_ci_segment'] );
-            return $_GET['mad_ci_segment'];
+        if ( isset( $_REQUEST['mad_ci_segment'] ) && in_array( $_REQUEST['mad_ci_segment'], [ 'all', 'public', 'professional' ], true ) ) {
+            set_user_setting( 'mad_ci_segment', $_REQUEST['mad_ci_segment'] );
+            return $_REQUEST['mad_ci_segment'];
         }
         $stored = (string) get_user_setting( 'mad_ci_segment', 'all' );
         return in_array( $stored, [ 'all', 'public', 'professional' ], true ) ? $stored : 'all';
@@ -172,8 +187,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $default_to   = current_time( 'Y-m-d' );
         $default_from = date( 'Y-m-d', strtotime( '-12 months', strtotime( $default_to ) ) );
 
-        $from = isset( $_GET['mad_ci_from'] ) ? sanitize_text_field( wp_unslash( $_GET['mad_ci_from'] ) ) : $default_from;
-        $to   = isset( $_GET['mad_ci_to'] ) ? sanitize_text_field( wp_unslash( $_GET['mad_ci_to'] ) ) : $default_to;
+        $from = isset( $_REQUEST['mad_ci_from'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['mad_ci_from'] ) ) : $default_from;
+        $to   = isset( $_REQUEST['mad_ci_to'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['mad_ci_to'] ) ) : $default_to;
 
         if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $from ) ) $from = $default_from;
         if ( ! preg_match( '/^\d{4}-\d{2}-\d{2}$/', $to ) )   $to   = $default_to;
