@@ -8,7 +8,10 @@
  * Los números se precalculan por cron nocturno (o bajo demanda con el
  * botón "Recalcular ahora") en tablas propias — el dashboard nunca
  * consulta wc_get_orders() en vivo, para que cargue rápido sin importar
- * cuántos pedidos tenga la tienda.
+ * cuántos pedidos tenga la tienda. El recálculo en sí corre en lotes
+ * pequeños en segundo plano (ver includes/Batch_Collector.php), nunca de
+ * un solo golpe, para no competir por recursos con las visitas reales de
+ * una tienda con muchos pedidos existentes.
  *
  * @package MAD_Suite/Customer_Insights
  */
@@ -18,19 +21,22 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 require_once __DIR__ . '/includes/DB_Schema.php';
 require_once __DIR__ . '/includes/Login_Tracker.php';
 require_once __DIR__ . '/includes/Stats_Calculator.php';
+require_once __DIR__ . '/includes/Batch_Collector.php';
 require_once __DIR__ . '/includes/Dashboard_Data.php';
 
 return new class ( $core ?? null ) implements MAD_Suite_Module {
 
     private $core;
     private string $slug = 'customer-insights';
+    private MAD_CI_Batch_Collector $batch_collector;
 
     private const CRON_HOOK      = 'mad_ci_nightly_recalculate';
     private const RECALC_LOCK_KEY = 'mad_ci_recalc_lock';
     private const RECALC_LOCK_TTL = 5 * MINUTE_IN_SECONDS;
 
     public function __construct( $core ) {
-        $this->core = $core;
+        $this->core            = $core;
+        $this->batch_collector = new MAD_CI_Batch_Collector();
     }
 
     // ── MAD_Suite_Module interface ────────────────────────────────────────────
@@ -54,7 +60,11 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $login_tracker = new MAD_CI_Login_Tracker();
         $login_tracker->init();
 
-        add_action( self::CRON_HOOK, [ $this, 'run_recalculation' ] );
+        $this->batch_collector->init();
+
+        // El cron nocturno dispara el recolector en lotes (igual que el botón
+        // "Recalcular ahora"), nunca la agregación pesada de un solo golpe.
+        add_action( self::CRON_HOOK, [ $this->batch_collector, 'start' ] );
         if ( ! wp_next_scheduled( self::CRON_HOOK ) ) {
             wp_schedule_event( time(), 'daily', self::CRON_HOOK );
         }
@@ -69,20 +79,18 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         // Sin Settings API: esta es una página de analítica, no de ajustes.
     }
 
-    public function run_recalculation(): void {
-        ( new MAD_CI_Stats_Calculator() )->recalculate();
-    }
-
     public function handle_manual_recalculate(): void {
         if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) {
             wp_die( esc_html__( 'No tienes permisos suficientes.', 'mad-suite' ) );
         }
         check_admin_referer( 'mad_ci_recalculate' );
 
-        if ( false === get_transient( self::RECALC_LOCK_KEY ) ) {
+        if ( MAD_CI_Batch_Collector::is_running() ) {
+            $notice = 'already_running';
+        } elseif ( false === get_transient( self::RECALC_LOCK_KEY ) ) {
             set_transient( self::RECALC_LOCK_KEY, 1, self::RECALC_LOCK_TTL );
-            $this->run_recalculation();
-            $notice = 'recalculated';
+            $this->batch_collector->start();
+            $notice = 'started';
         } else {
             $notice = 'rate_limited';
         }
@@ -123,6 +131,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $at_risk        = $data->get_at_risk_customers();
         $top_products   = $data->get_top_repurchased_products();
         $last_updated   = $data->get_last_recalculated();
+        $recalc_status  = MAD_CI_Batch_Collector::get_status();
 
         $recalc_url = wp_nonce_url(
             add_query_arg(

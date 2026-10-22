@@ -1,17 +1,11 @@
 <?php
 /**
- * Recalcula las 4 tablas del módulo desde cero, a partir de los pedidos
- * pagados de WooCommerce (wc_get_orders(), compatible con HPOS). Se
- * ejecuta por cron nocturno o manualmente desde el botón "Recalcular
- * ahora" — nunca se edita en caliente, por eso cada corrida borra y
- * vuelve a insertar todo (TRUNCATE + reinsertar).
- *
- * Nota de escala: para tiendas con catálogos de pedidos muy grandes
- * (decenas de miles), esta pasada que carga cada WC_Order por completo
- * puede volverse lenta; si llega ese caso, conviene reescribirla sobre
- * SQL agregado directo contra las tablas de pedidos (HPOS o legacy) en
- * vez de iterar objetos WC_Order uno a uno. Para el volumen actual
- * (cliente con catálogo mediano) esto corre bien en background vía cron.
+ * Hace la agregación real (estadísticas por cliente, RFM, serie mensual,
+ * cohortes, recompra por producto) a partir de la tabla scratch
+ * mad_ci_raw_orders — filas planas, ya volcadas ahí en lotes pequeños por
+ * MAD_CI_Batch_Collector. Nunca llama a wc_get_orders() directamente: esa
+ * parte, la más cara, ya se repartió en pasos cortos antes de llegar acá.
+ * Por eso esta pasada final es barata y puede correr de un tirón.
  *
  * @package MAD_Suite/Customer_Insights
  */
@@ -19,8 +13,6 @@
 if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_CI_Stats_Calculator {
-
-    private const BATCH_SIZE = 200;
 
     public function recalculate(): void {
         $professional_roles = $this->get_professional_role_slugs();
@@ -46,60 +38,35 @@ class MAD_CI_Stats_Calculator {
         update_option( 'mad_ci_last_recalculated', time() );
     }
 
-    // ── Paso 1: leer todos los pedidos pagados y agruparlos por cliente ──────
+    // ── Paso 1: leer la tabla scratch y agrupar por cliente ───────────────────
 
     /**
-     * @return array<string, array{user_id:int, orders:array<int, array{date:WC_DateTime,total:float,product_ids:int[],login_to_order:mixed}>}>
+     * @return array<string, array{user_id:int, orders:array<int, array{date:DateTime,total:float,product_ids:int[],login_to_order:mixed}>}>
      *         Indexado por email de facturación en minúsculas.
      */
     private function gather_customer_orders(): array {
+        global $wpdb;
+        $table = MAD_CI_DB_Schema::table_raw_orders();
+
+        $rows = $wpdb->get_results( "SELECT * FROM {$table} ORDER BY order_date ASC", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+
         $customers = [];
-        $paged     = 1;
+        foreach ( $rows as $row ) {
+            $email = $row['customer_email'];
 
-        do {
-            $orders = wc_get_orders( [
-                'status'  => wc_get_is_paid_statuses(),
-                'limit'   => self::BATCH_SIZE,
-                'page'    => $paged,
-                'orderby' => 'date',
-                'order'   => 'ASC',
-                'return'  => 'objects',
-            ] );
-
-            if ( empty( $orders ) ) break;
-
-            foreach ( $orders as $order ) {
-                if ( ! $order instanceof WC_Order ) continue;
-
-                $email = strtolower( trim( $order->get_billing_email() ) );
-                if ( '' === $email ) continue; // Sin email no se puede agrupar al cliente.
-
-                $date = $order->get_date_created();
-                if ( ! $date ) continue;
-
-                if ( ! isset( $customers[ $email ] ) ) {
-                    $customers[ $email ] = [ 'user_id' => $order->get_customer_id(), 'orders' => [] ];
-                } elseif ( ! $customers[ $email ]['user_id'] && $order->get_customer_id() ) {
-                    $customers[ $email ]['user_id'] = $order->get_customer_id();
-                }
-
-                $product_ids = [];
-                foreach ( $order->get_items() as $item ) {
-                    if ( $item instanceof WC_Order_Item_Product && $item->get_product_id() ) {
-                        $product_ids[] = $item->get_product_id();
-                    }
-                }
-
-                $customers[ $email ]['orders'][] = [
-                    'date'           => $date,
-                    'total'          => (float) $order->get_total(),
-                    'product_ids'    => array_values( array_unique( $product_ids ) ),
-                    'login_to_order' => $order->get_meta( MAD_CI_Login_Tracker::ORDER_META, true ),
-                ];
+            if ( ! isset( $customers[ $email ] ) ) {
+                $customers[ $email ] = [ 'user_id' => (int) $row['user_id'], 'orders' => [] ];
+            } elseif ( ! $customers[ $email ]['user_id'] && (int) $row['user_id'] ) {
+                $customers[ $email ]['user_id'] = (int) $row['user_id'];
             }
 
-            $paged++;
-        } while ( count( $orders ) === self::BATCH_SIZE );
+            $customers[ $email ]['orders'][] = [
+                'date'           => new DateTime( $row['order_date'] ),
+                'total'          => (float) $row['total'],
+                'product_ids'    => (array) ( json_decode( $row['product_ids'], true ) ?: [] ),
+                'login_to_order' => $row['login_to_order_seconds'],
+            ];
+        }
 
         return $customers;
     }
@@ -156,8 +123,8 @@ class MAD_CI_Stats_Calculator {
                 'customer_email'          => $email,
                 'user_id'                 => (int) $data['user_id'],
                 'is_professional'         => $this->is_user_professional( (int) $data['user_id'], $professional_roles ) ? 1 : 0,
-                'first_order_date'        => $first->date( 'Y-m-d H:i:s' ),
-                'last_order_date'         => $last->date( 'Y-m-d H:i:s' ),
+                'first_order_date'        => $first->format( 'Y-m-d H:i:s' ),
+                'last_order_date'         => $last->format( 'Y-m-d H:i:s' ),
                 'order_count'             => $count,
                 'lifetime_value'          => round( $ltv, 2 ),
                 'avg_order_value'         => round( $aov, 2 ),

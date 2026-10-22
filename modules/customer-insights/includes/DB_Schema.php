@@ -35,6 +35,12 @@ class MAD_CI_DB_Schema {
         return $wpdb->prefix . 'mad_ci_product_repurchase';
     }
 
+    /** Tabla intermedia (scratch): datos planos por pedido, escritos en lotes pequeños antes de agregarlos. */
+    public static function table_raw_orders(): string {
+        global $wpdb;
+        return $wpdb->prefix . 'mad_ci_raw_orders';
+    }
+
     public static function maybe_create_tables(): void {
         if ( get_option( self::VERSION_OPTION ) === self::TABLE_VERSION ) return;
 
@@ -99,6 +105,18 @@ class MAD_CI_DB_Schema {
             repurchase_rate      decimal(5,2)  NOT NULL DEFAULT 0,
             PRIMARY KEY  (id),
             UNIQUE KEY   product_segment (product_id, segment)
+        ) $charset;" );
+
+        dbDelta( "CREATE TABLE " . self::table_raw_orders() . " (
+            order_id               bigint(20) unsigned NOT NULL,
+            customer_email         varchar(190)  NOT NULL,
+            user_id                bigint(20) unsigned NOT NULL DEFAULT 0,
+            order_date              datetime     NOT NULL,
+            total                  decimal(15,2) NOT NULL DEFAULT 0,
+            product_ids            longtext      NOT NULL,
+            login_to_order_seconds bigint unsigned DEFAULT NULL,
+            PRIMARY KEY  (order_id),
+            KEY customer_email (customer_email(191))
         ) $charset;" );
 
         update_option( self::VERSION_OPTION, self::TABLE_VERSION );

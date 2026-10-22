@@ -3,7 +3,7 @@
  * Vista del dashboard. Variables disponibles (ver Module::render_settings_page()):
  * $segment, $from, $to, $kpis, $login_avg_days, $monthly, $cohort_grid,
  * $rfm_breakdown, $top_customers, $at_risk, $top_products, $last_updated,
- * $recalc_url. $this = la instancia del módulo (para menu_slug()).
+ * $recalc_status, $recalc_url. $this = la instancia del módulo (para menu_slug()).
  *
  * @package MAD_Suite/Customer_Insights
  */
@@ -16,21 +16,44 @@ $segment_labels = [
     'professional' => __( 'Profesionales', 'mad-suite' ),
 ];
 
-$base_url = remove_query_arg( [ 'mad_ci_segment', 'mad_ci_notice' ] );
+$base_url  = remove_query_arg( [ 'mad_ci_segment', 'mad_ci_notice' ] );
+$is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ], true );
 ?>
 <div class="wrap">
     <h1><?php esc_html_e( 'Analítica de Clientes', 'mad-suite' ); ?></h1>
 
     <?php if ( isset( $_GET['mad_ci_notice'] ) ) : ?>
-        <?php if ( 'recalculated' === $_GET['mad_ci_notice'] ) : ?>
-            <div class="notice notice-success is-dismissible">
-                <p><?php esc_html_e( 'Datos recalculados.', 'mad-suite' ); ?></p>
+        <?php if ( 'started' === $_GET['mad_ci_notice'] ) : ?>
+            <div class="notice notice-info is-dismissible">
+                <p><?php esc_html_e( 'Recálculo iniciado en segundo plano. Puedes seguir usando esta página mientras tanto — los números se actualizarán solos cuando termine.', 'mad-suite' ); ?></p>
+            </div>
+        <?php elseif ( 'already_running' === $_GET['mad_ci_notice'] ) : ?>
+            <div class="notice notice-warning mad-ci-notice-rate-limited is-dismissible">
+                <p><?php esc_html_e( 'Ya hay un recálculo en curso — espera a que termine.', 'mad-suite' ); ?></p>
             </div>
         <?php elseif ( 'rate_limited' === $_GET['mad_ci_notice'] ) : ?>
             <div class="notice notice-warning mad-ci-notice-rate-limited is-dismissible">
                 <p><?php esc_html_e( 'Ya se recalculó hace poco — espera unos minutos antes de volver a intentarlo.', 'mad-suite' ); ?></p>
             </div>
         <?php endif; ?>
+    <?php endif; ?>
+
+    <?php if ( $is_running ) : ?>
+        <div class="notice notice-info">
+            <p>
+                <?php if ( 'collecting' === $recalc_status['state'] ) : ?>
+                    <?php
+                    printf(
+                        /* translators: %s: número de pedidos ya procesados */
+                        esc_html__( 'Recalculando en segundo plano — llevamos %s pedidos procesados. Esta página sigue siendo usable mientras tanto; recarga para ver el progreso.', 'mad-suite' ),
+                        esc_html( number_format_i18n( (int) $recalc_status['processed_orders'] ) )
+                    );
+                    ?>
+                <?php else : ?>
+                    <?php esc_html_e( 'Procesando los últimos datos recolectados — ya casi termina.', 'mad-suite' ); ?>
+                <?php endif; ?>
+            </p>
+        </div>
     <?php endif; ?>
 
     <p>
@@ -46,10 +69,16 @@ $base_url = remove_query_arg( [ 'mad_ci_segment', 'mad_ci_notice' ] );
         }
         ?>
         &nbsp;
-        <a href="<?php echo esc_url( $recalc_url ); ?>" class="button button-secondary"
-           onclick="return confirm('<?php echo esc_js( __( 'Esto puede tardar unos segundos si hay muchos pedidos. ¿Continuar?', 'mad-suite' ) ); ?>');">
-            <?php esc_html_e( 'Recalcular ahora', 'mad-suite' ); ?>
-        </a>
+        <?php if ( $is_running ) : ?>
+            <button type="button" class="button button-secondary" disabled>
+                <?php esc_html_e( 'Recalculando…', 'mad-suite' ); ?>
+            </button>
+        <?php else : ?>
+            <a href="<?php echo esc_url( $recalc_url ); ?>" class="button button-secondary"
+               onclick="return confirm('<?php echo esc_js( __( 'Esto arranca el recálculo en lotes pequeños en segundo plano — no bloquea el sitio, pero puede tardar varios minutos en tiendas con muchos pedidos. ¿Continuar?', 'mad-suite' ) ); ?>');">
+                <?php esc_html_e( 'Recalcular ahora', 'mad-suite' ); ?>
+            </a>
+        <?php endif; ?>
     </p>
 
     <div class="mad-ci-toolbar">
