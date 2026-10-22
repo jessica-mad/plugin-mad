@@ -88,7 +88,7 @@ class MAD_CI_Batch_Collector {
 
             $login_seconds = $order->get_meta( MAD_CI_Login_Tracker::ORDER_META, true );
 
-            $wpdb->replace( $table, [
+            $ok = $wpdb->replace( $table, [
                 'order_id'               => $order->get_id(),
                 'customer_email'         => $email,
                 'user_id'                => $order->get_customer_id(),
@@ -97,6 +97,10 @@ class MAD_CI_Batch_Collector {
                 'product_ids'            => wp_json_encode( array_values( array_unique( $product_ids ) ) ),
                 'login_to_order_seconds' => ( '' !== $login_seconds && is_numeric( $login_seconds ) ) ? (int) $login_seconds : null,
             ] );
+
+            if ( false === $ok && defined( 'WP_DEBUG' ) && WP_DEBUG && $wpdb->last_error ) {
+                error_log( '[MAD Customer Insights] Error al guardar el pedido #' . $order->get_id() . ' en la tabla scratch: ' . $wpdb->last_error );
+            }
         }
 
         $processed = count( $orders );

@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class MAD_CI_DB_Schema {
 
     // Bump para disparar dbDelta si cambia el esquema.
-    private const TABLE_VERSION = '1.0';
+    private const TABLE_VERSION = '1.1';
     private const VERSION_OPTION = 'mad_ci_table_version';
 
     public static function table_customers(): string {
