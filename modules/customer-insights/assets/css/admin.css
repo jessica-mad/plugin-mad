@@ -1,0 +1,97 @@
+.mad-ci-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 0;
+}
+
+.mad-ci-toolbar .button-group {
+    display: inline-flex;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.mad-ci-toolbar .button-group a {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.mad-ci-kpis {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 14px;
+    margin: 16px 0 24px;
+}
+
+.mad-ci-kpi {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 14px 16px;
+}
+
+.mad-ci-kpi .value {
+    display: block;
+    font-size: 1.6em;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.mad-ci-kpi .label {
+    display: block;
+    font-size: 0.85em;
+    color: #646970;
+    margin-top: 4px;
+}
+
+.mad-ci-section {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+}
+
+.mad-ci-section h2 {
+    margin-top: 0;
+}
+
+.mad-ci-cohort-table {
+    border-collapse: collapse;
+    font-size: 0.85em;
+}
+
+.mad-ci-cohort-table th,
+.mad-ci-cohort-table td {
+    border: 1px solid #e2e2e2;
+    padding: 6px 10px;
+    text-align: center;
+}
+
+.mad-ci-cohort-table td.cell {
+    color: #1d2327;
+}
+
+.mad-ci-rfm-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.mad-ci-rfm-pill {
+    background: #f0f0f1;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.9em;
+}
+
+.mad-ci-rfm-pill strong {
+    margin-left: 6px;
+}
+
+.mad-ci-notice-rate-limited {
+    border-left-color: #dba617;
+}
