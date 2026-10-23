@@ -14,15 +14,26 @@ class MAD_CI_Dashboard_Data {
      * Definición de cada segmento RFM — debe coincidir con las reglas de
      * MAD_CI_Stats_Calculator::rfm_segment_label(). Se usa para mostrar la
      * explicación de cada uno en el dashboard.
+     *
+     * Ya no se basan en comparar a cada cliente contra el resto (quintiles)
+     * sino en cuántas veces su propio ritmo esperado de recompra (o el
+     * promedio de la tienda, si solo lleva un pedido) lleva sin volver a
+     * comprar — ver MAD_CI_Stats_Calculator::add_rfm_scores().
      */
     public static function rfm_segment_definitions(): array {
         return [
-            __( 'Campeones', 'mad-suite' ) => __( 'Compraron hace poco (recencia alta) y compran seguido (frecuencia alta). Los mejores clientes — vale la pena cuidarlos, no recuperarlos.', 'mad-suite' ),
-            __( 'Nuevos prometedores', 'mad-suite' ) => __( 'Compraron hace poco pero todavía no acumulan muchos pedidos. Candidatos a fidelizar antes de que se enfríen.', 'mad-suite' ),
-            __( 'Regulares', 'mad-suite' ) => __( 'Ni recencia ni frecuencia están en los extremos — compran con cierta normalidad, sin destacar ni preocupar.', 'mad-suite' ),
-            __( 'En riesgo', 'mad-suite' ) => __( 'Antes compraban seguido (frecuencia alta) pero hace tiempo que no vuelven (recencia baja). Todavía recuperables — son los primeros candidatos a una campaña de reactivación.', 'mad-suite' ),
-            __( 'Perdidos', 'mad-suite' ) => __( 'Ni compran seguido ni lo hacen hace poco — recencia y frecuencia bajas. Los más fríos: recuperarlos cuesta más, pero es la lista para una campaña de "te echamos de menos".', 'mad-suite' ),
+            __( 'Campeones', 'mad-suite' ) => __( 'Ya repitieron (2 o más pedidos) y siguen dentro de su ritmo habitual de compra — no van tarde en volver. Los mejores clientes: vale la pena cuidarlos, no recuperarlos.', 'mad-suite' ),
+            __( 'Nuevos prometedores', 'mad-suite' ) => __( 'Todavía tienen un solo pedido, pero siguen dentro de la ventana en la que un cliente de esta tienda suele volver a comprar. Candidatos a fidelizar antes de que se enfríen.', 'mad-suite' ),
+            __( 'Regulares', 'mad-suite' ) => __( 'Van un poco tarde respecto a su ritmo esperado de recompra (entre 1 y 2 veces ese intervalo) pero sin ser todavía motivo de alarma.', 'mad-suite' ),
+            __( 'En riesgo', 'mad-suite' ) => __( 'Ya habían repetido antes, pero llevan entre 1 y 2 veces su intervalo habitual sin volver — están a punto de perder el hábito. Primeros candidatos a una campaña de reactivación.', 'mad-suite' ),
+            __( 'Perdidos', 'mad-suite' ) => __( 'Llevan más del doble de su intervalo esperado de recompra (el suyo propio, o el de la tienda si solo compraron una vez) sin volver — sin importar cuánto hace que fue esa compra en términos absolutos. Los más fríos: la lista para una campaña de "te echamos de menos".', 'mad-suite' ),
         ];
+    }
+
+    /** Cuántos días tarda, en promedio, un cliente recurrente de esta tienda en volver a comprar — el benchmark usado para decidir la segmentación RFM. */
+    public function get_store_avg_repurchase_days(): ?float {
+        $value = get_option( 'mad_ci_store_avg_repurchase_days' );
+        return ( '' === $value || false === $value || null === $value ) ? null : (float) $value;
     }
 
     /**

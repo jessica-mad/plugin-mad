@@ -14,10 +14,14 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_CI_Stats_Calculator {
 
+    /** Ritmo típico de recompra de la tienda (días), calculado en add_rfm_scores() y expuesto en el dashboard. */
+    private ?float $store_avg_interval_days = null;
+
     public function recalculate(): void {
         $customers = $this->gather_customer_orders();
         if ( empty( $customers ) ) {
             $this->truncate_all();
+            delete_option( 'mad_ci_store_avg_repurchase_days' );
             return;
         }
 
@@ -33,6 +37,7 @@ class MAD_CI_Stats_Calculator {
         $this->persist_cohorts( $cohort_periods, $cohort_sizes );
         $this->persist_products( $product_rows );
 
+        update_option( 'mad_ci_store_avg_repurchase_days', $this->store_avg_interval_days );
         update_option( 'mad_ci_last_recalculated', time() );
     }
 
@@ -124,39 +129,74 @@ class MAD_CI_Stats_Calculator {
         return $rows;
     }
 
-    /** Añade rfm_recency_score / rfm_frequency_score / rfm_monetary_score / rfm_segment a cada fila, in-place. */
+    /**
+     * Añade rfm_recency_score / rfm_frequency_score / rfm_monetary_score /
+     * rfm_segment a cada fila, in-place.
+     *
+     * La recencia YA NO se mide por quintiles (comparar a cada cliente
+     * contra el resto) — eso podía meter en "Nuevos prometedores" a alguien
+     * que compró hace 2 años, si el resto de la base estaba aún más fría.
+     * Ahora se mide contra un ritmo de recompra ABSOLUTO: cuántas veces su
+     * propio intervalo habitual entre compras (o el promedio de la tienda,
+     * si solo lleva un pedido y no tiene ritmo propio todavía) lleva sin
+     * volver a comprar. Así "a tiempo", "va tarde" o "ya se perdió" se
+     * decide con el mismo criterio para todos, sin importar cuántos otros
+     * clientes están igual o peor.
+     */
     private function add_rfm_scores( array &$rows ): void {
         if ( empty( $rows ) ) return;
 
         $now = time();
 
-        $recency_values   = [];
+        // Ritmo típico de recompra de ESTA tienda: promedio del intervalo
+        // propio de los clientes que ya repitieron. Es el benchmark que se
+        // usa también para los de un solo pedido, que todavía no tienen un
+        // ritmo propio con el que compararse.
+        $known_intervals = [];
+        foreach ( $rows as $r ) {
+            if ( null !== $r['avg_days_between_orders'] ) $known_intervals[] = $r['avg_days_between_orders'];
+        }
+        $store_avg_interval = ! empty( $known_intervals ) ? array_sum( $known_intervals ) / count( $known_intervals ) : null;
+        $this->store_avg_interval_days = null !== $store_avg_interval ? round( $store_avg_interval, 1 ) : null;
+
         $frequency_values = [];
         $monetary_values  = [];
         foreach ( $rows as $email => $r ) {
-            $recency_values[ $email ]   = $now - strtotime( $r['last_order_date'] );
             $frequency_values[ $email ] = $r['order_count'];
             $monetary_values[ $email ]  = $r['lifetime_value'];
         }
-
-        // Recencia: menos días desde la última compra = mejor puntaje (se invierte).
-        $recency_scores   = $this->quintile_scores( $recency_values, true );
+        // Frecuencia y valor monetario sí siguen por quintiles — no dependen
+        // del tiempo, comparar "cuánto compra uno frente a otro" sí tiene sentido ahí.
         $frequency_scores = $this->quintile_scores( $frequency_values, false );
         $monetary_scores  = $this->quintile_scores( $monetary_values, false );
 
         foreach ( $rows as $email => &$r ) {
-            $r['rfm_recency_score']   = $recency_scores[ $email ];
+            $is_repeat          = $r['order_count'] > 1;
+            $benchmark_interval = $r['avg_days_between_orders'] ?? $store_avg_interval;
+            $days_since_last    = ( $now - strtotime( $r['last_order_date'] ) ) / DAY_IN_SECONDS;
+            $ratio              = ( $benchmark_interval && $benchmark_interval > 0 ) ? $days_since_last / $benchmark_interval : null;
+
+            $r['rfm_recency_score']   = $this->recency_score_from_ratio( $ratio );
             $r['rfm_frequency_score'] = $frequency_scores[ $email ];
             $r['rfm_monetary_score']  = $monetary_scores[ $email ];
-            $r['rfm_segment']         = $this->rfm_segment_label( $recency_scores[ $email ], $frequency_scores[ $email ] );
+            $r['rfm_segment']         = $this->rfm_segment_label( $is_repeat, $ratio );
         }
         unset( $r );
+    }
+
+    /** Puntaje 1–5 a partir de cuántas veces su ritmo esperado de recompra lleva un cliente sin comprar. */
+    private function recency_score_from_ratio( ?float $ratio ): int {
+        if ( null === $ratio ) return 3; // Sin benchmark todavía (tienda sin repetidores) — neutral.
+        if ( $ratio <= 1.0 ) return 5;   // Dentro de su ventana habitual.
+        if ( $ratio <= 2.0 ) return 3;   // Va tarde, pero recuperable.
+        return 1;                        // Ya pasó más del doble de su ritmo esperado.
     }
 
     /**
      * Puntaje 1–5 según el quintil de cada valor dentro de la distribución
      * completa de clientes. $invert = true cuando un valor más BAJO merece
-     * mejor puntaje (la recencia: menos días = mejor).
+     * mejor puntaje. Solo se usa ya para frecuencia y valor monetario — la
+     * recencia se decide con recency_score_from_ratio(), no por quintiles.
      *
      * @return array<string,int> Mismas claves que $values.
      */
@@ -177,17 +217,28 @@ class MAD_CI_Stats_Calculator {
     }
 
     /**
-     * Segmento RFM a partir de los puntajes de recencia y frecuencia (1–5
-     * cada uno, por quintiles de todos los clientes). Ver RFM_SEGMENTS en
-     * Dashboard_Data.php para las descripciones que se muestran en el
-     * dashboard — deben coincidir con estas reglas.
+     * Segmento RFM a partir de si el cliente ya repitió (2+ pedidos) y de
+     * cuántas veces su ritmo esperado de recompra lleva sin volver a
+     * comprar ($ratio — ver add_rfm_scores()). Ver rfm_segment_definitions()
+     * en Dashboard_Data.php para las descripciones que se muestran en el
+     * dashboard — deben coincidir con estas reglas:
+     *
+     *                  ratio ≤ 1          1 < ratio ≤ 2       ratio > 2
+     *   1 pedido    Nuevos prometedores   Regulares           Perdidos
+     *   2+ pedidos  Campeones             En riesgo           Perdidos
      */
-    private function rfm_segment_label( int $recency, int $frequency ): string {
-        if ( $recency >= 4 && $frequency >= 4 ) return __( 'Campeones', 'mad-suite' );
-        if ( $recency >= 4 && $frequency < 4 )  return __( 'Nuevos prometedores', 'mad-suite' );
-        if ( $recency <= 2 && $frequency >= 4 ) return __( 'En riesgo', 'mad-suite' );
-        if ( $recency <= 2 && $frequency <= 2 ) return __( 'Perdidos', 'mad-suite' );
-        return __( 'Regulares', 'mad-suite' );
+    private function rfm_segment_label( bool $is_repeat, ?float $ratio ): string {
+        if ( null === $ratio ) {
+            // Tienda sin repetidores todavía — no hay benchmark con el que juzgar a nadie.
+            return $is_repeat ? __( 'Regulares', 'mad-suite' ) : __( 'Nuevos prometedores', 'mad-suite' );
+        }
+        if ( $ratio <= 1.0 ) {
+            return $is_repeat ? __( 'Campeones', 'mad-suite' ) : __( 'Nuevos prometedores', 'mad-suite' );
+        }
+        if ( $ratio <= 2.0 ) {
+            return $is_repeat ? __( 'En riesgo', 'mad-suite' ) : __( 'Regulares', 'mad-suite' );
+        }
+        return __( 'Perdidos', 'mad-suite' );
     }
 
     // ── Paso 3: serie mensual (nuevos vs. recurrentes) y cohortes ─────────────

@@ -3,7 +3,8 @@
  * Vista del dashboard. Variables disponibles (ver Module::render_settings_page()):
  * $from, $to, $granularity, $compare, $segment, $customers_limit, $kpis,
  * $login_avg_days, $period_series, $cohort_grid, $rfm_breakdown,
- * $rfm_definitions, $customers_list, $customers_total, $at_risk, $top_products,
+ * $rfm_definitions, $store_avg_repurchase_days, $customers_list,
+ * $customers_total, $at_risk, $top_products,
  * $last_updated, $recalc_status, $recalc_stuck, $recalc_action_url,
  * $recalc_nonce_field, $recalc_hidden_args.
  * $this = la instancia del módulo (para menu_slug()).
@@ -287,7 +288,21 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
 
     <div class="mad-ci-section">
         <h2><?php esc_html_e( 'Segmentación RFM', 'mad-suite' ); ?></h2>
-        <p class="description"><?php esc_html_e( 'Recencia (hace cuánto compró), Frecuencia (cuántas veces) y Valor monetario (cuánto gastó) — cada cliente cae en uno de estos grupos. Pasa el ratón sobre el ⓘ para ver qué significa cada uno, o pulsa "Ver clientes" para bajar al listado ya filtrado por ese segmento (por ejemplo, para armar una campaña de recuperación con los "Perdidos" o "En riesgo").', 'mad-suite' ); ?></p>
+        <p class="description">
+            <?php
+            if ( null !== $store_avg_repurchase_days ) {
+                printf(
+                    /* translators: %s: días promedio entre pedidos de un cliente recurrente */
+                    esc_html__( 'En esta tienda, un cliente que repite tarda en promedio %s días en volver a comprar. "A tiempo", "va tarde" o "perdido" se decide comparando a cada cliente contra SU PROPIO ritmo habitual (o este promedio, si solo lleva un pedido) — no contra el resto de clientes, así alguien que compró hace mucho no se cuela como "reciente" solo porque el resto de la base está aún más fría.', 'mad-suite' ),
+                    esc_html( number_format_i18n( $store_avg_repurchase_days, 1 ) )
+                );
+            } else {
+                esc_html_e( 'Todavía no hay suficientes clientes recurrentes para calcular un ritmo de recompra de referencia — en cuanto los haya, se usará para decidir quién va "a tiempo", "tarde" o "perdido".', 'mad-suite' );
+            }
+            ?>
+            <br>
+            <?php esc_html_e( 'Pasa el ratón sobre el ⓘ para ver qué significa cada segmento, o pulsa "Ver clientes" para bajar al listado ya filtrado (por ejemplo, para armar una campaña de recuperación con los "Perdidos" o "En riesgo").', 'mad-suite' ); ?>
+        </p>
         <?php if ( empty( $rfm_breakdown ) ) : ?>
             <p><?php esc_html_e( 'Sin datos todavía.', 'mad-suite' ); ?></p>
         <?php else : ?>

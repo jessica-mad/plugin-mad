@@ -159,6 +159,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $cohort_grid       = $data->get_cohort_grid( 12, 12 );
         $rfm_breakdown     = $data->get_rfm_breakdown();
         $rfm_definitions   = MAD_CI_Dashboard_Data::rfm_segment_definitions();
+        $store_avg_repurchase_days = $data->get_store_avg_repurchase_days();
         $customers_list    = $data->get_customers_list( $segment, $customers_limit );
         $customers_total   = $data->count_customers( $segment );
         $at_risk        = $data->get_at_risk_customers();
