@@ -57,6 +57,7 @@
         }
 
         new Chart( canvas, {
+            type: 'bar',
             data: {
                 labels: periods,
                 datasets: datasets,

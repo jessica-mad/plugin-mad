@@ -124,9 +124,19 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( strpos( $hook, $this->menu_slug() ) === false ) return;
 
         $url = plugin_dir_url( __FILE__ );
+        $dir = __DIR__;
+
+        // Chart.js vendorizado no cambia nunca — su propia versión basta.
         wp_enqueue_script( 'mad-ci-chartjs', $url . 'assets/js/chart.umd.min.js', [], '4.4.4', true );
-        wp_enqueue_script( 'mad-ci-dashboard', $url . 'assets/js/dashboard.js', [ 'mad-ci-chartjs' ], '1.0.0', true );
-        wp_enqueue_style( 'mad-ci-admin', $url . 'assets/css/admin.css', [], '1.0.0' );
+
+        // dashboard.js y admin.css sí cambian con cada actualización del
+        // módulo: se versionan con la fecha de modificación del archivo
+        // (no con un número fijo) para que el navegador del cliente
+        // siempre baje la copia nueva en vez de servir la cacheada.
+        $js_path  = $dir . '/assets/js/dashboard.js';
+        $css_path = $dir . '/assets/css/admin.css';
+        wp_enqueue_script( 'mad-ci-dashboard', $url . 'assets/js/dashboard.js', [ 'mad-ci-chartjs' ], (string) ( file_exists( $js_path ) ? filemtime( $js_path ) : '1.0.0' ), true );
+        wp_enqueue_style( 'mad-ci-admin', $url . 'assets/css/admin.css', [], (string) ( file_exists( $css_path ) ? filemtime( $css_path ) : '1.0.0' ) );
     }
 
     // ── Página del dashboard ────────────────────────────────────────────────
@@ -145,7 +155,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $kpis              = $data->get_customer_kpis();
         $login_avg_days    = $data->get_login_to_purchase_avg( $from, $to );
         $period_series     = $data->get_period_series( $from, $to, $granularity );
-        $cohort_grid       = $data->get_cohort_grid();
+        $cohort_grid       = $data->get_cohort_grid( 12, 12 );
         $rfm_breakdown     = $data->get_rfm_breakdown();
         $rfm_definitions   = MAD_CI_Dashboard_Data::rfm_segment_definitions();
         $customers_list    = $data->get_customers_list( $segment );
