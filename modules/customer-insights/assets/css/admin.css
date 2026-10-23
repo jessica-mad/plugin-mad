@@ -133,22 +133,21 @@
     border: 1px solid var(--mad-ci-border);
     border-left-width: 4px;
     border-radius: 8px;
-    padding: 12px 14px;
+    padding: 14px 16px;
     background: #fcfcfd;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
-.mad-ci-rfm-card summary {
-    cursor: pointer;
+.mad-ci-rfm-top {
     display: flex;
     align-items: baseline;
     gap: 10px;
-    list-style: none;
 }
 
-.mad-ci-rfm-card summary::-webkit-details-marker { display: none; }
-
 .mad-ci-rfm-count {
-    font-size: 1.4em;
+    font-size: 1.6em;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }
@@ -156,25 +155,67 @@
 .mad-ci-rfm-label {
     font-weight: 600;
     color: #1d2327;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
-.mad-ci-rfm-desc {
-    margin: 10px 0 0;
-    color: var(--mad-ci-muted);
-    font-size: 0.9em;
-}
-
-.mad-ci-rfm-emails-label {
-    margin: 10px 0 4px;
+.mad-ci-rfm-link {
     font-size: 0.85em;
-    font-weight: 600;
+    text-decoration: none;
 }
 
-.mad-ci-rfm-emails {
-    width: 100%;
-    font-family: Consolas, Monaco, monospace;
-    font-size: 0.82em;
+/* ── Icono de información con popover (solo CSS) ─────────────────────── */
+
+.mad-ci-info {
+    position: relative;
+    display: inline-flex;
+}
+
+.mad-ci-info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--mad-ci-muted);
+    color: #fff;
+    font-size: 11px;
+    font-style: normal;
+    font-weight: 700;
+    cursor: help;
+}
+
+.mad-ci-info-popover {
+    display: none;
+    position: absolute;
+    z-index: 10;
+    top: 130%;
+    left: 0;
+    width: 240px;
+    background: #1d2327;
+    color: #fff;
+    font-weight: 400;
+    font-size: 0.85em;
+    line-height: 1.4;
+    padding: 10px 12px;
     border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(16, 24, 40, .25);
+}
+
+.mad-ci-info:hover .mad-ci-info-popover,
+.mad-ci-info:focus .mad-ci-info-popover,
+.mad-ci-info:focus-within .mad-ci-info-popover {
+    display: block;
+}
+
+.mad-ci-segment-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0 16px;
 }
 
 .mad-ci-rfm-card--campeones { border-left-color: #2e7d32; }

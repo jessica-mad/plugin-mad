@@ -9,35 +9,57 @@
         var canvas = document.getElementById( 'mad-ci-monthly-chart' );
         if ( ! canvas || typeof Chart === 'undefined' || typeof madCIData === 'undefined' ) return;
 
-        var months        = madCIData.monthly.map( function ( row ) { return row.month; } );
-        var newCounts     = madCIData.monthly.map( function ( row ) { return row.new_customers; } );
-        var repeatCounts  = madCIData.monthly.map( function ( row ) { return row.repeat_customers; } );
+        var periods       = madCIData.periods.map( function ( row ) { return row.label; } );
+        var newCounts     = madCIData.periods.map( function ( row ) { return row.new_customers; } );
+        var repeatCounts  = madCIData.periods.map( function ( row ) { return row.repeat_customers; } );
 
         var gridClr = 'rgba(0,0,0,.06)';
         var textClr = '#3c434a';
 
+        var datasets = [
+            {
+                type: 'bar',
+                label: madCIData.i18n.new,
+                data: newCounts,
+                backgroundColor: '#4f8cff',
+                borderRadius: 6,
+                borderSkipped: false,
+                maxBarThickness: 34,
+                stack: 'total',
+            },
+            {
+                type: 'bar',
+                label: madCIData.i18n.repeat,
+                data: repeatCounts,
+                backgroundColor: '#ff7a59',
+                borderRadius: 6,
+                borderSkipped: false,
+                maxBarThickness: 34,
+                stack: 'total',
+            },
+        ];
+
+        if ( madCIData.compare ) {
+            datasets.push( {
+                type: 'line',
+                label: madCIData.compare.label,
+                data: madCIData.compare.previous,
+                borderColor: '#8c8f94',
+                backgroundColor: '#8c8f94',
+                borderDash: [ 6, 4 ],
+                borderWidth: 2,
+                pointRadius: 3,
+                pointBackgroundColor: '#8c8f94',
+                fill: false,
+                tension: 0.25,
+                spanGaps: true,
+            } );
+        }
+
         new Chart( canvas, {
-            type: 'bar',
             data: {
-                labels: months,
-                datasets: [
-                    {
-                        label: madCIData.i18n.new,
-                        data: newCounts,
-                        backgroundColor: '#4f8cff',
-                        borderRadius: 6,
-                        borderSkipped: false,
-                        maxBarThickness: 34,
-                    },
-                    {
-                        label: madCIData.i18n.repeat,
-                        data: repeatCounts,
-                        backgroundColor: '#ff7a59',
-                        borderRadius: 6,
-                        borderSkipped: false,
-                        maxBarThickness: 34,
-                    },
-                ],
+                labels: periods,
+                datasets: datasets,
             },
             options: {
                 responsive: true,

@@ -91,6 +91,82 @@ class MAD_CI_Dashboard_Data {
     }
 
     /**
+     * Igual que get_monthly_series() pero agrupada en bloques más grandes
+     * (trimestre, semestre, año) para poder comparar muchos años sin que la
+     * gráfica se vuelva ilegible. La tabla base sigue siendo mensual — esto
+     * solo suma meses dentro de cada bloque, no cambia nada en el cálculo.
+     *
+     * @param string $granularity 'month' | 'quarter' | 'semester' | 'year'.
+     * @return array<int, array{period:string, label:string, new_customers:int, repeat_customers:int, new_revenue:float, repeat_revenue:float}>
+     */
+    public function get_period_series( string $from, string $to, string $granularity ): array {
+        $monthly = $this->get_monthly_series( $from, $to );
+        return self::bucket_by_granularity( $monthly, $granularity );
+    }
+
+    /** @param array<int,array<string,mixed>> $monthly_rows Como los que devuelve get_monthly_series(). */
+    public static function bucket_by_granularity( array $monthly_rows, string $granularity ): array {
+        if ( 'month' === $granularity ) {
+            return array_map( static function ( $row ) {
+                $ts = strtotime( $row['month'] );
+                return [
+                    'period'            => substr( $row['month'], 0, 7 ),
+                    'label'             => wp_date( 'M Y', $ts ),
+                    'new_customers'     => (int) $row['new_customers'],
+                    'repeat_customers'  => (int) $row['repeat_customers'],
+                    'new_revenue'       => (float) $row['new_revenue'],
+                    'repeat_revenue'    => (float) $row['repeat_revenue'],
+                ];
+            }, $monthly_rows );
+        }
+
+        $buckets = [];
+        foreach ( $monthly_rows as $row ) {
+            [ $y, $m ] = array_map( 'intval', explode( '-', substr( $row['month'], 0, 7 ) ) );
+            $key = self::period_key( $y, $m, $granularity );
+
+            if ( ! isset( $buckets[ $key ] ) ) {
+                $buckets[ $key ] = [
+                    'period'           => $key,
+                    'label'            => self::period_label( $y, $m, $granularity ),
+                    'new_customers'    => 0,
+                    'repeat_customers' => 0,
+                    'new_revenue'      => 0.0,
+                    'repeat_revenue'   => 0.0,
+                ];
+            }
+
+            $buckets[ $key ]['new_customers']    += (int) $row['new_customers'];
+            $buckets[ $key ]['repeat_customers'] += (int) $row['repeat_customers'];
+            $buckets[ $key ]['new_revenue']      += (float) $row['new_revenue'];
+            $buckets[ $key ]['repeat_revenue']   += (float) $row['repeat_revenue'];
+        }
+
+        ksort( $buckets );
+        return array_values( $buckets );
+    }
+
+    private static function period_key( int $y, int $m, string $granularity ): string {
+        switch ( $granularity ) {
+            case 'quarter':  return sprintf( '%d-Q%d', $y, intdiv( $m - 1, 3 ) + 1 );
+            case 'semester': return sprintf( '%d-S%d', $y, intdiv( $m - 1, 6 ) + 1 );
+            case 'year':     return (string) $y;
+            default:         return sprintf( '%04d-%02d', $y, $m );
+        }
+    }
+
+    private static function period_label( int $y, int $m, string $granularity ): string {
+        switch ( $granularity ) {
+            /* translators: 1: número de trimestre (1-4), 2: año */
+            case 'quarter':  return sprintf( __( 'T%1$d %2$d', 'mad-suite' ), intdiv( $m - 1, 3 ) + 1, $y );
+            /* translators: 1: número de semestre (1-2), 2: año */
+            case 'semester': return sprintf( __( 'S%1$d %2$d', 'mad-suite' ), intdiv( $m - 1, 6 ) + 1, $y );
+            case 'year':     return (string) $y;
+            default:         return wp_date( 'M Y', mktime( 0, 0, 0, $m, 1, $y ) );
+        }
+    }
+
+    /**
      * Grid de retención por cohortes: filas = mes de cohorte, columnas =
      * meses transcurridos desde la primera compra (0, 1, 2…).
      *
@@ -152,29 +228,60 @@ class MAD_CI_Dashboard_Data {
         return $out;
     }
 
-    /** Emails de los clientes de un segmento RFM — para campañas de recuperación/fidelización. */
-    public function get_customers_in_segment( string $segment, int $limit = 500 ): array {
+    /**
+     * Listado completo de clientes únicos (uno por email), opcionalmente
+     * filtrado por segmento RFM — es la tabla "aparte" para ver quién
+     * compró, cuándo y cuánto vale, con enlace a sus pedidos reales en
+     * WooCommerce (ahí se ve qué compró, con todo el detalle de cada
+     * pedido — no se duplica esa información en una tabla propia).
+     */
+    public function get_customers_list( string $segment = '', int $limit = 300 ): array {
         global $wpdb;
         $table = MAD_CI_DB_Schema::table_customers();
 
-        return $wpdb->get_col( $wpdb->prepare( "
-            SELECT customer_email FROM {$table}
-            WHERE rfm_segment = %s
-            ORDER BY lifetime_value DESC
-            LIMIT %d
-        ", $segment, $limit ) );
-    }
-
-    public function get_top_customers( int $limit = 10 ): array {
-        global $wpdb;
-        $table = MAD_CI_DB_Schema::table_customers();
+        if ( '' !== $segment ) {
+            return $wpdb->get_results( $wpdb->prepare( "
+                SELECT customer_email, user_id, order_count, lifetime_value, avg_order_value,
+                       first_order_date, last_order_date, rfm_segment
+                FROM {$table}
+                WHERE rfm_segment = %s
+                ORDER BY lifetime_value DESC
+                LIMIT %d
+            ", $segment, $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        }
 
         return $wpdb->get_results( $wpdb->prepare( "
-            SELECT customer_email, user_id, order_count, lifetime_value, last_order_date
+            SELECT customer_email, user_id, order_count, lifetime_value, avg_order_value,
+                   first_order_date, last_order_date, rfm_segment
             FROM {$table}
             ORDER BY lifetime_value DESC
             LIMIT %d
         ", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+    }
+
+    /** Cuántos clientes únicos hay en total, sin el límite de get_customers_list(). */
+    public function count_customers( string $segment = '' ): int {
+        global $wpdb;
+        $table = MAD_CI_DB_Schema::table_customers();
+
+        if ( '' !== $segment ) {
+            return (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE rfm_segment = %s", $segment ) );
+        }
+        return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+    }
+
+    /**
+     * URL al listado de pedidos de WooCommerce filtrado por email de un
+     * cliente (ahí se ve, con todo el detalle, cuándo compró y qué compró
+     * en cada pedido) — compatible con HPOS y con el CPT clásico.
+     */
+    public static function orders_list_url( string $email ): string {
+        $search = rawurlencode( $email );
+        if ( class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' )
+            && \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled() ) {
+            return admin_url( 'admin.php?page=wc-orders&s=' . $search );
+        }
+        return admin_url( 'edit.php?post_type=shop_order&s=' . $search );
     }
 
     /** Clientes con 2+ pedidos cuya ausencia ya duplica su propio intervalo habitual de compra. */
