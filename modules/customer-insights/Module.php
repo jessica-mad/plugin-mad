@@ -71,6 +71,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
 
         if ( is_admin() ) {
             add_action( 'admin_post_mad_ci_recalculate', [ $this, 'handle_manual_recalculate' ] );
+            add_action( 'admin_post_mad_ci_export_customers', [ $this, 'handle_export_customers' ] );
             add_action( 'admin_enqueue_scripts', [ $this, 'enqueue_assets' ] );
         }
     }
@@ -120,6 +121,41 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         exit;
     }
 
+    /** Descarga en CSV el listado de clientes (opcionalmente filtrado por segmento RFM) para campañas externas. */
+    public function handle_export_customers(): void {
+        if ( ! current_user_can( MAD_Suite_Core::CAPABILITY ) ) {
+            wp_die( esc_html__( 'No tienes permisos suficientes.', 'mad-suite' ) );
+        }
+        check_admin_referer( 'mad_ci_export_customers' );
+
+        $segment = isset( $_REQUEST['mad_ci_segment'] ) ? sanitize_text_field( wp_unslash( $_REQUEST['mad_ci_segment'] ) ) : '';
+        $valid   = array_keys( MAD_CI_Dashboard_Data::rfm_segment_definitions() );
+        if ( ! in_array( $segment, $valid, true ) ) $segment = '';
+
+        $rows = ( new MAD_CI_Dashboard_Data() )->get_customers_list( $segment, 50000 );
+
+        nocache_headers();
+        header( 'Content-Type: text/csv; charset=utf-8' );
+        header( 'Content-Disposition: attachment; filename="clientes-' . ( $segment ? sanitize_title( $segment ) : 'todos' ) . '-' . gmdate( 'Y-m-d' ) . '.csv"' );
+
+        $out = fopen( 'php://output', 'w' );
+        fwrite( $out, "\xEF\xBB\xBF" ); // BOM UTF-8, para que Excel muestre bien los acentos.
+        fputcsv( $out, [ 'Email', 'Segmento RFM', 'Pedidos', 'Primera compra', 'Última compra', 'Valor total', 'Ticket promedio' ] );
+        foreach ( $rows as $r ) {
+            fputcsv( $out, [
+                $r['customer_email'],
+                $r['rfm_segment'],
+                $r['order_count'],
+                $r['first_order_date'],
+                $r['last_order_date'],
+                $r['lifetime_value'],
+                $r['avg_order_value'],
+            ] );
+        }
+        fclose( $out );
+        exit;
+    }
+
     public function enqueue_assets( string $hook ): void {
         if ( strpos( $hook, $this->menu_slug() ) === false ) return;
 
@@ -162,7 +198,6 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $store_avg_repurchase_days = $data->get_store_avg_repurchase_days();
         $customers_list    = $data->get_customers_list( $segment, $customers_limit );
         $customers_total   = $data->count_customers( $segment );
-        $at_risk        = $data->get_at_risk_customers();
         $top_products   = $data->get_top_repurchased_products();
         $last_updated   = $data->get_last_recalculated();
         $recalc_status  = MAD_CI_Batch_Collector::get_status();
@@ -172,34 +207,38 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $recalc_nonce_field = wp_nonce_field( 'mad_ci_recalculate', '_wpnonce', true, false );
         $recalc_hidden_args = array_merge( $this->current_dashboard_query_args(), [ 'action' => 'mad_ci_recalculate' ] );
 
-        // Comparador con el mismo mes del año anterior: solo tiene sentido
-        // con granularidad mensual (si no, el propio selector "Anual" ya
-        // deja comparar años uno junto al otro). Cada mes se empareja con
-        // el mismo mes exacto UN AÑO antes (no solo "el mismo nombre de
-        // mes", que mezclaría años distintos si el rango abarca varios
-        // años) — si ese mes anterior no tiene pedidos (p. ej. antes de
-        // que la tienda existiera), queda como null y no se dibuja.
+        // Comparador con el mismo periodo del año anterior: funciona con
+        // cualquier granularidad salvo "Anual" (ahí el propio selector ya
+        // deja comparar años uno junto al otro, como barras separadas).
+        // Cada periodo se empareja con el mismo periodo exacto UN AÑO
+        // antes (no solo "el mismo número de mes/trimestre", que
+        // mezclaría años distintos si el rango abarca varios años) — si
+        // ese periodo anterior no tiene pedidos (p. ej. antes de que la
+        // tienda existiera), queda como null y no se dibuja nada ahí.
         $compare_payload = null;
-        if ( $compare && 'month' === $granularity ) {
-            $prior_from = gmdate( 'Y-m-d', strtotime( '-1 year', strtotime( $from ) ) );
-            $prior_to   = gmdate( 'Y-m-d', strtotime( '-1 year', strtotime( $to ) ) );
-            $prior_series = $data->get_period_series( $prior_from, $prior_to, 'month' );
+        if ( $compare && 'year' !== $granularity ) {
+            $prior_from   = gmdate( 'Y-m-d', strtotime( '-1 year', strtotime( $from ) ) );
+            $prior_to     = gmdate( 'Y-m-d', strtotime( '-1 year', strtotime( $to ) ) );
+            $prior_series = $data->get_period_series( $prior_from, $prior_to, $granularity );
 
             $prior_by_period = [];
             foreach ( $prior_series as $row ) {
-                $prior_by_period[ $row['period'] ] = $row; // 'period' ya es 'YYYY-MM'.
+                $prior_by_period[ $row['period'] ] = $row;
             }
 
-            $previous_totals = [];
+            $previous_new = $previous_repeat = $previous_total = [];
             foreach ( $period_series as $row ) {
-                [ $y, $m ]  = array_map( 'intval', explode( '-', $row['period'] ) );
-                $prior_key  = sprintf( '%04d-%02d', $y - 1, $m );
-                $prev       = $prior_by_period[ $prior_key ] ?? null;
-                $previous_totals[] = $prev ? ( (int) $prev['new_customers'] + (int) $prev['repeat_customers'] ) : null;
+                $prior_key = $this->prior_period_key( $row['period'] );
+                $prev      = $prior_by_period[ $prior_key ] ?? null;
+
+                $previous_new[]    = $prev ? (int) $prev['new_customers'] : null;
+                $previous_repeat[] = $prev ? (int) $prev['repeat_customers'] : null;
+                $previous_total[]  = $prev ? ( (int) $prev['new_customers'] + (int) $prev['repeat_customers'] ) : null;
             }
             $compare_payload = [
-                'label'    => __( 'Mismo mes, año anterior', 'mad-suite' ),
-                'previous' => $previous_totals,
+                'new'    => $previous_new,
+                'repeat' => $previous_repeat,
+                'total'  => $previous_total,
             ];
         }
 
@@ -213,12 +252,26 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             }, $period_series ),
             'compare' => $compare_payload,
             'i18n' => [
-                'new'    => __( 'Nuevos', 'mad-suite' ),
-                'repeat' => __( 'Recurrentes', 'mad-suite' ),
+                'new'        => __( 'Nuevos', 'mad-suite' ),
+                'repeat'     => __( 'Recurrentes', 'mad-suite' ),
+                'newPrev'    => __( 'Nuevos (año anterior)', 'mad-suite' ),
+                'repeatPrev' => __( 'Recurrentes (año anterior)', 'mad-suite' ),
+                'totalPrev'  => __( 'Total (año anterior)', 'mad-suite' ),
             ],
         ] ) . ';', 'before' );
 
         include __DIR__ . '/views/dashboard.php';
+    }
+
+    /**
+     * A partir de una clave de periodo ('YYYY-MM', 'YYYY-Qn' o 'YYYY-Sn'),
+     * la clave del mismo periodo un año antes — le resta 1 al año y deja
+     * el resto igual (mes, trimestre o semestre no cambian).
+     */
+    private function prior_period_key( string $period ): string {
+        $year = (int) substr( $period, 0, 4 );
+        $rest = substr( $period, 4 );
+        return ( $year - 1 ) . $rest;
     }
 
     /** @return array{0:string,1:string} [from, to] en formato Y-m-d, por defecto los últimos 12 meses. */

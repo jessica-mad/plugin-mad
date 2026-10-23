@@ -4,7 +4,7 @@
  * $from, $to, $granularity, $compare, $segment, $customers_limit, $kpis,
  * $login_avg_days, $period_series, $cohort_grid, $rfm_breakdown,
  * $rfm_definitions, $store_avg_repurchase_days, $customers_list,
- * $customers_total, $at_risk, $top_products,
+ * $customers_total, $top_products,
  * $last_updated, $recalc_status, $recalc_stuck, $recalc_action_url,
  * $recalc_nonce_field, $recalc_hidden_args.
  * $this = la instancia del módulo (para menu_slug()).
@@ -141,7 +141,100 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
         </p>
     </form>
 
-    <div class="mad-ci-toolbar">
+    <div class="mad-ci-kpis">
+        <div class="mad-ci-kpi">
+            <span class="value"><?php echo esc_html( number_format_i18n( $kpis['total_customers'] ) ); ?></span>
+            <span class="label">
+                <?php esc_html_e( 'Clientes totales', 'mad-suite' ); ?>
+                <span class="mad-ci-info" tabindex="0">
+                    <span class="mad-ci-info-icon" aria-hidden="true">i</span>
+                    <span class="mad-ci-info-popover"><?php esc_html_e( 'Clientes únicos (agrupados por email de facturación) con al menos un pedido completado — incluye compras hechas como invitado.', 'mad-suite' ); ?></span>
+                </span>
+            </span>
+        </div>
+        <div class="mad-ci-kpi">
+            <span class="value"><?php echo esc_html( $kpis['repeat_rate'] ); ?>%</span>
+            <span class="label">
+                <?php esc_html_e( 'Tasa de recompra', 'mad-suite' ); ?>
+                <span class="mad-ci-info" tabindex="0">
+                    <span class="mad-ci-info-icon" aria-hidden="true">i</span>
+                    <span class="mad-ci-info-popover"><?php esc_html_e( '% de clientes totales que ha hecho 2 o más pedidos completados.', 'mad-suite' ); ?></span>
+                </span>
+            </span>
+        </div>
+        <div class="mad-ci-kpi">
+            <span class="value"><?php echo wp_kses_post( wc_price( $kpis['avg_aov'] ) ); ?></span>
+            <span class="label">
+                <?php esc_html_e( 'Ticket promedio (AOV)', 'mad-suite' ); ?>
+                <span class="mad-ci-info" tabindex="0">
+                    <span class="mad-ci-info-icon" aria-hidden="true">i</span>
+                    <span class="mad-ci-info-popover"><?php esc_html_e( 'Valor promedio de UN pedido individual (gasto total ÷ número de pedidos) — no es lo que gasta un cliente en total, solo por compra.', 'mad-suite' ); ?></span>
+                </span>
+            </span>
+        </div>
+        <div class="mad-ci-kpi">
+            <span class="value"><?php echo wp_kses_post( wc_price( $kpis['avg_ltv'] ) ); ?></span>
+            <span class="label">
+                <?php esc_html_e( 'Valor de vida promedio (CLV)', 'mad-suite' ); ?>
+                <span class="mad-ci-info" tabindex="0">
+                    <span class="mad-ci-info-icon" aria-hidden="true">i</span>
+                    <span class="mad-ci-info-popover"><?php esc_html_e( 'Cuánto gasta en promedio un cliente sumando TODOS sus pedidos a lo largo de toda su relación con la tienda, no solo uno.', 'mad-suite' ); ?></span>
+                </span>
+            </span>
+        </div>
+        <div class="mad-ci-kpi">
+            <span class="value">
+                <?php
+                echo null !== $kpis['avg_frequency_days']
+                    ? esc_html( sprintf( __( '%s días', 'mad-suite' ), number_format_i18n( $kpis['avg_frequency_days'], 0 ) ) )
+                    : '—';
+                ?>
+            </span>
+            <span class="label">
+                <?php esc_html_e( 'Frecuencia de compra', 'mad-suite' ); ?>
+                <span class="mad-ci-info" tabindex="0">
+                    <span class="mad-ci-info-icon" aria-hidden="true">i</span>
+                    <span class="mad-ci-info-popover"><?php esc_html_e( 'Cada cuántos días, en promedio, un cliente que ya repitió vuelve a comprar (intervalo entre sus pedidos consecutivos).', 'mad-suite' ); ?></span>
+                </span>
+            </span>
+        </div>
+        <div class="mad-ci-kpi">
+            <span class="value">
+                <?php
+                echo null !== $kpis['avg_days_to_second_order']
+                    ? esc_html( sprintf( __( '%s días', 'mad-suite' ), number_format_i18n( $kpis['avg_days_to_second_order'], 0 ) ) )
+                    : '—';
+                ?>
+            </span>
+            <span class="label">
+                <?php esc_html_e( 'Nuevo → recurrente', 'mad-suite' ); ?>
+                <span class="mad-ci-info" tabindex="0">
+                    <span class="mad-ci-info-icon" aria-hidden="true">i</span>
+                    <span class="mad-ci-info-popover"><?php esc_html_e( 'Cuántos días tardan, en promedio, los clientes en hacer su SEGUNDA compra desde la primera (cuánto tarda alguien en volverse recurrente).', 'mad-suite' ); ?></span>
+                </span>
+            </span>
+        </div>
+        <div class="mad-ci-kpi">
+            <span class="value">
+                <?php
+                echo null !== $login_avg_days
+                    ? esc_html( sprintf( __( '%s días', 'mad-suite' ), number_format_i18n( $login_avg_days, 1 ) ) )
+                    : '—';
+                ?>
+            </span>
+            <span class="label">
+                <?php esc_html_e( 'Login → compra', 'mad-suite' ); ?>
+                <span class="mad-ci-info" tabindex="0">
+                    <span class="mad-ci-info-icon" aria-hidden="true">i</span>
+                    <span class="mad-ci-info-popover"><?php esc_html_e( 'Tiempo promedio entre que un usuario registrado inicia sesión y completa una compra. Solo pedidos de usuarios registrados (no invitados), desde que se activó esta función — y usa el mismo rango de fechas que la gráfica de abajo.', 'mad-suite' ); ?></span>
+                </span>
+            </span>
+        </div>
+    </div>
+
+    <div class="mad-ci-section">
+        <h2><?php esc_html_e( 'Clientes nuevos vs. recurrentes', 'mad-suite' ); ?></h2>
+
         <form method="get" class="mad-ci-date-form">
             <input type="hidden" name="page" value="<?php echo esc_attr( $this->menu_slug() ); ?>">
             <input type="hidden" name="mad_ci_segment" value="<?php echo esc_attr( $segment ); ?>">
@@ -159,76 +252,17 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
                     <?php endforeach; ?>
                 </select>
             </label>
-            <label title="<?php esc_attr_e( 'Solo funciona agrupando por mes — superpone una línea con el mismo mes exacto de hace un año (si no hay pedidos ese mes, no se dibuja ningún punto, no se inventa el dato).', 'mad-suite' ); ?>">
-                <input type="checkbox" name="mad_ci_compare" value="1" <?php checked( $compare ); ?>>
+            <label title="<?php esc_attr_e( 'No aplica agrupando por año (ahí cada barra ya es un año, se comparan solas). Superpone una línea con el mismo periodo exacto de hace un año — si ese periodo no tiene pedidos, no se dibuja nada ahí, no se inventa el dato.', 'mad-suite' ); ?>">
+                <input type="checkbox" name="mad_ci_compare" value="1" <?php checked( $compare ); ?> <?php disabled( 'year', $granularity ); ?>>
                 <?php esc_html_e( 'Comparar con el año anterior', 'mad-suite' ); ?>
             </label>
             <button type="submit" class="button"><?php esc_html_e( 'Aplicar', 'mad-suite' ); ?></button>
         </form>
-    </div>
-    <p class="description">
-        <?php esc_html_e( 'Este rango de fechas solo afecta a la gráfica de arriba y al KPI "Login → compra". El resto (RFM, cohortes, clientes, productos con recompra) son datos de toda la vida del cliente, no de un periodo — por ejemplo, el segmento RFM o el valor total de un cliente no cambian según qué mes estés mirando, siempre reflejan su historial completo.', 'mad-suite' ); ?>
-    </p>
-
-    <div class="mad-ci-kpis">
-        <div class="mad-ci-kpi">
-            <span class="value"><?php echo esc_html( number_format_i18n( $kpis['total_customers'] ) ); ?></span>
-            <span class="label"><?php esc_html_e( 'Clientes totales', 'mad-suite' ); ?></span>
-        </div>
-        <div class="mad-ci-kpi">
-            <span class="value"><?php echo esc_html( $kpis['repeat_rate'] ); ?>%</span>
-            <span class="label"><?php esc_html_e( 'Tasa de recompra', 'mad-suite' ); ?></span>
-        </div>
-        <div class="mad-ci-kpi">
-            <span class="value"><?php echo wp_kses_post( wc_price( $kpis['avg_aov'] ) ); ?></span>
-            <span class="label"><?php esc_html_e( 'Ticket promedio (AOV)', 'mad-suite' ); ?></span>
-        </div>
-        <div class="mad-ci-kpi">
-            <span class="value"><?php echo wp_kses_post( wc_price( $kpis['avg_ltv'] ) ); ?></span>
-            <span class="label"><?php esc_html_e( 'Valor de vida promedio (CLV)', 'mad-suite' ); ?></span>
-        </div>
-        <div class="mad-ci-kpi">
-            <span class="value">
-                <?php
-                echo null !== $kpis['avg_frequency_days']
-                    ? esc_html( sprintf( __( '%s días', 'mad-suite' ), number_format_i18n( $kpis['avg_frequency_days'], 0 ) ) )
-                    : '—';
-                ?>
-            </span>
-            <span class="label"><?php esc_html_e( 'Frecuencia de compra', 'mad-suite' ); ?></span>
-        </div>
-        <div class="mad-ci-kpi">
-            <span class="value">
-                <?php
-                echo null !== $kpis['avg_days_to_second_order']
-                    ? esc_html( sprintf( __( '%s días', 'mad-suite' ), number_format_i18n( $kpis['avg_days_to_second_order'], 0 ) ) )
-                    : '—';
-                ?>
-            </span>
-            <span class="label"><?php esc_html_e( 'Nuevo → recurrente', 'mad-suite' ); ?></span>
-        </div>
-        <div class="mad-ci-kpi">
-            <span class="value">
-                <?php
-                echo null !== $login_avg_days
-                    ? esc_html( sprintf( __( '%s días', 'mad-suite' ), number_format_i18n( $login_avg_days, 1 ) ) )
-                    : '—';
-                ?>
-            </span>
-            <span class="label">
-                <?php esc_html_e( 'Login → compra', 'mad-suite' ); ?>
-                <br><small><?php esc_html_e( 'solo usuarios registrados, desde que se activó esta función', 'mad-suite' ); ?></small>
-            </span>
-        </div>
-    </div>
-
-    <div class="mad-ci-section">
-        <h2><?php esc_html_e( 'Clientes nuevos vs. recurrentes', 'mad-suite' ); ?></h2>
         <p class="description">
             <?php
             printf(
                 /* translators: %s: etiqueta de la granularidad elegida (Mensual, Trimestral…) */
-                esc_html__( 'Por cada periodo (%s), cuántos pedidos vinieron de un cliente que compraba por primera vez frente a uno que ya había comprado antes. Para comparar muchos años de un vistazo, agrupa por "Anual" — cada barra es un año completo.', 'mad-suite' ),
+                esc_html__( 'Por cada periodo (%s), cuántos pedidos vinieron de un cliente que compraba por primera vez frente a uno que ya había comprado antes. Para comparar muchos años de un vistazo, agrupa por "Anual" — cada barra es un año completo. Este filtro solo afecta a esta gráfica y al KPI "Login → compra" de arriba — el resto del dashboard (RFM, clientes, cohortes, productos) es el historial completo de cada cliente, no de un periodo.', 'mad-suite' ),
                 esc_html( $granularity_labels[ $granularity ] )
             );
             ?>
@@ -287,22 +321,32 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
     </div>
 
     <div class="mad-ci-section">
-        <h2><?php esc_html_e( 'Segmentación RFM', 'mad-suite' ); ?></h2>
+        <h2><?php esc_html_e( 'Segmentación RFM y clientes', 'mad-suite' ); ?></h2>
         <p class="description">
-            <?php
-            if ( null !== $store_avg_repurchase_days ) {
-                printf(
-                    /* translators: %s: días promedio entre pedidos de un cliente recurrente */
-                    esc_html__( 'En esta tienda, un cliente que repite tarda en promedio %s días en volver a comprar. "A tiempo", "va tarde" o "perdido" se decide comparando a cada cliente contra SU PROPIO ritmo habitual (o este promedio, si solo lleva un pedido) — no contra el resto de clientes, así alguien que compró hace mucho no se cuela como "reciente" solo porque el resto de la base está aún más fría.', 'mad-suite' ),
-                    esc_html( number_format_i18n( $store_avg_repurchase_days, 1 ) )
-                );
-            } else {
-                esc_html_e( 'Todavía no hay suficientes clientes recurrentes para calcular un ritmo de recompra de referencia — en cuanto los haya, se usará para decidir quién va "a tiempo", "tarde" o "perdido".', 'mad-suite' );
-            }
-            ?>
-            <br>
-            <?php esc_html_e( 'Pasa el ratón sobre el ⓘ para ver qué significa cada segmento, o pulsa "Ver clientes" para bajar al listado ya filtrado (por ejemplo, para armar una campaña de recuperación con los "Perdidos" o "En riesgo").', 'mad-suite' ); ?>
+            <?php esc_html_e( 'Pasa el ratón sobre el ⓘ para ver qué significa cada segmento. Pulsa "Ver clientes" en una card para abrir el listado de abajo ya filtrado por ese segmento — por ejemplo, para armar una campaña de recuperación con los "Perdidos" o "En riesgo".', 'mad-suite' ); ?>
         </p>
+
+        <?php if ( null !== $store_avg_repurchase_days ) : ?>
+            <div class="mad-ci-callout">
+                <p>
+                    <?php
+                    printf(
+                        /* translators: %s: días promedio entre pedidos de un cliente recurrente */
+                        esc_html__( 'En esta tienda, un cliente que repite tarda en promedio %s días en volver a comprar.', 'mad-suite' ),
+                        esc_html( number_format_i18n( $store_avg_repurchase_days, 1 ) )
+                    );
+                    ?>
+                    <?php esc_html_e( '"A tiempo", "va tarde" o "perdido" se decide comparando a cada cliente contra SU PROPIO ritmo habitual (o este promedio, si solo lleva un pedido) — no contra el resto de clientes, así alguien que compró hace mucho no se cuela como "reciente" solo porque el resto de la base está aún más fría.', 'mad-suite' ); ?>
+                </p>
+            </div>
+        <?php else : ?>
+            <div class="mad-ci-callout mad-ci-callout--warning">
+                <p>
+                    <?php esc_html_e( 'No se encontró un ritmo de recompra calculado — si la tienda ya tiene clientes recurrentes y aun así ves esto, probablemente es porque no se ha ejecutado un recálculo completo desde que se añadió este cálculo. Dale a "Recalcular en segundo plano" (arriba del todo, con "Todo el histórico") para que se calcule.', 'mad-suite' ); ?>
+                </p>
+            </div>
+        <?php endif; ?>
+
         <?php if ( empty( $rfm_breakdown ) ) : ?>
             <p><?php esc_html_e( 'Sin datos todavía.', 'mad-suite' ); ?></p>
         <?php else : ?>
@@ -329,6 +373,95 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
                 <?php endforeach; ?>
             </div>
         <?php endif; ?>
+
+        <details id="mad-ci-clients" class="mad-ci-clients-details" <?php echo $segment ? 'open' : ''; ?>>
+            <summary><?php esc_html_e( 'Ver listado de clientes ▾', 'mad-suite' ); ?></summary>
+
+            <p class="description">
+                <?php esc_html_e( 'Cada fila es un cliente único (agrupado por email de facturación, incluye compras como invitado). "Ver pedidos" abre su historial real en WooCommerce — ahí se ve el detalle de cada pedido con lo que compró.', 'mad-suite' ); ?>
+            </p>
+            <form method="get" class="mad-ci-segment-form">
+                <input type="hidden" name="page" value="<?php echo esc_attr( $this->menu_slug() ); ?>">
+                <input type="hidden" name="mad_ci_from" value="<?php echo esc_attr( $from ); ?>">
+                <input type="hidden" name="mad_ci_to" value="<?php echo esc_attr( $to ); ?>">
+                <input type="hidden" name="mad_ci_granularity" value="<?php echo esc_attr( $granularity ); ?>">
+                <?php if ( $compare ) : ?><input type="hidden" name="mad_ci_compare" value="1"><?php endif; ?>
+                <label><?php esc_html_e( 'Segmento RFM', 'mad-suite' ); ?>
+                    <select name="mad_ci_segment">
+                        <option value=""><?php esc_html_e( 'Todos', 'mad-suite' ); ?></option>
+                        <?php foreach ( array_keys( $rfm_definitions ) as $label ) : ?>
+                            <option value="<?php echo esc_attr( $label ); ?>" <?php selected( $segment, $label ); ?>><?php echo esc_html( $label ); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <label><?php esc_html_e( 'Mostrar', 'mad-suite' ); ?>
+                    <select name="mad_ci_customers_limit">
+                        <?php foreach ( $customers_limit_options as $n ) : ?>
+                            <option value="<?php echo esc_attr( $n ); ?>" <?php selected( $customers_limit, $n ); ?>>
+                                <?php echo esc_html( sprintf( /* translators: %s: cantidad de clientes */ __( '%s clientes', 'mad-suite' ), number_format_i18n( $n ) ) ); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+                <button type="submit" class="button"><?php esc_html_e( 'Filtrar', 'mad-suite' ); ?></button>
+            </form>
+            <form method="get" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" class="mad-ci-export-form">
+                <input type="hidden" name="action" value="mad_ci_export_customers">
+                <input type="hidden" name="mad_ci_segment" value="<?php echo esc_attr( $segment ); ?>">
+                <?php wp_nonce_field( 'mad_ci_export_customers', '_wpnonce', true, true ); ?>
+                <button type="submit" class="button button-secondary">
+                    <?php
+                    echo $segment
+                        ? esc_html( sprintf( /* translators: %s: nombre del segmento RFM */ __( 'Exportar "%s" a CSV', 'mad-suite' ), $segment ) )
+                        : esc_html__( 'Exportar todos a CSV', 'mad-suite' );
+                    ?>
+                </button>
+                <span class="description"><?php esc_html_e( '(exporta todos los que coincidan con el segmento, sin el límite de "Mostrar" — listo para subir a Mailchimp, WhatsApp Business, etc.)', 'mad-suite' ); ?></span>
+            </form>
+
+            <?php if ( empty( $customers_list ) ) : ?>
+                <p><?php esc_html_e( 'Sin clientes en este segmento.', 'mad-suite' ); ?></p>
+            <?php else : ?>
+                <p class="description">
+                    <?php
+                    printf(
+                        /* translators: 1: clientes mostrados, 2: total de clientes en el segmento/filtro actual */
+                        esc_html__( 'Mostrando %1$s de %2$s clientes (ordenados por valor total) — ajusta "Mostrar" arriba para ver más, o usa "Exportar" para la lista completa.', 'mad-suite' ),
+                        esc_html( number_format_i18n( count( $customers_list ) ) ),
+                        esc_html( number_format_i18n( $customers_total ) )
+                    );
+                    ?>
+                </p>
+                <table class="widefat striped mad-ci-sortable">
+                    <thead>
+                        <tr>
+                            <th data-sort="text"><?php esc_html_e( 'Cliente', 'mad-suite' ); ?></th>
+                            <th data-sort="text"><?php esc_html_e( 'Segmento RFM', 'mad-suite' ); ?></th>
+                            <th data-sort="num"><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
+                            <th data-sort="num"><?php esc_html_e( 'Primera compra', 'mad-suite' ); ?></th>
+                            <th data-sort="num"><?php esc_html_e( 'Última compra', 'mad-suite' ); ?></th>
+                            <th data-sort="num"><?php esc_html_e( 'Valor total', 'mad-suite' ); ?></th>
+                            <th data-sort="num"><?php esc_html_e( 'Ticket promedio', 'mad-suite' ); ?></th>
+                            <th><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ( $customers_list as $c ) : ?>
+                            <tr>
+                                <td><?php echo esc_html( $c['customer_email'] ); ?></td>
+                                <td><?php echo esc_html( $c['rfm_segment'] ); ?></td>
+                                <td data-value="<?php echo esc_attr( $c['order_count'] ); ?>"><?php echo esc_html( $c['order_count'] ); ?></td>
+                                <td data-value="<?php echo esc_attr( strtotime( $c['first_order_date'] ) ); ?>"><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['first_order_date'] ) ) ); ?></td>
+                                <td data-value="<?php echo esc_attr( strtotime( $c['last_order_date'] ) ); ?>"><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['last_order_date'] ) ) ); ?></td>
+                                <td data-value="<?php echo esc_attr( $c['lifetime_value'] ); ?>"><?php echo wp_kses_post( wc_price( $c['lifetime_value'] ) ); ?></td>
+                                <td data-value="<?php echo esc_attr( $c['avg_order_value'] ); ?>"><?php echo wp_kses_post( wc_price( $c['avg_order_value'] ) ); ?></td>
+                                <td><a href="<?php echo esc_url( MAD_CI_Dashboard_Data::orders_list_url( $c['customer_email'] ) ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'Ver pedidos', 'mad-suite' ); ?></a></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </details>
     </div>
 
     <div class="mad-ci-section">
@@ -369,110 +502,4 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
         <?php endif; ?>
     </div>
 
-    <div class="mad-ci-section" id="mad-ci-clients">
-        <h2><?php esc_html_e( 'Clientes', 'mad-suite' ); ?></h2>
-        <p class="description">
-            <?php esc_html_e( 'Cada fila es un cliente único (agrupado por email de facturación, incluye compras como invitado). "Ver pedidos" abre su historial real en WooCommerce — ahí se ve el detalle de cada pedido con lo que compró.', 'mad-suite' ); ?>
-        </p>
-        <form method="get" class="mad-ci-segment-form">
-            <input type="hidden" name="page" value="<?php echo esc_attr( $this->menu_slug() ); ?>">
-            <input type="hidden" name="mad_ci_from" value="<?php echo esc_attr( $from ); ?>">
-            <input type="hidden" name="mad_ci_to" value="<?php echo esc_attr( $to ); ?>">
-            <input type="hidden" name="mad_ci_granularity" value="<?php echo esc_attr( $granularity ); ?>">
-            <?php if ( $compare ) : ?><input type="hidden" name="mad_ci_compare" value="1"><?php endif; ?>
-            <label><?php esc_html_e( 'Segmento RFM', 'mad-suite' ); ?>
-                <select name="mad_ci_segment">
-                    <option value=""><?php esc_html_e( 'Todos', 'mad-suite' ); ?></option>
-                    <?php foreach ( array_keys( $rfm_definitions ) as $label ) : ?>
-                        <option value="<?php echo esc_attr( $label ); ?>" <?php selected( $segment, $label ); ?>><?php echo esc_html( $label ); ?></option>
-                    <?php endforeach; ?>
-                </select>
-            </label>
-            <label><?php esc_html_e( 'Mostrar', 'mad-suite' ); ?>
-                <select name="mad_ci_customers_limit">
-                    <?php foreach ( $customers_limit_options as $n ) : ?>
-                        <option value="<?php echo esc_attr( $n ); ?>" <?php selected( $customers_limit, $n ); ?>>
-                            <?php echo esc_html( sprintf( /* translators: %s: cantidad de clientes */ __( '%s clientes', 'mad-suite' ), number_format_i18n( $n ) ) ); ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-            </label>
-            <button type="submit" class="button"><?php esc_html_e( 'Filtrar', 'mad-suite' ); ?></button>
-        </form>
-        <?php if ( empty( $customers_list ) ) : ?>
-            <p><?php esc_html_e( 'Sin clientes en este segmento.', 'mad-suite' ); ?></p>
-        <?php else : ?>
-            <p class="description">
-                <?php
-                printf(
-                    /* translators: 1: clientes mostrados, 2: total de clientes en el segmento/filtro actual */
-                    esc_html__( 'Mostrando %1$s de %2$s clientes (ordenados por valor total) — acota con el filtro de arriba para ver los demás.', 'mad-suite' ),
-                    esc_html( number_format_i18n( count( $customers_list ) ) ),
-                    esc_html( number_format_i18n( $customers_total ) )
-                );
-                ?>
-            </p>
-            <table class="widefat striped mad-ci-sortable">
-                <thead>
-                    <tr>
-                        <th data-sort="text"><?php esc_html_e( 'Cliente', 'mad-suite' ); ?></th>
-                        <th data-sort="text"><?php esc_html_e( 'Segmento RFM', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Primera compra', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Última compra', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Valor total', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Ticket promedio', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ( $customers_list as $c ) : ?>
-                        <tr>
-                            <td><?php echo esc_html( $c['customer_email'] ); ?></td>
-                            <td><?php echo esc_html( $c['rfm_segment'] ); ?></td>
-                            <td data-value="<?php echo esc_attr( $c['order_count'] ); ?>"><?php echo esc_html( $c['order_count'] ); ?></td>
-                            <td data-value="<?php echo esc_attr( strtotime( $c['first_order_date'] ) ); ?>"><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['first_order_date'] ) ) ); ?></td>
-                            <td data-value="<?php echo esc_attr( strtotime( $c['last_order_date'] ) ); ?>"><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['last_order_date'] ) ) ); ?></td>
-                            <td data-value="<?php echo esc_attr( $c['lifetime_value'] ); ?>"><?php echo wp_kses_post( wc_price( $c['lifetime_value'] ) ); ?></td>
-                            <td data-value="<?php echo esc_attr( $c['avg_order_value'] ); ?>"><?php echo wp_kses_post( wc_price( $c['avg_order_value'] ) ); ?></td>
-                            <td><a href="<?php echo esc_url( MAD_CI_Dashboard_Data::orders_list_url( $c['customer_email'] ) ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'Ver pedidos', 'mad-suite' ); ?></a></td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        <?php endif; ?>
-    </div>
-
-    <div class="mad-ci-section">
-        <h2><?php esc_html_e( 'Clientes en riesgo', 'mad-suite' ); ?></h2>
-        <p class="description"><?php esc_html_e( 'Clientes con 2+ pedidos que ya llevan sin comprar más del doble de su intervalo habitual.', 'mad-suite' ); ?></p>
-        <?php if ( empty( $at_risk ) ) : ?>
-            <p><?php esc_html_e( 'Ninguno por ahora.', 'mad-suite' ); ?></p>
-        <?php else : ?>
-            <table class="widefat striped mad-ci-sortable">
-                <thead>
-                    <tr>
-                        <th data-sort="text"><?php esc_html_e( 'Cliente', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Valor total', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Última compra', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Días sin comprar', 'mad-suite' ); ?></th>
-                        <th data-sort="num"><?php esc_html_e( 'Su intervalo habitual', 'mad-suite' ); ?></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ( $at_risk as $c ) : ?>
-                        <tr>
-                            <td><?php echo esc_html( $c['customer_email'] ); ?></td>
-                            <td data-value="<?php echo esc_attr( $c['order_count'] ); ?>"><?php echo esc_html( $c['order_count'] ); ?></td>
-                            <td data-value="<?php echo esc_attr( $c['lifetime_value'] ); ?>"><?php echo wp_kses_post( wc_price( $c['lifetime_value'] ) ); ?></td>
-                            <td data-value="<?php echo esc_attr( strtotime( $c['last_order_date'] ) ); ?>"><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['last_order_date'] ) ) ); ?></td>
-                            <td data-value="<?php echo esc_attr( $c['days_since_last_order'] ); ?>"><?php echo esc_html( (int) $c['days_since_last_order'] ); ?></td>
-                            <td data-value="<?php echo esc_attr( $c['avg_days_between_orders'] ); ?>"><?php echo esc_html( number_format_i18n( (float) $c['avg_days_between_orders'], 0 ) ); ?></td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        <?php endif; ?>
-    </div>
 </div>

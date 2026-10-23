@@ -16,6 +16,9 @@
         var gridClr = 'rgba(0,0,0,.06)';
         var textClr = '#3c434a';
 
+        // order más bajo = Chart.js lo dibuja ANTES = queda detrás. Las
+        // barras llevan order:1 y las líneas de comparación order:2+ para
+        // que siempre queden pintadas por encima, no debajo.
         var datasets = [
             {
                 type: 'bar',
@@ -26,6 +29,7 @@
                 borderSkipped: false,
                 maxBarThickness: 34,
                 stack: 'total',
+                order: 1,
             },
             {
                 type: 'bar',
@@ -36,24 +40,32 @@
                 borderSkipped: false,
                 maxBarThickness: 34,
                 stack: 'total',
+                order: 1,
             },
         ];
 
-        if ( madCIData.compare ) {
-            datasets.push( {
+        function lineDataset( label, data, color, order ) {
+            return {
                 type: 'line',
-                label: madCIData.compare.label,
-                data: madCIData.compare.previous,
-                borderColor: '#8c8f94',
-                backgroundColor: '#8c8f94',
+                label: label,
+                data: data,
+                borderColor: color,
+                backgroundColor: color,
                 borderDash: [ 6, 4 ],
                 borderWidth: 2,
                 pointRadius: 3,
-                pointBackgroundColor: '#8c8f94',
+                pointBackgroundColor: color,
                 fill: false,
                 tension: 0.25,
                 spanGaps: true,
-            } );
+                order: order,
+            };
+        }
+
+        if ( madCIData.compare ) {
+            datasets.push( lineDataset( madCIData.i18n.newPrev, madCIData.compare.new, '#a9c6ff', 2 ) );
+            datasets.push( lineDataset( madCIData.i18n.repeatPrev, madCIData.compare.repeat, '#ffbfa8', 3 ) );
+            datasets.push( lineDataset( madCIData.i18n.totalPrev, madCIData.compare.total, '#6b7280', 4 ) );
         }
 
         new Chart( canvas, {

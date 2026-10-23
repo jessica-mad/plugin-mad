@@ -295,24 +295,6 @@ class MAD_CI_Dashboard_Data {
         return admin_url( 'edit.php?post_type=shop_order&s=' . $search );
     }
 
-    /** Clientes con 2+ pedidos cuya ausencia ya duplica su propio intervalo habitual de compra. */
-    public function get_at_risk_customers( int $limit = 20 ): array {
-        global $wpdb;
-        $table = MAD_CI_DB_Schema::table_customers();
-
-        return $wpdb->get_results( $wpdb->prepare( "
-            SELECT customer_email, user_id, order_count, lifetime_value, last_order_date,
-                   avg_days_between_orders,
-                   DATEDIFF(NOW(), last_order_date) AS days_since_last_order
-            FROM {$table}
-            WHERE order_count > 1
-              AND avg_days_between_orders IS NOT NULL
-              AND DATEDIFF(NOW(), last_order_date) > (avg_days_between_orders * 2)
-            ORDER BY lifetime_value DESC
-            LIMIT %d
-        ", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-    }
-
     /**
      * Productos con mayor tasa de recompra (con un mínimo de compradores
      * para que no sea ruido). Para cada producto:

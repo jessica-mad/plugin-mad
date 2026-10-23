@@ -4,18 +4,12 @@
     --mad-ci-accent: #4f8cff;
 }
 
-.mad-ci-toolbar {
+.mad-ci-date-form {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
-    margin: 16px 0;
-}
-
-.mad-ci-date-form {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    gap: 8px 14px;
+    margin: 10px 0 6px;
 }
 
 .mad-ci-date-form label {
@@ -215,7 +209,49 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 10px;
-    margin: 10px 0 16px;
+    margin: 10px 0 10px;
+}
+
+.mad-ci-export-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 16px;
+}
+
+/* ── Avisos destacados (p. ej. "todavía no hay ritmo calculado") ───────── */
+
+.mad-ci-callout {
+    background: #f0f6ff;
+    border-left: 4px solid var(--mad-ci-accent);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 12px 0 16px;
+}
+
+.mad-ci-callout p {
+    margin: 0;
+}
+
+.mad-ci-callout--warning {
+    background: #fcf3e3;
+    border-left-color: #dba617;
+}
+
+/* ── Listado de clientes desplegable, dentro de RFM ──────────────────── */
+
+.mad-ci-clients-details {
+    margin-top: 18px;
+    border-top: 1px solid var(--mad-ci-border);
+    padding-top: 14px;
+}
+
+.mad-ci-clients-details summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 1.05em;
+    padding: 4px 0;
 }
 
 .mad-ci-rfm-card--campeones { border-left-color: #2e7d32; }
