@@ -1,3 +1,9 @@
+.mad-ci-wrap {
+    --mad-ci-border: #e2e4e7;
+    --mad-ci-muted: #646970;
+    --mad-ci-accent: #4f8cff;
+}
+
 .mad-ci-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -6,17 +12,41 @@
     margin: 16px 0;
 }
 
-.mad-ci-toolbar .button-group {
+.mad-ci-date-form {
     display: inline-flex;
-    border: 1px solid #c3c4c7;
-    border-radius: 4px;
-    overflow: hidden;
+    align-items: center;
+    gap: 8px;
 }
 
-.mad-ci-toolbar .button-group a {
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
+.mad-ci-date-form label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 500;
+}
+
+.mad-ci-date-form input[type="date"] {
+    border-radius: 6px;
+}
+
+.mad-ci-recalc-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid var(--mad-ci-border);
+    border-radius: 8px;
+    padding: 12px 16px;
+}
+
+.mad-ci-recalc-form select {
+    border-radius: 6px;
+}
+
+.mad-ci-recalc-form p.description {
+    flex-basis: 100%;
+    margin: 4px 0 0;
 }
 
 .mad-ci-kpis {
@@ -28,36 +58,46 @@
 
 .mad-ci-kpi {
     background: #fff;
-    border: 1px solid #dcdcde;
-    border-radius: 6px;
-    padding: 14px 16px;
+    border: 1px solid var(--mad-ci-border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
 }
 
 .mad-ci-kpi .value {
     display: block;
-    font-size: 1.6em;
+    font-size: 1.7em;
     font-weight: 700;
     line-height: 1.2;
+    font-variant-numeric: tabular-nums;
 }
 
 .mad-ci-kpi .label {
     display: block;
     font-size: 0.85em;
-    color: #646970;
+    color: var(--mad-ci-muted);
     margin-top: 4px;
 }
 
 .mad-ci-section {
     background: #fff;
-    border: 1px solid #dcdcde;
-    border-radius: 6px;
-    padding: 16px 20px;
+    border: 1px solid var(--mad-ci-border);
+    border-radius: 10px;
+    padding: 20px 22px;
     margin-bottom: 20px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
 }
 
 .mad-ci-section h2 {
     margin-top: 0;
+    font-size: 1.2em;
 }
+
+.mad-ci-chart-wrap {
+    margin-top: 12px;
+}
+
+/* ── Tabla de cohortes ─────────────────────────────────────────────────── */
 
 .mad-ci-cohort-table {
     border-collapse: collapse;
@@ -66,30 +106,112 @@
 
 .mad-ci-cohort-table th,
 .mad-ci-cohort-table td {
-    border: 1px solid #e2e2e2;
-    padding: 6px 10px;
+    border: 1px solid #eef0f2;
+    padding: 7px 11px;
     text-align: center;
+}
+
+.mad-ci-cohort-table thead th {
+    background: #f8f9fa;
+    font-weight: 600;
 }
 
 .mad-ci-cohort-table td.cell {
     color: #1d2327;
+    font-variant-numeric: tabular-nums;
 }
 
-.mad-ci-rfm-list {
+/* ── RFM ───────────────────────────────────────────────────────────────── */
+
+.mad-ci-rfm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.mad-ci-rfm-card {
+    border: 1px solid var(--mad-ci-border);
+    border-left-width: 4px;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #fcfcfd;
+}
+
+.mad-ci-rfm-card summary {
+    cursor: pointer;
     display: flex;
-    flex-wrap: wrap;
+    align-items: baseline;
     gap: 10px;
+    list-style: none;
 }
 
-.mad-ci-rfm-pill {
-    background: #f0f0f1;
-    border-radius: 999px;
-    padding: 6px 14px;
+.mad-ci-rfm-card summary::-webkit-details-marker { display: none; }
+
+.mad-ci-rfm-count {
+    font-size: 1.4em;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.mad-ci-rfm-label {
+    font-weight: 600;
+    color: #1d2327;
+}
+
+.mad-ci-rfm-desc {
+    margin: 10px 0 0;
+    color: var(--mad-ci-muted);
     font-size: 0.9em;
 }
 
-.mad-ci-rfm-pill strong {
-    margin-left: 6px;
+.mad-ci-rfm-emails-label {
+    margin: 10px 0 4px;
+    font-size: 0.85em;
+    font-weight: 600;
+}
+
+.mad-ci-rfm-emails {
+    width: 100%;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 0.82em;
+    border-radius: 6px;
+}
+
+.mad-ci-rfm-card--campeones { border-left-color: #2e7d32; }
+.mad-ci-rfm-card--nuevos-prometedores { border-left-color: #4f8cff; }
+.mad-ci-rfm-card--regulares { border-left-color: #8c8f94; }
+.mad-ci-rfm-card--en-riesgo { border-left-color: #dba617; }
+.mad-ci-rfm-card--perdidos { border-left-color: #c00; }
+
+/* ── Tablas ordenables ────────────────────────────────────────────────── */
+
+.mad-ci-sortable thead th.mad-ci-sort-header {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    padding-right: 18px;
+}
+
+.mad-ci-sortable thead th.mad-ci-sort-header:hover {
+    background: #f0f0f1;
+}
+
+.mad-ci-sortable thead th.mad-ci-sort-header::after {
+    content: "\2195";
+    position: absolute;
+    right: 6px;
+    opacity: .35;
+    font-size: .9em;
+}
+
+.mad-ci-sortable thead th.mad-ci-sort-header[data-dir="asc"]::after {
+    content: "\2191";
+    opacity: 1;
+}
+
+.mad-ci-sortable thead th.mad-ci-sort-header[data-dir="desc"]::after {
+    content: "\2193";
+    opacity: 1;
 }
 
 .mad-ci-notice-rate-limited {

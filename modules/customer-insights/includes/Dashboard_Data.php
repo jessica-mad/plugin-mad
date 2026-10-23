@@ -10,11 +10,19 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_CI_Dashboard_Data {
 
-    /** @var string 'all' | 'public' | 'professional' */
-    private $segment;
-
-    public function __construct( string $segment = 'all' ) {
-        $this->segment = in_array( $segment, [ 'all', 'public', 'professional' ], true ) ? $segment : 'all';
+    /**
+     * Definición de cada segmento RFM — debe coincidir con las reglas de
+     * MAD_CI_Stats_Calculator::rfm_segment_label(). Se usa para mostrar la
+     * explicación de cada uno en el dashboard.
+     */
+    public static function rfm_segment_definitions(): array {
+        return [
+            __( 'Campeones', 'mad-suite' ) => __( 'Compraron hace poco (recencia alta) y compran seguido (frecuencia alta). Los mejores clientes — vale la pena cuidarlos, no recuperarlos.', 'mad-suite' ),
+            __( 'Nuevos prometedores', 'mad-suite' ) => __( 'Compraron hace poco pero todavía no acumulan muchos pedidos. Candidatos a fidelizar antes de que se enfríen.', 'mad-suite' ),
+            __( 'Regulares', 'mad-suite' ) => __( 'Ni recencia ni frecuencia están en los extremos — compran con cierta normalidad, sin destacar ni preocupar.', 'mad-suite' ),
+            __( 'En riesgo', 'mad-suite' ) => __( 'Antes compraban seguido (frecuencia alta) pero hace tiempo que no vuelven (recencia baja). Todavía recuperables — son los primeros candidatos a una campaña de reactivación.', 'mad-suite' ),
+            __( 'Perdidos', 'mad-suite' ) => __( 'Ni compran seguido ni lo hacen hace poco — recencia y frecuencia bajas. Los más fríos: recuperarlos cuesta más, pero es la lista para una campaña de "te echamos de menos".', 'mad-suite' ),
+        ];
     }
 
     /**
@@ -26,7 +34,6 @@ class MAD_CI_Dashboard_Data {
     public function get_customer_kpis(): array {
         global $wpdb;
         $table = MAD_CI_DB_Schema::table_customers();
-        $where = $this->customers_where();
 
         $row = $wpdb->get_row( "
             SELECT
@@ -37,7 +44,6 @@ class MAD_CI_Dashboard_Data {
                 AVG(avg_days_between_orders)                     AS avg_frequency_days,
                 AVG(days_to_second_order)                        AS avg_days_to_second_order
             FROM {$table}
-            WHERE {$where}
         ", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
         $total  = (int) ( $row['total_customers'] ?? 0 );
@@ -64,8 +70,8 @@ class MAD_CI_Dashboard_Data {
                 SUM(avg_login_to_order_seconds * (new_customers + repeat_customers)) AS weighted_sum,
                 SUM(CASE WHEN avg_login_to_order_seconds IS NOT NULL THEN (new_customers + repeat_customers) ELSE 0 END) AS weight
             FROM {$table}
-            WHERE segment = %s AND month BETWEEN %s AND %s
-        ", $this->segment, $from, $to ), ARRAY_A );
+            WHERE month BETWEEN %s AND %s
+        ", $from, $to ), ARRAY_A );
 
         if ( empty( $row['weight'] ) ) return null;
         return round( ( (float) $row['weighted_sum'] ) / ( (int) $row['weight'] ) / DAY_IN_SECONDS, 2 ); // en días
@@ -79,9 +85,9 @@ class MAD_CI_Dashboard_Data {
         return $wpdb->get_results( $wpdb->prepare( "
             SELECT month, new_customers, repeat_customers, new_revenue, repeat_revenue
             FROM {$table}
-            WHERE segment = %s AND month BETWEEN %s AND %s
+            WHERE month BETWEEN %s AND %s
             ORDER BY month ASC
-        ", $this->segment, $from, $to ), ARRAY_A );
+        ", $from, $to ), ARRAY_A );
     }
 
     /**
@@ -96,10 +102,9 @@ class MAD_CI_Dashboard_Data {
 
         $cohort_months = $wpdb->get_col( $wpdb->prepare( "
             SELECT DISTINCT cohort_month FROM {$table}
-            WHERE segment = %s
             ORDER BY cohort_month DESC
             LIMIT %d
-        ", $this->segment, $max_cohorts ) );
+        ", $max_cohorts ) );
 
         if ( empty( $cohort_months ) ) return [ 'cohorts' => [], 'max_period' => 0 ];
 
@@ -107,9 +112,9 @@ class MAD_CI_Dashboard_Data {
         $rows = $wpdb->get_results( $wpdb->prepare( "
             SELECT cohort_month, period_offset, cohort_size, retained_count
             FROM {$table}
-            WHERE segment = %s AND period_offset <= %d AND cohort_month IN ({$placeholders})
+            WHERE period_offset <= %d AND cohort_month IN ({$placeholders})
             ORDER BY cohort_month ASC, period_offset ASC
-        ", array_merge( [ $this->segment, $max_periods ], $cohort_months ) ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+        ", array_merge( [ $max_periods ], $cohort_months ) ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
         $cohorts = [];
         foreach ( $rows as $row ) {
@@ -132,12 +137,10 @@ class MAD_CI_Dashboard_Data {
     public function get_rfm_breakdown(): array {
         global $wpdb;
         $table = MAD_CI_DB_Schema::table_customers();
-        $where = $this->customers_where();
 
         $rows = $wpdb->get_results( "
             SELECT rfm_segment, COUNT(*) AS total
             FROM {$table}
-            WHERE {$where}
             GROUP BY rfm_segment
             ORDER BY total DESC
         ", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
@@ -149,15 +152,26 @@ class MAD_CI_Dashboard_Data {
         return $out;
     }
 
+    /** Emails de los clientes de un segmento RFM — para campañas de recuperación/fidelización. */
+    public function get_customers_in_segment( string $segment, int $limit = 500 ): array {
+        global $wpdb;
+        $table = MAD_CI_DB_Schema::table_customers();
+
+        return $wpdb->get_col( $wpdb->prepare( "
+            SELECT customer_email FROM {$table}
+            WHERE rfm_segment = %s
+            ORDER BY lifetime_value DESC
+            LIMIT %d
+        ", $segment, $limit ) );
+    }
+
     public function get_top_customers( int $limit = 10 ): array {
         global $wpdb;
         $table = MAD_CI_DB_Schema::table_customers();
-        $where = $this->customers_where();
 
         return $wpdb->get_results( $wpdb->prepare( "
             SELECT customer_email, user_id, order_count, lifetime_value, last_order_date
             FROM {$table}
-            WHERE {$where}
             ORDER BY lifetime_value DESC
             LIMIT %d
         ", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
@@ -167,15 +181,13 @@ class MAD_CI_Dashboard_Data {
     public function get_at_risk_customers( int $limit = 20 ): array {
         global $wpdb;
         $table = MAD_CI_DB_Schema::table_customers();
-        $where = $this->customers_where();
 
         return $wpdb->get_results( $wpdb->prepare( "
             SELECT customer_email, user_id, order_count, lifetime_value, last_order_date,
                    avg_days_between_orders,
                    DATEDIFF(NOW(), last_order_date) AS days_since_last_order
             FROM {$table}
-            WHERE {$where}
-              AND order_count > 1
+            WHERE order_count > 1
               AND avg_days_between_orders IS NOT NULL
               AND DATEDIFF(NOW(), last_order_date) > (avg_days_between_orders * 2)
             ORDER BY lifetime_value DESC
@@ -183,7 +195,16 @@ class MAD_CI_Dashboard_Data {
         ", $limit ), ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
     }
 
-    /** Productos con mayor tasa de recompra (con un mínimo de compradores para que no sea ruido). */
+    /**
+     * Productos con mayor tasa de recompra (con un mínimo de compradores
+     * para que no sea ruido). Para cada producto:
+     * - buyers_count: cuántos clientes distintos lo compraron alguna vez.
+     * - repeat_buyers_count: de esos, cuántos lo compraron en 2+ pedidos distintos.
+     * - repurchase_rate: % de compradores que repitieron (repeat_buyers_count / buyers_count).
+     * - total_purchases: nº total de veces que se compró (compradores únicos + sus recompras).
+     * - avg_purchases_per_buyer: en promedio, cuántas veces lo compra quien lo compra.
+     * - share_repeat_purchases: % de todas esas compras que fueron una recompra (no la primera vez).
+     */
     public function get_top_repurchased_products( int $limit = 15, int $min_buyers = 5 ): array {
         global $wpdb;
         $table = MAD_CI_DB_Schema::table_product_repurchase();
@@ -191,13 +212,21 @@ class MAD_CI_Dashboard_Data {
         $rows = $wpdb->get_results( $wpdb->prepare( "
             SELECT product_id, buyers_count, repeat_buyers_count, repeat_orders_count, repurchase_rate
             FROM {$table}
-            WHERE segment = %s AND buyers_count >= %d
+            WHERE buyers_count >= %d
             ORDER BY repurchase_rate DESC, buyers_count DESC
             LIMIT %d
-        ", $this->segment, $min_buyers, $limit ), ARRAY_A );
+        ", $min_buyers, $limit ), ARRAY_A );
 
         foreach ( $rows as &$row ) {
-            $row['product_name'] = get_the_title( $row['product_id'] ) ?: ( '#' . $row['product_id'] );
+            $row['product_name']    = get_the_title( $row['product_id'] ) ?: ( '#' . $row['product_id'] );
+            $total_purchases        = (int) $row['buyers_count'] + (int) $row['repeat_orders_count'];
+            $row['total_purchases'] = $total_purchases;
+            $row['avg_purchases_per_buyer'] = $row['buyers_count'] > 0
+                ? round( $total_purchases / $row['buyers_count'], 2 )
+                : 0.0;
+            $row['share_repeat_purchases'] = $total_purchases > 0
+                ? round( $row['repeat_orders_count'] / $total_purchases * 100, 1 )
+                : 0.0;
         }
         unset( $row );
 
@@ -207,11 +236,5 @@ class MAD_CI_Dashboard_Data {
     public function get_last_recalculated(): ?int {
         $ts = get_option( 'mad_ci_last_recalculated' );
         return $ts ? (int) $ts : null;
-    }
-
-    private function customers_where(): string {
-        if ( 'public' === $this->segment )       return 'is_professional = 0';
-        if ( 'professional' === $this->segment ) return 'is_professional = 1';
-        return '1=1';
     }
 }

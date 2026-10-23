@@ -15,15 +15,13 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class MAD_CI_Stats_Calculator {
 
     public function recalculate(): void {
-        $professional_roles = $this->get_professional_role_slugs();
-
         $customers = $this->gather_customer_orders();
         if ( empty( $customers ) ) {
             $this->truncate_all();
             return;
         }
 
-        $customer_rows = $this->build_customer_stats( $customers, $professional_roles );
+        $customer_rows = $this->build_customer_stats( $customers );
         $this->add_rfm_scores( $customer_rows );
 
         [ $monthly, $cohort_periods, $cohort_sizes ] = $this->build_monthly_and_cohorts( $customers, $customer_rows );
@@ -42,7 +40,11 @@ class MAD_CI_Stats_Calculator {
 
     /**
      * @return array<string, array{user_id:int, orders:array<int, array{date:DateTime,total:float,product_ids:int[],login_to_order:mixed}>}>
-     *         Indexado por email de facturación en minúsculas.
+     *         Indexado por email de facturación en minúsculas. El mismo
+     *         email agrupa pedidos de invitado y de cuenta registrada por
+     *         igual — si alguien compró primero como invitado y luego creó
+     *         cuenta (o viceversa), cuenta como el mismo cliente mientras
+     *         use el mismo email.
      */
     private function gather_customer_orders(): array {
         global $wpdb;
@@ -73,21 +75,8 @@ class MAD_CI_Stats_Calculator {
 
     // ── Paso 2: estadísticas por cliente ──────────────────────────────────────
 
-    private function get_professional_role_slugs(): array {
-        if ( ! function_exists( 'mad_quotes_get_settings' ) ) return [];
-        $settings = mad_quotes_get_settings();
-        return array_values( array_filter( (array) ( $settings['store_manager_roles'] ?? [] ) ) );
-    }
-
-    private function is_user_professional( int $user_id, array $professional_roles ): bool {
-        if ( ! $user_id || empty( $professional_roles ) ) return false;
-        $user = get_userdata( $user_id );
-        if ( ! $user ) return false;
-        return (bool) array_intersect( $professional_roles, (array) $user->roles );
-    }
-
     /** @return array<string, array<string,mixed>> Indexado por email. */
-    private function build_customer_stats( array $customers, array $professional_roles ): array {
+    private function build_customer_stats( array $customers ): array {
         $rows = [];
 
         foreach ( $customers as $email => $data ) {
@@ -122,7 +111,6 @@ class MAD_CI_Stats_Calculator {
             $rows[ $email ] = [
                 'customer_email'          => $email,
                 'user_id'                 => (int) $data['user_id'],
-                'is_professional'         => $this->is_user_professional( (int) $data['user_id'], $professional_roles ) ? 1 : 0,
                 'first_order_date'        => $first->format( 'Y-m-d H:i:s' ),
                 'last_order_date'         => $last->format( 'Y-m-d H:i:s' ),
                 'order_count'             => $count,
@@ -188,6 +176,12 @@ class MAD_CI_Stats_Calculator {
         return $scores;
     }
 
+    /**
+     * Segmento RFM a partir de los puntajes de recencia y frecuencia (1–5
+     * cada uno, por quintiles de todos los clientes). Ver RFM_SEGMENTS en
+     * Dashboard_Data.php para las descripciones que se muestran en el
+     * dashboard — deben coincidir con estas reglas.
+     */
     private function rfm_segment_label( int $recency, int $frequency ): string {
         if ( $recency >= 4 && $frequency >= 4 ) return __( 'Campeones', 'mad-suite' );
         if ( $recency >= 4 && $frequency < 4 )  return __( 'Nuevos prometedores', 'mad-suite' );
@@ -213,56 +207,43 @@ class MAD_CI_Stats_Calculator {
         foreach ( $customers as $email => $data ) {
             if ( ! isset( $customer_rows[ $email ] ) ) continue;
 
-            $is_pro   = (bool) $customer_rows[ $email ]['is_professional'];
-            $segments = [ 'all', $is_pro ? 'professional' : 'public' ];
-
             $orders = $data['orders'];
             usort( $orders, fn( $a, $b ) => $a['date'] <=> $b['date'] );
             $cohort_month = $orders[0]['date']->format( 'Y-m-01' );
 
-            foreach ( $segments as $seg ) {
-                $ck = $cohort_month . '|' . $seg;
-                $cohort_sizes[ $ck ]['cohort_month'] = $cohort_month;
-                $cohort_sizes[ $ck ]['segment']      = $seg;
-                $cohort_sizes[ $ck ]['customers'][ $email ] = true;
-            }
+            $cohort_sizes[ $cohort_month ]['cohort_month'] = $cohort_month;
+            $cohort_sizes[ $cohort_month ]['customers'][ $email ] = true;
 
             foreach ( $orders as $i => $order ) {
                 $month_key    = $order['date']->format( 'Y-m-01' );
                 $is_new_order = ( 0 === $i );
                 $has_login    = '' !== $order['login_to_order'] && is_numeric( $order['login_to_order'] );
 
-                foreach ( $segments as $seg ) {
-                    $mk = $month_key . '|' . $seg;
-                    if ( ! isset( $monthly[ $mk ] ) ) {
-                        $monthly[ $mk ] = [
-                            'month' => $month_key, 'segment' => $seg,
-                            'new_customers' => 0, 'repeat_customers' => 0,
-                            'new_revenue' => 0.0, 'repeat_revenue' => 0.0,
-                            'login_seconds_sum' => 0, 'login_seconds_count' => 0,
-                        ];
-                    }
-                    if ( $is_new_order ) {
-                        $monthly[ $mk ]['new_customers']++;
-                        $monthly[ $mk ]['new_revenue'] += $order['total'];
-                    } else {
-                        $monthly[ $mk ]['repeat_customers']++;
-                        $monthly[ $mk ]['repeat_revenue'] += $order['total'];
-                    }
-                    if ( $has_login ) {
-                        $monthly[ $mk ]['login_seconds_sum']   += (int) $order['login_to_order'];
-                        $monthly[ $mk ]['login_seconds_count']++;
-                    }
+                if ( ! isset( $monthly[ $month_key ] ) ) {
+                    $monthly[ $month_key ] = [
+                        'month' => $month_key,
+                        'new_customers' => 0, 'repeat_customers' => 0,
+                        'new_revenue' => 0.0, 'repeat_revenue' => 0.0,
+                        'login_seconds_sum' => 0, 'login_seconds_count' => 0,
+                    ];
+                }
+                if ( $is_new_order ) {
+                    $monthly[ $month_key ]['new_customers']++;
+                    $monthly[ $month_key ]['new_revenue'] += $order['total'];
+                } else {
+                    $monthly[ $month_key ]['repeat_customers']++;
+                    $monthly[ $month_key ]['repeat_revenue'] += $order['total'];
+                }
+                if ( $has_login ) {
+                    $monthly[ $month_key ]['login_seconds_sum']   += (int) $order['login_to_order'];
+                    $monthly[ $month_key ]['login_seconds_count']++;
                 }
 
                 $offset = $this->months_between( $cohort_month, $month_key );
-                foreach ( $segments as $seg ) {
-                    $pk = $cohort_month . '|' . $offset . '|' . $seg;
-                    $cohort_periods[ $pk ]['cohort_month']  = $cohort_month;
-                    $cohort_periods[ $pk ]['period_offset'] = $offset;
-                    $cohort_periods[ $pk ]['segment']       = $seg;
-                    $cohort_periods[ $pk ]['customers'][ $email ] = true;
-                }
+                $pk     = $cohort_month . '|' . $offset;
+                $cohort_periods[ $pk ]['cohort_month']  = $cohort_month;
+                $cohort_periods[ $pk ]['period_offset'] = $offset;
+                $cohort_periods[ $pk ]['customers'][ $email ] = true;
             }
         }
 
@@ -272,13 +253,10 @@ class MAD_CI_Stats_Calculator {
     // ── Paso 4: productos con mayor tasa de recompra ──────────────────────────
 
     private function build_product_repurchase( array $customers, array $customer_rows ): array {
-        $product_buyers = []; // "{product_id}|{segment}" => ['product_id'=>, 'segment'=>, 'buyers'=>[email => veces_comprado]]
+        $product_buyers = []; // product_id => ['buyers' => [email => veces_comprado]]
 
         foreach ( $customers as $email => $data ) {
             if ( ! isset( $customer_rows[ $email ] ) ) continue;
-
-            $is_pro   = (bool) $customer_rows[ $email ]['is_professional'];
-            $segments = [ 'all', $is_pro ? 'professional' : 'public' ];
 
             $times_per_product = [];
             foreach ( $data['orders'] as $order ) {
@@ -288,13 +266,10 @@ class MAD_CI_Stats_Calculator {
             }
 
             foreach ( $times_per_product as $pid => $times ) {
-                foreach ( $segments as $seg ) {
-                    $key = $pid . '|' . $seg;
-                    if ( ! isset( $product_buyers[ $key ] ) ) {
-                        $product_buyers[ $key ] = [ 'product_id' => $pid, 'segment' => $seg, 'buyers' => [] ];
-                    }
-                    $product_buyers[ $key ]['buyers'][ $email ] = $times;
+                if ( ! isset( $product_buyers[ $pid ] ) ) {
+                    $product_buyers[ $pid ] = [ 'product_id' => $pid, 'buyers' => [] ];
                 }
+                $product_buyers[ $pid ]['buyers'][ $email ] = $times;
             }
         }
 
@@ -307,7 +282,6 @@ class MAD_CI_Stats_Calculator {
 
             $rows[] = [
                 'product_id'          => $info['product_id'],
-                'segment'             => $info['segment'],
                 'buyers_count'        => $buyers_count,
                 'repeat_buyers_count' => $repeat_buyers_count,
                 'repeat_orders_count' => $repeat_orders_count,
@@ -341,7 +315,6 @@ class MAD_CI_Stats_Calculator {
             $wpdb->insert( $table, [
                 'customer_email'          => $r['customer_email'],
                 'user_id'                 => $r['user_id'],
-                'is_professional'         => $r['is_professional'],
                 'first_order_date'        => $r['first_order_date'],
                 'last_order_date'         => $r['last_order_date'],
                 'order_count'             => $r['order_count'],
@@ -369,7 +342,6 @@ class MAD_CI_Stats_Calculator {
 
             $wpdb->insert( $table, [
                 'month'                      => $row['month'],
-                'segment'                    => $row['segment'],
                 'new_customers'              => $row['new_customers'],
                 'repeat_customers'           => $row['repeat_customers'],
                 'new_revenue'                => round( $row['new_revenue'], 2 ),
@@ -385,16 +357,14 @@ class MAD_CI_Stats_Calculator {
 
         $sizes = [];
         foreach ( $cohort_sizes as $info ) {
-            $sizes[ $info['cohort_month'] . '|' . $info['segment'] ] = count( $info['customers'] );
+            $sizes[ $info['cohort_month'] ] = count( $info['customers'] );
         }
 
         foreach ( $cohort_periods as $info ) {
-            $size_key = $info['cohort_month'] . '|' . $info['segment'];
             $wpdb->insert( $table, [
                 'cohort_month'   => $info['cohort_month'],
                 'period_offset'  => $info['period_offset'],
-                'segment'        => $info['segment'],
-                'cohort_size'    => $sizes[ $size_key ] ?? 0,
+                'cohort_size'    => $sizes[ $info['cohort_month'] ] ?? 0,
                 'retained_count' => count( $info['customers'] ),
             ] );
         }

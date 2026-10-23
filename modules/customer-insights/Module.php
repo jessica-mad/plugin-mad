@@ -136,15 +136,19 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             wp_die( esc_html__( 'No tienes permisos suficientes.', 'mad-suite' ) );
         }
 
-        $segment = $this->get_current_segment();
         [ $from, $to ] = $this->get_current_date_range();
 
-        $data           = new MAD_CI_Dashboard_Data( $segment );
-        $kpis           = $data->get_customer_kpis();
-        $login_avg_days = $data->get_login_to_purchase_avg( $from, $to );
-        $monthly        = $data->get_monthly_series( $from, $to );
-        $cohort_grid    = $data->get_cohort_grid();
-        $rfm_breakdown  = $data->get_rfm_breakdown();
+        $data              = new MAD_CI_Dashboard_Data();
+        $kpis              = $data->get_customer_kpis();
+        $login_avg_days    = $data->get_login_to_purchase_avg( $from, $to );
+        $monthly           = $data->get_monthly_series( $from, $to );
+        $cohort_grid       = $data->get_cohort_grid();
+        $rfm_breakdown     = $data->get_rfm_breakdown();
+        $rfm_definitions   = MAD_CI_Dashboard_Data::rfm_segment_definitions();
+        $rfm_customers     = [];
+        foreach ( array_keys( $rfm_breakdown ) as $seg ) {
+            $rfm_customers[ $seg ] = $data->get_customers_in_segment( $seg );
+        }
         $top_customers  = $data->get_top_customers();
         $at_risk        = $data->get_at_risk_customers();
         $top_products   = $data->get_top_repurchased_products();
@@ -159,7 +163,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         wp_add_inline_script( 'mad-ci-dashboard', 'window.madCIData = ' . wp_json_encode( [
             'monthly' => array_map( static function ( $row ) {
                 return [
-                    'month'            => $row['month'],
+                    'month'            => wp_date( 'M Y', strtotime( $row['month'] ) ),
                     'new_customers'    => (int) $row['new_customers'],
                     'repeat_customers' => (int) $row['repeat_customers'],
                 ];
@@ -171,15 +175,6 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         ] ) . ';', 'before' );
 
         include __DIR__ . '/views/dashboard.php';
-    }
-
-    private function get_current_segment(): string {
-        if ( isset( $_REQUEST['mad_ci_segment'] ) && in_array( $_REQUEST['mad_ci_segment'], [ 'all', 'public', 'professional' ], true ) ) {
-            set_user_setting( 'mad_ci_segment', $_REQUEST['mad_ci_segment'] );
-            return $_REQUEST['mad_ci_segment'];
-        }
-        $stored = (string) get_user_setting( 'mad_ci_segment', 'all' );
-        return in_array( $stored, [ 'all', 'public', 'professional' ], true ) ? $stored : 'all';
     }
 
     /** @return array{0:string,1:string} [from, to] en formato Y-m-d, por defecto los últimos 12 meses. */
@@ -199,9 +194,8 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
     private function current_dashboard_query_args(): array {
         [ $from, $to ] = $this->get_current_date_range();
         return [
-            'mad_ci_segment' => $this->get_current_segment(),
-            'mad_ci_from'    => $from,
-            'mad_ci_to'      => $to,
+            'mad_ci_from' => $from,
+            'mad_ci_to'   => $to,
         ];
     }
 };

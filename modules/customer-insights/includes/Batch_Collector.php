@@ -1,6 +1,6 @@
 <?php
 /**
- * Recolecta los pedidos pagados en lotes pequeños, en segundo plano (vía
+ * Recolecta los pedidos completados en lotes pequeños, en segundo plano (vía
  * Action Scheduler, la librería que ya trae WooCommerce), en vez de
  * cargarlos todos de una sola vez. Para una tienda con muchos pedidos
  * existentes, instanciar todos los WC_Order de golpe en una sola petición
@@ -82,15 +82,17 @@ class MAD_CI_Batch_Collector {
     }
 
     /**
-     * Vuelca un lote de pedidos pagados a la tabla scratch y, en modo
-     * background, agenda el siguiente paso. Devuelve cuántos pedidos trajo
-     * este lote (para que run_sync() sepa cuándo parar).
+     * Vuelca un lote de pedidos COMPLETADOS a la tabla scratch (no en
+     * proceso, no en espera, no cancelados ni reembolsados — solo lo que
+     * realmente se llegó a entregar/cerrar) y, en modo background, agenda
+     * el siguiente paso. Devuelve cuántos pedidos trajo este lote (para
+     * que run_sync() sepa cuándo parar).
      */
     public function process_batch( int $page, bool $schedule_next = true ): int {
         $status = self::get_status();
 
         $args = [
-            'status'  => wc_get_is_paid_statuses(),
+            'status'  => [ 'completed' ],
             'limit'   => self::BATCH_SIZE,
             'page'    => $page,
             'orderby' => 'date',

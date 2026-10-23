@@ -1,21 +1,16 @@
 <?php
 /**
  * Vista del dashboard. Variables disponibles (ver Module::render_settings_page()):
- * $segment, $from, $to, $kpis, $login_avg_days, $monthly, $cohort_grid,
- * $rfm_breakdown, $top_customers, $at_risk, $top_products, $last_updated,
- * $recalc_status, $recalc_stuck, $recalc_action_url, $recalc_nonce_field,
- * $recalc_hidden_args. $this = la instancia del módulo (para menu_slug()).
+ * $from, $to, $kpis, $login_avg_days, $monthly, $cohort_grid,
+ * $rfm_breakdown, $rfm_definitions, $rfm_customers, $top_customers,
+ * $at_risk, $top_products, $last_updated, $recalc_status, $recalc_stuck,
+ * $recalc_action_url, $recalc_nonce_field, $recalc_hidden_args.
+ * $this = la instancia del módulo (para menu_slug()).
  *
  * @package MAD_Suite/Customer_Insights
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
-
-$segment_labels = [
-    'all'          => __( 'Todos', 'mad-suite' ),
-    'public'       => __( 'Público', 'mad-suite' ),
-    'professional' => __( 'Profesionales', 'mad-suite' ),
-];
 
 $window_labels = [
     0  => __( 'Todo el histórico', 'mad-suite' ),
@@ -24,11 +19,11 @@ $window_labels = [
     12 => __( 'Últimos 12 meses', 'mad-suite' ),
 ];
 
-$base_url   = remove_query_arg( [ 'mad_ci_segment', 'mad_ci_notice' ] );
 $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ], true );
 ?>
-<div class="wrap">
+<div class="wrap mad-ci-wrap">
     <h1><?php esc_html_e( 'Analítica de Clientes', 'mad-suite' ); ?></h1>
+    <p class="description"><?php esc_html_e( 'Solo se cuentan pedidos completados — en proceso, en espera o cancelados no entran en estos números.', 'mad-suite' ); ?></p>
 
     <?php if ( isset( $_GET['mad_ci_notice'] ) ) : ?>
         <?php if ( 'started' === $_GET['mad_ci_notice'] ) : ?>
@@ -117,18 +112,8 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
     </form>
 
     <div class="mad-ci-toolbar">
-        <span class="button-group">
-            <?php foreach ( $segment_labels as $key => $label ) : ?>
-                <a href="<?php echo esc_url( add_query_arg( 'mad_ci_segment', $key, $base_url ) ); ?>"
-                   class="button<?php echo $segment === $key ? ' button-primary' : ''; ?>">
-                    <?php echo esc_html( $label ); ?>
-                </a>
-            <?php endforeach; ?>
-        </span>
-
-        <form method="get" style="display:inline-flex;align-items:center;gap:6px;">
+        <form method="get" class="mad-ci-date-form">
             <input type="hidden" name="page" value="<?php echo esc_attr( $this->menu_slug() ); ?>">
-            <input type="hidden" name="mad_ci_segment" value="<?php echo esc_attr( $segment ); ?>">
             <label><?php esc_html_e( 'Desde', 'mad-suite' ); ?>
                 <input type="date" name="mad_ci_from" value="<?php echo esc_attr( $from ); ?>">
             </label>
@@ -193,10 +178,13 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
 
     <div class="mad-ci-section">
         <h2><?php esc_html_e( 'Clientes nuevos vs. recurrentes', 'mad-suite' ); ?></h2>
+        <p class="description"><?php esc_html_e( 'Cada mes, cuántos pedidos vinieron de un cliente que compraba por primera vez frente a uno que ya había comprado antes.', 'mad-suite' ); ?></p>
         <?php if ( empty( $monthly ) ) : ?>
             <p><?php esc_html_e( 'Sin datos en este rango de fechas.', 'mad-suite' ); ?></p>
         <?php else : ?>
-            <canvas id="mad-ci-monthly-chart" height="90"></canvas>
+            <div class="mad-ci-chart-wrap">
+                <canvas id="mad-ci-monthly-chart" height="90"></canvas>
+            </div>
         <?php endif; ?>
     </div>
 
@@ -246,13 +234,24 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
 
     <div class="mad-ci-section">
         <h2><?php esc_html_e( 'Segmentación RFM', 'mad-suite' ); ?></h2>
-        <p class="description"><?php esc_html_e( 'Recencia, Frecuencia y Valor monetario — en qué grupo cae cada cliente.', 'mad-suite' ); ?></p>
+        <p class="description"><?php esc_html_e( 'Recencia (hace cuánto compró), Frecuencia (cuántas veces) y Valor monetario (cuánto gastó) — cada cliente cae en uno de estos grupos. Pulsa uno para ver los emails y poder armar una campaña.', 'mad-suite' ); ?></p>
         <?php if ( empty( $rfm_breakdown ) ) : ?>
             <p><?php esc_html_e( 'Sin datos todavía.', 'mad-suite' ); ?></p>
         <?php else : ?>
-            <div class="mad-ci-rfm-list">
-                <?php foreach ( $rfm_breakdown as $label => $count ) : ?>
-                    <span class="mad-ci-rfm-pill"><?php echo esc_html( $label ); ?><strong><?php echo esc_html( number_format_i18n( $count ) ); ?></strong></span>
+            <div class="mad-ci-rfm-grid">
+                <?php foreach ( $rfm_definitions as $label => $description ) : ?>
+                    <?php $count = $rfm_breakdown[ $label ] ?? 0; ?>
+                    <details class="mad-ci-rfm-card mad-ci-rfm-card--<?php echo esc_attr( sanitize_title( $label ) ); ?>">
+                        <summary>
+                            <span class="mad-ci-rfm-count"><?php echo esc_html( number_format_i18n( $count ) ); ?></span>
+                            <span class="mad-ci-rfm-label"><?php echo esc_html( $label ); ?></span>
+                        </summary>
+                        <p class="mad-ci-rfm-desc"><?php echo esc_html( $description ); ?></p>
+                        <?php if ( $count > 0 && ! empty( $rfm_customers[ $label ] ) ) : ?>
+                            <p class="mad-ci-rfm-emails-label"><?php esc_html_e( 'Emails (orden por valor total de compra):', 'mad-suite' ); ?></p>
+                            <textarea readonly rows="4" class="mad-ci-rfm-emails" onclick="this.select();"><?php echo esc_textarea( implode( "\n", $rfm_customers[ $label ] ) ); ?></textarea>
+                        <?php endif; ?>
+                    </details>
                 <?php endforeach; ?>
             </div>
         <?php endif; ?>
@@ -260,30 +259,39 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
 
     <div class="mad-ci-section">
         <h2><?php esc_html_e( 'Productos con mayor tasa de recompra', 'mad-suite' ); ?></h2>
-        <p class="description"><?php esc_html_e( 'De los clientes que compraron el producto, qué % volvió a comprarlo (mínimo 5 compradores).', 'mad-suite' ); ?></p>
+        <p class="description"><?php esc_html_e( 'Mínimo 5 compradores distintos, para que no se cuelen productos con muy pocas ventas. Pulsa una columna para ordenar.', 'mad-suite' ); ?></p>
         <?php if ( empty( $top_products ) ) : ?>
             <p><?php esc_html_e( 'Sin datos todavía.', 'mad-suite' ); ?></p>
         <?php else : ?>
-            <table class="widefat striped">
+            <table class="widefat striped mad-ci-sortable">
                 <thead>
                     <tr>
-                        <th><?php esc_html_e( 'Producto', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Compradores', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Recompraron', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Tasa de recompra', 'mad-suite' ); ?></th>
+                        <th data-sort="text"><?php esc_html_e( 'Producto', 'mad-suite' ); ?></th>
+                        <th data-sort="num" title="<?php esc_attr_e( 'Clientes distintos que compraron este producto alguna vez', 'mad-suite' ); ?>"><?php esc_html_e( 'Compradores únicos', 'mad-suite' ); ?></th>
+                        <th data-sort="num" title="<?php esc_attr_e( 'De esos compradores, cuántos lo pidieron en 2 pedidos distintos o más', 'mad-suite' ); ?>"><?php esc_html_e( 'Lo recompraron', 'mad-suite' ); ?></th>
+                        <th data-sort="num" title="<?php esc_attr_e( 'Recompraron ÷ compradores únicos — qué % de quienes lo probaron, repitió', 'mad-suite' ); ?>"><?php esc_html_e( 'Tasa de recompra', 'mad-suite' ); ?></th>
+                        <th data-sort="num" title="<?php esc_attr_e( 'Cuántas veces se pidió este producto en total, sumando todos los pedidos de todos los clientes', 'mad-suite' ); ?>"><?php esc_html_e( 'Veces pedido en total', 'mad-suite' ); ?></th>
+                        <th data-sort="num" title="<?php esc_attr_e( 'Veces pedido en total ÷ compradores únicos — en promedio, cuántas veces lo pide quien lo pide', 'mad-suite' ); ?>"><?php esc_html_e( 'Promedio por comprador', 'mad-suite' ); ?></th>
+                        <th data-sort="num" title="<?php esc_attr_e( 'De todas las veces que se pidió, qué % NO fue la primera vez de ese cliente', 'mad-suite' ); ?>"><?php esc_html_e( '% de pedidos que son recompra', 'mad-suite' ); ?></th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ( $top_products as $p ) : ?>
                         <tr>
                             <td><a href="<?php echo esc_url( get_edit_post_link( $p['product_id'] ) ); ?>"><?php echo esc_html( $p['product_name'] ); ?></a></td>
-                            <td><?php echo esc_html( $p['buyers_count'] ); ?></td>
-                            <td><?php echo esc_html( $p['repeat_buyers_count'] ); ?></td>
-                            <td><?php echo esc_html( $p['repurchase_rate'] ); ?>%</td>
+                            <td data-value="<?php echo esc_attr( $p['buyers_count'] ); ?>"><?php echo esc_html( $p['buyers_count'] ); ?></td>
+                            <td data-value="<?php echo esc_attr( $p['repeat_buyers_count'] ); ?>"><?php echo esc_html( $p['repeat_buyers_count'] ); ?></td>
+                            <td data-value="<?php echo esc_attr( $p['repurchase_rate'] ); ?>"><?php echo esc_html( $p['repurchase_rate'] ); ?>%</td>
+                            <td data-value="<?php echo esc_attr( $p['total_purchases'] ); ?>"><?php echo esc_html( $p['total_purchases'] ); ?></td>
+                            <td data-value="<?php echo esc_attr( $p['avg_purchases_per_buyer'] ); ?>"><?php echo esc_html( $p['avg_purchases_per_buyer'] ); ?></td>
+                            <td data-value="<?php echo esc_attr( $p['share_repeat_purchases'] ); ?>"><?php echo esc_html( $p['share_repeat_purchases'] ); ?>%</td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            <p class="description">
+                <?php esc_html_e( 'Ejemplo de lectura: si "Queso de cabra" tiene 40 compradores únicos, 5 lo recompraron (12,5% de tasa de recompra), se pidió 48 veces en total y el promedio por comprador es 1,2 — la mayoría lo compró una sola vez, pero esos 5 que repiten lo piden bastante seguido.', 'mad-suite' ); ?>
+            </p>
         <?php endif; ?>
     </div>
 
@@ -292,22 +300,22 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
         <?php if ( empty( $top_customers ) ) : ?>
             <p><?php esc_html_e( 'Sin datos todavía.', 'mad-suite' ); ?></p>
         <?php else : ?>
-            <table class="widefat striped">
+            <table class="widefat striped mad-ci-sortable">
                 <thead>
                     <tr>
-                        <th><?php esc_html_e( 'Cliente', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Valor total', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Última compra', 'mad-suite' ); ?></th>
+                        <th data-sort="text"><?php esc_html_e( 'Cliente', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Valor total', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Última compra', 'mad-suite' ); ?></th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ( $top_customers as $c ) : ?>
                         <tr>
                             <td><?php echo esc_html( $c['customer_email'] ); ?></td>
-                            <td><?php echo esc_html( $c['order_count'] ); ?></td>
-                            <td><?php echo wp_kses_post( wc_price( $c['lifetime_value'] ) ); ?></td>
-                            <td><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['last_order_date'] ) ) ); ?></td>
+                            <td data-value="<?php echo esc_attr( $c['order_count'] ); ?>"><?php echo esc_html( $c['order_count'] ); ?></td>
+                            <td data-value="<?php echo esc_attr( $c['lifetime_value'] ); ?>"><?php echo wp_kses_post( wc_price( $c['lifetime_value'] ) ); ?></td>
+                            <td data-value="<?php echo esc_attr( strtotime( $c['last_order_date'] ) ); ?>"><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['last_order_date'] ) ) ); ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
@@ -321,26 +329,26 @@ $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ],
         <?php if ( empty( $at_risk ) ) : ?>
             <p><?php esc_html_e( 'Ninguno por ahora.', 'mad-suite' ); ?></p>
         <?php else : ?>
-            <table class="widefat striped">
+            <table class="widefat striped mad-ci-sortable">
                 <thead>
                     <tr>
-                        <th><?php esc_html_e( 'Cliente', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Valor total', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Última compra', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Días sin comprar', 'mad-suite' ); ?></th>
-                        <th><?php esc_html_e( 'Su intervalo habitual', 'mad-suite' ); ?></th>
+                        <th data-sort="text"><?php esc_html_e( 'Cliente', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Pedidos', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Valor total', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Última compra', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Días sin comprar', 'mad-suite' ); ?></th>
+                        <th data-sort="num"><?php esc_html_e( 'Su intervalo habitual', 'mad-suite' ); ?></th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ( $at_risk as $c ) : ?>
                         <tr>
                             <td><?php echo esc_html( $c['customer_email'] ); ?></td>
-                            <td><?php echo esc_html( $c['order_count'] ); ?></td>
-                            <td><?php echo wp_kses_post( wc_price( $c['lifetime_value'] ) ); ?></td>
-                            <td><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['last_order_date'] ) ) ); ?></td>
-                            <td><?php echo esc_html( (int) $c['days_since_last_order'] ); ?></td>
-                            <td><?php echo esc_html( number_format_i18n( (float) $c['avg_days_between_orders'], 0 ) ); ?></td>
+                            <td data-value="<?php echo esc_attr( $c['order_count'] ); ?>"><?php echo esc_html( $c['order_count'] ); ?></td>
+                            <td data-value="<?php echo esc_attr( $c['lifetime_value'] ); ?>"><?php echo wp_kses_post( wc_price( $c['lifetime_value'] ) ); ?></td>
+                            <td data-value="<?php echo esc_attr( strtotime( $c['last_order_date'] ) ); ?>"><?php echo esc_html( wp_date( 'd/m/Y', strtotime( $c['last_order_date'] ) ) ); ?></td>
+                            <td data-value="<?php echo esc_attr( $c['days_since_last_order'] ); ?>"><?php echo esc_html( (int) $c['days_since_last_order'] ); ?></td>
+                            <td data-value="<?php echo esc_attr( $c['avg_days_between_orders'] ); ?>"><?php echo esc_html( number_format_i18n( (float) $c['avg_days_between_orders'], 0 ) ); ?></td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
