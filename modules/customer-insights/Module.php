@@ -150,6 +150,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $granularity    = $this->get_current_granularity();
         $compare        = $this->get_current_compare();
         $segment        = $this->get_current_segment();
+        $customers_limit = $this->get_current_customers_limit();
 
         $data              = new MAD_CI_Dashboard_Data();
         $kpis              = $data->get_customer_kpis();
@@ -158,7 +159,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $cohort_grid       = $data->get_cohort_grid( 12, 12 );
         $rfm_breakdown     = $data->get_rfm_breakdown();
         $rfm_definitions   = MAD_CI_Dashboard_Data::rfm_segment_definitions();
-        $customers_list    = $data->get_customers_list( $segment );
+        $customers_list    = $data->get_customers_list( $segment, $customers_limit );
         $customers_total   = $data->count_customers( $segment );
         $at_risk        = $data->get_at_risk_customers();
         $top_products   = $data->get_top_repurchased_products();
@@ -170,32 +171,33 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         $recalc_nonce_field = wp_nonce_field( 'mad_ci_recalculate', '_wpnonce', true, false );
         $recalc_hidden_args = array_merge( $this->current_dashboard_query_args(), [ 'action' => 'mad_ci_recalculate' ] );
 
-        // Comparador con el mismo periodo del año anterior: solo tiene
-        // sentido con granularidad mensual (si no, el propio selector
-        // "Anual" ya deja comparar años uno junto al otro).
+        // Comparador con el mismo mes del año anterior: solo tiene sentido
+        // con granularidad mensual (si no, el propio selector "Anual" ya
+        // deja comparar años uno junto al otro). Cada mes se empareja con
+        // el mismo mes exacto UN AÑO antes (no solo "el mismo nombre de
+        // mes", que mezclaría años distintos si el rango abarca varios
+        // años) — si ese mes anterior no tiene pedidos (p. ej. antes de
+        // que la tienda existiera), queda como null y no se dibuja.
         $compare_payload = null;
         if ( $compare && 'month' === $granularity ) {
             $prior_from = gmdate( 'Y-m-d', strtotime( '-1 year', strtotime( $from ) ) );
             $prior_to   = gmdate( 'Y-m-d', strtotime( '-1 year', strtotime( $to ) ) );
             $prior_series = $data->get_period_series( $prior_from, $prior_to, 'month' );
 
-            $prior_by_month = [];
+            $prior_by_period = [];
             foreach ( $prior_series as $row ) {
-                $prior_by_month[ substr( $row['period'], 5, 2 ) ] = $row;
+                $prior_by_period[ $row['period'] ] = $row; // 'period' ya es 'YYYY-MM'.
             }
 
             $previous_totals = [];
             foreach ( $period_series as $row ) {
-                $moy  = substr( $row['period'], 5, 2 );
-                $prev = $prior_by_month[ $moy ] ?? null;
+                [ $y, $m ]  = array_map( 'intval', explode( '-', $row['period'] ) );
+                $prior_key  = sprintf( '%04d-%02d', $y - 1, $m );
+                $prev       = $prior_by_period[ $prior_key ] ?? null;
                 $previous_totals[] = $prev ? ( (int) $prev['new_customers'] + (int) $prev['repeat_customers'] ) : null;
             }
             $compare_payload = [
-                'label'    => sprintf(
-                    /* translators: %s: rango de fechas del periodo anterior comparado */
-                    __( 'Mismo mes, año anterior (%s)', 'mad-suite' ),
-                    wp_date( 'M Y', strtotime( $prior_from ) ) . ' – ' . wp_date( 'M Y', strtotime( $prior_to ) )
-                ),
+                'label'    => __( 'Mismo mes, año anterior', 'mad-suite' ),
                 'previous' => $previous_totals,
             ];
         }
@@ -251,14 +253,22 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         return in_array( $value, $valid, true ) ? $value : '';
     }
 
+    /** Cuántos clientes mostrar como máximo en la tabla "Clientes". */
+    private function get_current_customers_limit(): int {
+        $allowed = [ 25, 50, 100, 300, 1000 ];
+        $value   = isset( $_REQUEST['mad_ci_customers_limit'] ) ? (int) $_REQUEST['mad_ci_customers_limit'] : 100;
+        return in_array( $value, $allowed, true ) ? $value : 100;
+    }
+
     private function current_dashboard_query_args(): array {
         [ $from, $to ] = $this->get_current_date_range();
         return [
-            'mad_ci_from'        => $from,
-            'mad_ci_to'          => $to,
-            'mad_ci_granularity' => $this->get_current_granularity(),
-            'mad_ci_compare'     => $this->get_current_compare() ? 1 : 0,
-            'mad_ci_segment'     => $this->get_current_segment(),
+            'mad_ci_from'             => $from,
+            'mad_ci_to'               => $to,
+            'mad_ci_granularity'      => $this->get_current_granularity(),
+            'mad_ci_compare'          => $this->get_current_compare() ? 1 : 0,
+            'mad_ci_segment'          => $this->get_current_segment(),
+            'mad_ci_customers_limit'  => $this->get_current_customers_limit(),
         ];
     }
 };

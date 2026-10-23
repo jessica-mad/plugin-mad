@@ -1,9 +1,9 @@
 <?php
 /**
  * Vista del dashboard. Variables disponibles (ver Module::render_settings_page()):
- * $from, $to, $granularity, $compare, $segment, $kpis, $login_avg_days,
- * $period_series, $cohort_grid, $rfm_breakdown, $rfm_definitions,
- * $customers_list, $customers_total, $at_risk, $top_products,
+ * $from, $to, $granularity, $compare, $segment, $customers_limit, $kpis,
+ * $login_avg_days, $period_series, $cohort_grid, $rfm_breakdown,
+ * $rfm_definitions, $customers_list, $customers_total, $at_risk, $top_products,
  * $last_updated, $recalc_status, $recalc_stuck, $recalc_action_url,
  * $recalc_nonce_field, $recalc_hidden_args.
  * $this = la instancia del módulo (para menu_slug()).
@@ -29,15 +29,18 @@ $granularity_labels = [
 
 $is_running = in_array( $recalc_status['state'], [ 'collecting', 'finalizing' ], true );
 
+$customers_limit_options = [ 25, 50, 100, 300, 1000 ];
+
 /** Construye una URL a esta misma página conservando los filtros actuales, con overrides puntuales. */
-$mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granularity, $compare, $segment ) {
+$mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granularity, $compare, $segment, $customers_limit ) {
     $args = array_merge( [
-        'page'               => $this->menu_slug(),
-        'mad_ci_from'        => $from,
-        'mad_ci_to'          => $to,
-        'mad_ci_granularity' => $granularity,
-        'mad_ci_compare'     => $compare ? 1 : 0,
-        'mad_ci_segment'     => $segment,
+        'page'                   => $this->menu_slug(),
+        'mad_ci_from'            => $from,
+        'mad_ci_to'              => $to,
+        'mad_ci_granularity'     => $granularity,
+        'mad_ci_compare'         => $compare ? 1 : 0,
+        'mad_ci_segment'         => $segment,
+        'mad_ci_customers_limit' => $customers_limit,
     ], $overrides );
     return add_query_arg( $args, admin_url( 'admin.php' ) );
 };
@@ -141,6 +144,7 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
         <form method="get" class="mad-ci-date-form">
             <input type="hidden" name="page" value="<?php echo esc_attr( $this->menu_slug() ); ?>">
             <input type="hidden" name="mad_ci_segment" value="<?php echo esc_attr( $segment ); ?>">
+            <input type="hidden" name="mad_ci_customers_limit" value="<?php echo esc_attr( $customers_limit ); ?>">
             <label><?php esc_html_e( 'Desde', 'mad-suite' ); ?>
                 <input type="date" name="mad_ci_from" value="<?php echo esc_attr( $from ); ?>">
             </label>
@@ -154,13 +158,16 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
                     <?php endforeach; ?>
                 </select>
             </label>
-            <label title="<?php esc_attr_e( 'Solo funciona agrupando por mes — superpone una línea con el mismo mes de hace un año.', 'mad-suite' ); ?>">
+            <label title="<?php esc_attr_e( 'Solo funciona agrupando por mes — superpone una línea con el mismo mes exacto de hace un año (si no hay pedidos ese mes, no se dibuja ningún punto, no se inventa el dato).', 'mad-suite' ); ?>">
                 <input type="checkbox" name="mad_ci_compare" value="1" <?php checked( $compare ); ?>>
                 <?php esc_html_e( 'Comparar con el año anterior', 'mad-suite' ); ?>
             </label>
             <button type="submit" class="button"><?php esc_html_e( 'Aplicar', 'mad-suite' ); ?></button>
         </form>
     </div>
+    <p class="description">
+        <?php esc_html_e( 'Este rango de fechas solo afecta a la gráfica de arriba y al KPI "Login → compra". El resto (RFM, cohortes, clientes, productos con recompra) son datos de toda la vida del cliente, no de un periodo — por ejemplo, el segmento RFM o el valor total de un cliente no cambian según qué mes estés mirando, siempre reflejan su historial completo.', 'mad-suite' ); ?>
+    </p>
 
     <div class="mad-ci-kpis">
         <div class="mad-ci-kpi">
@@ -363,6 +370,15 @@ $mad_ci_build_url = function ( array $overrides = [] ) use ( $from, $to, $granul
                     <option value=""><?php esc_html_e( 'Todos', 'mad-suite' ); ?></option>
                     <?php foreach ( array_keys( $rfm_definitions ) as $label ) : ?>
                         <option value="<?php echo esc_attr( $label ); ?>" <?php selected( $segment, $label ); ?>><?php echo esc_html( $label ); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </label>
+            <label><?php esc_html_e( 'Mostrar', 'mad-suite' ); ?>
+                <select name="mad_ci_customers_limit">
+                    <?php foreach ( $customers_limit_options as $n ) : ?>
+                        <option value="<?php echo esc_attr( $n ); ?>" <?php selected( $customers_limit, $n ); ?>>
+                            <?php echo esc_html( sprintf( /* translators: %s: cantidad de clientes */ __( '%s clientes', 'mad-suite' ), number_format_i18n( $n ) ) ); ?>
+                        </option>
                     <?php endforeach; ?>
                 </select>
             </label>
