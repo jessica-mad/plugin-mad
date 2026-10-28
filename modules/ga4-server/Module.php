@@ -265,7 +265,18 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             $platform, $click_id
         ))) return;
 
-        $wpdb->insert($this->table, [
+        // Dos peticiones casi simultáneas para el mismo clic (precarga del
+        // navegador, el in-app browser de Facebook repitiendo la petición,
+        // un bot que repite la URL…) pueden pasar el SELECT de arriba antes
+        // de que ninguna haya insertado todavía, y las dos intentar el
+        // INSERT — la segunda choca con la clave única platform_click y
+        // MySQL la rechaza. Es un caso esperado e inofensivo (ya queda
+        // guardada la fila de la que ganó la carrera), así que se silencia
+        // solo ESE error en vez de dejarlo reventar en pantalla al
+        // visitante; cualquier otro error de base de datos se registra
+        // igual (con debug_log) en vez de desaparecer sin más.
+        $was_showing = $wpdb->suppress_errors(true);
+        $inserted = $wpdb->insert($this->table, [
             'platform'     => $platform,
             'click_id'     => $click_id,
             'browser_id'   => $browser_id ?: '',
@@ -277,6 +288,11 @@ return new class(MAD_Suite_Core::instance()) implements MAD_Suite_Module {
             'visitor_ip'   => $this->get_visitor_ip(),
             'wp_user_id'   => get_current_user_id(),
         ], ['%s','%s','%s','%s','%s','%s','%s','%s','%s','%d']);
+        $wpdb->suppress_errors($was_showing);
+
+        if (false === $inserted && $wpdb->last_error && stripos($wpdb->last_error, 'Duplicate entry') === false) {
+            $this->debug_log('error', "ga4-server: fallo al guardar clic ({$platform}/{$click_id}) en {$this->table}: {$wpdb->last_error}");
+        }
     }
 
     /* =========================================================
