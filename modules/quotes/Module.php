@@ -832,7 +832,7 @@ return new class( $core ) implements MAD_Suite_Module {
      * precio siempre, tengan o no un precio configurado.
      */
     private function product_requires_quote( WC_Product $product ): bool {
-        if ( '' !== (string) $product->get_price() ) return false;
+        if ( '' !== (string) $this->real_regular_price( $product ) ) return false;
 
         $discount = $this->get_real_price_role_discount();
         if ( null !== $discount && null !== $this->compute_real_price( $product->get_id(), $discount ) ) {
@@ -840,6 +840,27 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         return true;
+    }
+
+    /**
+     * Precio regular "de verdad" de un producto simple o variación — lee el
+     * meta _regular_price directo, sin pasar por woocommerce_product_get_price
+     * ni woocommerce_product_get_regular_price. A propósito: el módulo
+     * Olofane puede sintetizar un precio por defecto en esos mismos filtros
+     * para productos sin precio (solo para que WooCommerce los deje
+     * comprables y puedan añadirse a la Lista de Precios) — si aquí
+     * llamáramos a get_price(), ese precio inventado haría pensar que el
+     * producto ya tiene precio real y se perdería el "Consultar precio" /
+     * "Solicitar presupuesto". En productos variables (el padre, no una
+     * variación concreta) se sigue usando get_price() tal cual: ahí
+     * WooCommerce agrega el precio real de las variaciones y Olofane nunca
+     * actúa sobre ese valor.
+     */
+    private function real_regular_price( WC_Product $product ) {
+        if ( $product->is_type( 'simple' ) || $product->is_type( 'variation' ) ) {
+            return get_post_meta( $product->get_id(), '_regular_price', true );
+        }
+        return $product->get_price();
     }
 
     /** HTML de precio (PVP tachado + precio con descuento, y costo si está cargado) para el rol de precio real. */

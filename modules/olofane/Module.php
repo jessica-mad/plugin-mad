@@ -50,6 +50,9 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'product_stock_sort_enabled' => true,
             'product_grid_view_enabled'  => true,
             'fk_destacados_enabled'      => true,
+            'default_price_enabled'      => false,
+            'default_price_amount'       => '1',
+            'default_price_categories'   => [],
         ];
 
         $opts = get_option( self::OPTION_KEY, [] );
@@ -178,6 +181,36 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( ! empty( $s['fk_destacados_enabled'] ) ) {
             $fk_destacados = new MAD_Olofane_FK_Destacados();
             $fk_destacados->init();
+        }
+
+        // Feature 13 – Precio por defecto para productos sin precio: algunos
+        // productos (p. ej. quincallería) no tienen "Precio normal" cargado,
+        // y WooCommerce los marca como NO comprables (is_purchasable=false)
+        // — por eso ni siquiera aparece el botón "Añadir a la Lista de
+        // Precios" del módulo de Presupuestos. Esto rellena un precio
+        // simbólico SOLO al leerlo (nunca se escribe en _price/_regular_price
+        // en la base de datos) para que WooCommerce los deje comprables.
+        // No se restringe a is_admin(): debe funcionar también en AJAX, la
+        // Store API y el cálculo del carrito — el propio filtro se encarga
+        // de no aplicar nada dentro del admin (fuera de AJAX).
+        if ( ! empty( $s['default_price_enabled'] ) ) {
+            add_filter( 'woocommerce_product_get_price',                    [ $this, 'maybe_apply_default_price' ], 10, 2 );
+            add_filter( 'woocommerce_product_get_regular_price',            [ $this, 'maybe_apply_default_price' ], 10, 2 );
+            add_filter( 'woocommerce_product_variation_get_price',         [ $this, 'maybe_apply_default_price' ], 10, 2 );
+            add_filter( 'woocommerce_product_variation_get_regular_price', [ $this, 'maybe_apply_default_price' ], 10, 2 );
+            add_filter( 'woocommerce_is_purchasable',                       [ $this, 'maybe_force_purchasable' ],   10, 2 );
+            // Una variación no usa woocommerce_is_purchasable: WC_Product_Variation::is_purchasable()
+            // aplica su propio filtro woocommerce_variation_is_purchasable, Y además exige
+            // variation_is_visible() (que a su vez aplica woocommerce_variation_is_visible).
+            // Ambos ya deberían dar true solo con el precio corregido arriba, pero se
+            // refuerzan igual por si acaso — nunca está de más.
+            add_filter( 'woocommerce_variation_is_purchasable', [ $this, 'maybe_force_purchasable' ],        10, 2 );
+            add_filter( 'woocommerce_variation_is_visible',     [ $this, 'maybe_force_variation_visible' ],  10, 4 );
+
+            if ( is_admin() ) {
+                add_filter( 'manage_edit-product_columns',       [ $this, 'add_default_price_column' ] );
+                add_action( 'manage_product_posts_custom_column', [ $this, 'render_default_price_column' ], 10, 2 );
+            }
         }
     }
 
@@ -1292,6 +1325,137 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         </style>';
     }
 
+    // ── Feature 13: Precio por defecto para productos sin precio ─────────────
+
+    /**
+     * true si, en el contexto actual, NO debe aplicarse el precio por
+     * defecto — admin "de verdad" (ni AJAX, ni la Store API, que no pasa
+     * por aquí) para que el listado y la ficha de producto sigan mostrando
+     * el precio vacío tal cual está, y mientras multi-catalog-sync arma el
+     * feed de catálogo (Google/Meta/Pinterest) para no enviarles un precio
+     * inventado.
+     */
+    private function should_skip_default_price_context(): bool {
+        if ( is_admin() && ! wp_doing_ajax() ) return true;
+        if ( class_exists( 'MAD_Suite_Core' ) && MAD_Suite_Core::context_flag( 'catalog_feed_generation' ) ) return true;
+        return false;
+    }
+
+    /**
+     * true si la regla de precio por defecto corresponde a este producto:
+     * activada, es un producto simple o una variación (nunca el padre de un
+     * variable — ahí WooCommerce ya agrega el precio real de sus
+     * variaciones), no tiene _regular_price propio, y cae dentro del
+     * filtro de categorías (o no hay filtro, y aplica a cualquiera). No
+     * depende del contexto (admin/front) — eso lo decide
+     * should_skip_default_price_context() por separado, así esta función
+     * también sirve para la columna del listado de admin.
+     */
+    private function product_default_price_applies( WC_Product $product ): bool {
+        $s = $this->get_settings();
+        if ( empty( $s['default_price_enabled'] ) ) return false;
+        if ( ! $product->is_type( 'simple' ) && ! $product->is_type( 'variation' ) ) return false;
+
+        // Nunca tocar un producto con precio real — esta es la única fuente
+        // de verdad, nunca get_price()/get_regular_price(): dentro de los
+        // filtros de abajo eso causaría recursión infinita (son los mismos
+        // filtros que esta función ayuda a decidir), y aquí causaría que la
+        // columna del admin se contradijera a sí misma una vez la regla ya
+        // está aplicada.
+        if ( '' !== get_post_meta( $product->get_id(), '_regular_price', true ) ) return false;
+
+        $cat_ids = array_filter( array_map( 'absint', (array) ( $s['default_price_categories'] ?? [] ) ) );
+        if ( ! empty( $cat_ids ) ) {
+            $check_id     = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
+            $product_cats = wp_get_post_terms( $check_id, 'product_cat', [ 'fields' => 'ids' ] );
+            if ( is_wp_error( $product_cats ) || empty( array_intersect( $cat_ids, $product_cats ) ) ) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** woocommerce_product_get_price / get_regular_price (simple y variación, con sus equivalentes *_variation_*). */
+    public function maybe_apply_default_price( $price, $product ) {
+        if ( ! $product instanceof WC_Product ) return $price;
+        if ( $this->should_skip_default_price_context() ) return $price;
+        if ( ! $this->product_default_price_applies( $product ) ) return $price;
+
+        return $this->get_settings()['default_price_amount'];
+    }
+
+    /**
+     * woocommerce_is_purchasable (productos simples) y
+     * woocommerce_variation_is_purchasable (variaciones, misma firma) —
+     * red de seguridad además del precio: get_price() ya no vacío basta
+     * casi siempre para que WooCommerce lo marque comprable por su cuenta.
+     */
+    public function maybe_force_purchasable( $purchasable, $product ) {
+        if ( $purchasable ) return $purchasable;
+        if ( ! $product instanceof WC_Product ) return $purchasable;
+        if ( $this->should_skip_default_price_context() ) return $purchasable;
+        if ( ! $this->product_default_price_applies( $product ) ) return $purchasable;
+
+        return true;
+    }
+
+    /** woocommerce_variation_is_visible — firma distinta (incluye IDs de variación y padre además del objeto). */
+    public function maybe_force_variation_visible( $visible, $variation_id, $parent_id, $variation ) {
+        if ( $visible ) return $visible;
+        if ( ! $variation instanceof WC_Product ) return $visible;
+        if ( $this->should_skip_default_price_context() ) return $visible;
+        if ( ! $this->product_default_price_applies( $variation ) ) return $visible;
+
+        return true;
+    }
+
+    /** Columna "Precio por defecto" — solo informativa, para identificar qué productos están usando la regla. */
+    public function add_default_price_column( array $columns ): array {
+        $new = [];
+        foreach ( $columns as $key => $label ) {
+            $new[ $key ] = $label;
+            if ( 'price' === $key ) {
+                $new['mad_default_price'] = __( 'Precio por defecto', 'mad-suite' );
+            }
+        }
+        return $new;
+    }
+
+    public function render_default_price_column( string $column, int $post_id ): void {
+        if ( 'mad_default_price' !== $column ) return;
+
+        $product = wc_get_product( $post_id );
+        if ( ! $product ) {
+            echo '—';
+            return;
+        }
+
+        $applies = false;
+        if ( $product->is_type( 'variable' ) ) {
+            foreach ( $product->get_children() as $variation_id ) {
+                $variation = wc_get_product( $variation_id );
+                if ( $variation && $this->product_default_price_applies( $variation ) ) {
+                    $applies = true;
+                    break;
+                }
+            }
+        } else {
+            $applies = $this->product_default_price_applies( $product );
+        }
+
+        if ( ! $applies ) {
+            echo '—';
+            return;
+        }
+
+        printf(
+            '<span style="display:inline-block;background:#f0b849;color:#1d2327;font-size:11px;font-weight:600;padding:3px 8px;border-radius:3px;" title="%s">%s</span>',
+            esc_attr__( 'Este producto no tiene precio propio — se usa el precio por defecto de la sección 10 de Olofane, solo para que pueda añadirse a la Lista de Precios. No se envía a los catálogos de Google/Meta.', 'mad-suite' ),
+            esc_html__( 'Precio por defecto', 'mad-suite' )
+        );
+    }
+
     // ── Settings save ────────────────────────────────────────────────────────
 
     public function handle_save_settings(): void {
@@ -1323,12 +1487,26 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'product_stock_sort_enabled' => ! empty( $post['product_stock_sort_enabled'] ),
             'product_grid_view_enabled'  => ! empty( $post['product_grid_view_enabled'] ),
             'fk_destacados_enabled'      => ! empty( $post['fk_destacados_enabled'] ),
+            'default_price_enabled'      => ! empty( $post['default_price_enabled'] ),
+            'default_price_amount'       => $this->sanitize_default_price_amount( $post['default_price_amount'] ?? '1' ),
+            'default_price_categories'   => isset( $post['default_price_categories'] )
+                                            ? array_filter( array_map( 'absint', (array) $post['default_price_categories'] ) )
+                                            : [],
         ];
 
         update_option( self::OPTION_KEY, $data );
 
         wp_safe_redirect( add_query_arg( [ 'page' => $this->menu_slug(), 'saved' => '1' ], admin_url( 'admin.php' ) ) );
         exit;
+    }
+
+    /** Número válido ≥ 0, con '.' como separador decimal (formato que WooCommerce espera en _regular_price). '1' si no es válido. */
+    private function sanitize_default_price_amount( $raw ): string {
+        $value = wc_format_decimal( sanitize_text_field( wp_unslash( (string) $raw ) ) );
+        if ( '' === $value || ! is_numeric( $value ) || (float) $value < 0 ) {
+            return '1';
+        }
+        return $value;
     }
 
     // ── Settings page ────────────────────────────────────────────────────────
@@ -1582,6 +1760,51 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                             <p class="description">
                                 <?php esc_html_e( 'Ese combo de ajustes no tiene un uso real en FunnelKit — se reutiliza como marcador para activar este comportamiento sin depender de una opción nativa. En cualquier otra combinación, el bloque funciona como siempre.', 'mad-suite' ); ?>
                             </p>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- ── 10: Precio por defecto para productos sin precio ──────── -->
+                <h2><?php esc_html_e( '10. Precio por defecto para productos sin precio', 'mad-suite' ); ?></h2>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th><?php esc_html_e( 'Activar', 'mad-suite' ); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="default_price_enabled" value="1"
+                                    <?php checked( ! empty( $s['default_price_enabled'] ) ); ?>>
+                                <?php esc_html_e( 'A los productos sin "Precio normal" (ni rebajado), asignarles un precio simbólico SOLO al mostrarlos — nunca se escribe en la base de datos.', 'mad-suite' ); ?>
+                            </label>
+                            <p class="description">
+                                <?php esc_html_e( 'WooCommerce no deja comprar un producto sin precio (no aparece el botón "Añadir a la Lista de Precios" del módulo de Presupuestos). Con esto, ese producto pasa a ser comprable y sigue mostrando "Consultar precio" y pidiendo presupuesto igual que antes — el precio real sigue vacío, esto no lo sustituye, solo destraba el botón. No se aplica en el listado ni en la ficha de edición de WooCommerce → Productos (ahí el precio se sigue viendo vacío, para poder identificar y completarlo), ni se envía a los catálogos de Google/Meta/Pinterest del módulo de sincronización.', 'mad-suite' ); ?>
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label for="default_price_amount"><?php esc_html_e( 'Precio por defecto', 'mad-suite' ); ?></label></th>
+                        <td>
+                            <input type="text" inputmode="decimal" id="default_price_amount" name="default_price_amount"
+                                value="<?php echo esc_attr( $s['default_price_amount'] ); ?>"
+                                class="small-text">
+                            <p class="description"><?php esc_html_e( 'Un número, p. ej. 1. Nunca se le muestra al cliente (el precio sigue oculto como "Consultar precio") — solo es el valor interno que necesita WooCommerce para aceptar el producto en el carrito/lista.', 'mad-suite' ); ?></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label for="default_price_categories"><?php esc_html_e( 'Categorías (opcional)', 'mad-suite' ); ?></label></th>
+                        <td>
+                            <?php
+                            $mad_price_cats = get_terms( [ 'taxonomy' => 'product_cat', 'hide_empty' => false, 'orderby' => 'name' ] );
+                            $mad_price_cats = is_wp_error( $mad_price_cats ) ? [] : $mad_price_cats;
+                            ?>
+                            <select id="default_price_categories" name="default_price_categories[]" multiple size="8" style="min-width:320px;">
+                                <?php foreach ( $mad_price_cats as $mad_price_cat ) : ?>
+                                    <option value="<?php echo esc_attr( $mad_price_cat->term_id ); ?>"
+                                        <?php selected( in_array( $mad_price_cat->term_id, (array) $s['default_price_categories'], true ) ); ?>>
+                                        <?php echo esc_html( $mad_price_cat->name ); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description"><?php esc_html_e( 'Ctrl/Cmd + clic para elegir varias. Vacío = aplica a los productos sin precio de CUALQUIER categoría. Con una o más seleccionadas, solo a esas.', 'mad-suite' ); ?></p>
                         </td>
                     </tr>
                 </table>

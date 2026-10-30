@@ -20,6 +20,24 @@ final class MAD_Suite_Core {
     private $modules = [];
     private $all_modules_info = []; // Info de todos los módulos (habilitados o no)
 
+    /**
+     * Banderas de contexto en memoria, solo para la petición actual (nunca
+     * se persisten). Sirven para que un módulo le avise a otro "estoy en
+     * medio de tal operación" sin que ninguno dependa de la clase del otro
+     * — p. ej. multi-catalog-sync marca 'catalog_feed_generation' mientras
+     * arma el feed, y el módulo Olofane usa eso para no incluir su "precio
+     * por defecto" (sintético) en lo que se envía a Meta/Google.
+     */
+    private static $context_flags = [];
+
+    public static function set_context_flag( $flag, $value = true ) {
+        self::$context_flags[ $flag ] = (bool) $value;
+    }
+
+    public static function context_flag( $flag ) {
+        return ! empty( self::$context_flags[ $flag ] );
+    }
+
     public static function instance(){
         if ( self::$instance === null ) self::$instance = new self();
         return self::$instance;

@@ -39,18 +39,29 @@ class ProductFeedGenerator {
             return null;
         }
 
-        // Handle variable products
-        if ($product->is_type('variable')) {
-            return $this->generate_variable_product_feed($product, $destination);
-        }
+        // Marca que estamos armando el feed mientras dure esta llamada (y
+        // solo esta): el módulo Olofane usa esta bandera para NO aplicar su
+        // "precio por defecto" (sintético, solo para que WooCommerce deje
+        // comprable el producto en la tienda) a lo que se envía a los
+        // catálogos externos — ahí un producto sin precio real debe seguir
+        // sin precio, no mandarse con un número inventado.
+        \MAD_Suite_Core::set_context_flag('catalog_feed_generation', true);
+        try {
+            // Handle variable products
+            if ($product->is_type('variable')) {
+                return $this->generate_variable_product_feed($product, $destination);
+            }
 
-        // Handle variation products
-        if ($product->is_type('variation')) {
-            return $this->generate_variation_feed($product, $destination);
-        }
+            // Handle variation products
+            if ($product->is_type('variation')) {
+                return $this->generate_variation_feed($product, $destination);
+            }
 
-        // Handle simple products
-        return $this->generate_simple_product_feed($product, $destination);
+            // Handle simple products
+            return $this->generate_simple_product_feed($product, $destination);
+        } finally {
+            \MAD_Suite_Core::set_context_flag('catalog_feed_generation', false);
+        }
     }
 
     /**
