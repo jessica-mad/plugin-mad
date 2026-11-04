@@ -78,6 +78,25 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! empty( $settings['enable_configurator'] ) ) {
             $this->templates->init();
         }
+
+        // Feature: Mostrar precio en modo presupuesto — para los roles
+        // configurados (por defecto, solo visitantes), muestra el precio
+        // REGULAR del producto aunque el módulo de Presupuestos lo oculte.
+        // Prioridad 2000: el módulo de Presupuestos termina de tocar el
+        // HTML del precio en la prioridad 1100 (show_price_breakdown_for_store_manager)
+        // — esto corre después de eso, puramente en la capa de presentación
+        // (no toca is_purchasable, carrito, checkout, botones, emails ni el
+        // flujo de presupuesto). No se comprueba aquí si el módulo de
+        // Presupuestos está activo — los módulos se cargan por orden
+        // alfabético de carpeta y "divano-toscano" va antes que "quotes",
+        // así que a esta altura (init()) esa función puede no existir
+        // todavía aunque sí vaya a existir cuando el filtro realmente se
+        // dispare (al renderizar la página) — por eso esa comprobación va
+        // dentro del propio callback, no aquí.
+        if ( ! empty( $settings['price_reveal_enabled'] ) ) {
+            add_filter( 'woocommerce_get_price_html',      [ $this, 'maybe_reveal_price_for_role' ], 2000, 2 );
+            add_filter( 'woocommerce_variable_price_html', [ $this, 'maybe_reveal_price_for_role' ], 2000, 2 );
+        }
     }
 
     /* ================================================================ */
@@ -121,6 +140,41 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! empty( $this->get_settings()['enable_configurator'] ) ) {
             $this->templates->admin_init();
         }
+
+        // Sección: mostrar precio regular a ciertos roles aunque el módulo
+        // de Presupuestos lo oculte (ver Feature: Price reveal, más abajo).
+        add_settings_section(
+            'mad_dt_price_reveal',
+            __( 'Mostrar precio en modo presupuesto', 'mad-suite' ),
+            function () {
+                echo '<p class="description">' . esc_html__( 'El módulo de Presupuestos oculta el precio y cambia el flujo de compra por "Añadir a la lista de precios" para los roles configurados ahí (incluido "Visitantes", por defecto). Esto permite que, además, esos visitantes SÍ vean el precio normal (regular) del producto como referencia — el flujo de presupuesto sigue intacto: no se puede comprar directo, solo se ve el precio.', 'mad-suite' ) . '</p>';
+            },
+            $this->opt_key
+        );
+
+        add_settings_field(
+            'price_reveal_enabled',
+            __( 'Activar', 'mad-suite' ),
+            [ $this, 'field_price_reveal_enabled' ],
+            $this->opt_key,
+            'mad_dt_price_reveal'
+        );
+
+        add_settings_field(
+            'price_reveal_roles',
+            __( 'Mostrar el precio a', 'mad-suite' ),
+            [ $this, 'field_price_reveal_roles' ],
+            $this->opt_key,
+            'mad_dt_price_reveal'
+        );
+
+        add_settings_field(
+            'price_reveal_prefix',
+            __( 'Texto antes del precio', 'mad-suite' ),
+            [ $this, 'field_price_reveal_prefix' ],
+            $this->opt_key,
+            'mad_dt_price_reveal'
+        );
 
         // Acción para regenerar en bulk desde la página de ajustes.
         if (
@@ -638,6 +692,154 @@ return new class( $core ) implements MAD_Suite_Module {
              esc_html__( 'Activar el configurador de opciones (material, medida, tela, costura…) en productos simples marcados individualmente. Nunca muestra precios: solo captura la selección del cliente para el presupuesto.', 'mad-suite' ) . '</label>';
     }
 
+    public function field_price_reveal_enabled(): void {
+        $v = $this->get_settings()['price_reveal_enabled'];
+        echo '<label><input type="checkbox" name="' . esc_attr( $this->opt_key ) . '[price_reveal_enabled]" value="1" ' . checked( 1, $v, false ) . '> ' .
+             esc_html__( 'Mostrar el precio regular del producto a los roles de abajo, aunque el módulo de Presupuestos lo oculte', 'mad-suite' ) . '</label>';
+
+        $quotes_active = function_exists( 'mad_quotes_current_user_is_quote_role' )
+            && class_exists( 'MAD_Suite_Core' )
+            && MAD_Suite_Core::instance()->is_module_enabled( 'quotes' );
+
+        if ( ! $quotes_active ) {
+            echo '<p class="description" style="color:#b32d2e;">' .
+                esc_html__( 'El módulo de Presupuestos no está activo — esta opción no hace nada hasta que lo esté (no rompe nada mientras tanto).', 'mad-suite' ) .
+                '</p>';
+        }
+    }
+
+    public function field_price_reveal_roles(): void {
+        $selected = array_filter( (array) $this->get_settings()['price_reveal_roles'] );
+
+        echo '<fieldset>';
+
+        $checked = in_array( 'guest', $selected, true ) ? ' checked' : '';
+        printf(
+            '<label><input type="checkbox" name="%s[price_reveal_roles][]" value="guest"%s> %s</label><br>',
+            esc_attr( $this->opt_key ),
+            $checked,
+            esc_html__( 'Visitantes (no registrados)', 'mad-suite' )
+        );
+
+        foreach ( wp_roles()->roles as $slug => $role ) {
+            $checked = in_array( $slug, $selected, true ) ? ' checked' : '';
+            printf(
+                '<label><input type="checkbox" name="%s[price_reveal_roles][]" value="%s"%s> %s</label><br>',
+                esc_attr( $this->opt_key ),
+                esc_attr( $slug ),
+                $checked,
+                esc_html( translate_user_role( $role['name'] ) )
+            );
+        }
+
+        echo '</fieldset>';
+        echo '<p class="description">' . esc_html__( 'Solo tiene efecto sobre un rol si ese mismo rol también está marcado en "Acceso por rol" del módulo de Presupuestos (si no, ese rol ya ve el precio normal y no hay nada que revelar).', 'mad-suite' ) . '</p>';
+    }
+
+    public function field_price_reveal_prefix(): void {
+        $v = $this->get_settings()['price_reveal_prefix'];
+        printf(
+            '<input type="text" name="%s[price_reveal_prefix]" value="%s" class="regular-text">',
+            esc_attr( $this->opt_key ),
+            esc_attr( $v )
+        );
+        echo '<p class="description">' . esc_html__( 'Opcional. Déjalo vacío si no quieres ningún texto delante — por ejemplo, en productos variables la plantilla de Impreza ya añade su propio "Desde:" antes del precio, y no conviene duplicarlo.', 'mad-suite' ) . '</p>';
+    }
+
+    /* ================================================================ */
+    /*  Feature: Mostrar precio en modo presupuesto                      */
+    /* ================================================================ */
+
+    /**
+     * woocommerce_get_price_html / woocommerce_variable_price_html, prioridad
+     * 2000 (después de que el módulo de Presupuestos termine de tocar el
+     * HTML del precio, prioridad 1100). Solo sustituye el texto del precio
+     * para los roles configurados — nunca toca is_purchasable, el carrito,
+     * el checkout, los botones, los emails ni el flujo de presupuesto.
+     */
+    public function maybe_reveal_price_for_role( $price_html, $product ) {
+        if ( is_admin() ) return $price_html;
+        if ( ! $product instanceof WC_Product ) return $price_html;
+
+        $settings = $this->get_settings();
+        if ( empty( $settings['price_reveal_enabled'] ) ) return $price_html;
+
+        // El módulo de Presupuestos puede estar desactivado (no es
+        // requisito de este plugin). OJO: cada Module.php carga sus
+        // funciones/clases en cuanto MAD Suite arranca, estén o no
+        // activados desde "MAD Plugins" — function_exists() por sí solo
+        // NO basta para saber si de verdad está activo, solo confirma que
+        // el archivo existe. Hay que comprobar también en el registro real
+        // de módulos habilitados.
+        if ( ! function_exists( 'mad_quotes_current_user_is_quote_role' ) ) return $price_html;
+        if ( ! class_exists( 'MAD_Suite_Core' ) || ! MAD_Suite_Core::instance()->is_module_enabled( 'quotes' ) ) {
+            return $price_html;
+        }
+
+        // Reutiliza EXACTAMENTE la misma regla de roles que usa el propio
+        // módulo de Presupuestos para decidir a quién le oculta el precio
+        // — así no se duplica esa lógica y nunca se desincroniza de ella.
+        // Si el precio de este visitante no está siendo ocultado por
+        // Presupuestos (p. ej. es profesional, o tiene "precio real" por
+        // rol), no hay nada que hacer aquí: no tocar lo que ya se ve bien.
+        if ( ! mad_quotes_current_user_is_quote_role() ) return $price_html;
+
+        if ( ! $this->current_user_in_price_reveal_roles( (array) ( $settings['price_reveal_roles'] ?? [] ) ) ) {
+            return $price_html;
+        }
+
+        $amount_html = $this->regular_price_html_for_reveal( $product );
+        if ( null === $amount_html ) {
+            // Sin precio regular resolvible: no mostrar nada — deja el HTML
+            // que ya traía (vacío, porque Presupuestos oculta el precio a
+            // todo rol de presupuesto sin importar si el producto tiene
+            // precio o no).
+            return $price_html;
+        }
+
+        $prefix = trim( (string) ( $settings['price_reveal_prefix'] ?? '' ) );
+        return ( '' !== $prefix ? esc_html( $prefix ) . ' ' : '' ) . $amount_html;
+    }
+
+    /** true si el usuario actual (o "guest") está en la lista de roles a los que se les revela el precio. */
+    private function current_user_in_price_reveal_roles( array $allowed_roles ): bool {
+        $allowed_roles = array_filter( $allowed_roles );
+        if ( empty( $allowed_roles ) ) return false;
+
+        $user = wp_get_current_user();
+        if ( ! $user->ID ) {
+            return in_array( 'guest', $allowed_roles, true );
+        }
+        return (bool) array_intersect( $allowed_roles, (array) $user->roles );
+    }
+
+    /**
+     * HTML del precio REGULAR (nunca el de oferta/profesional) listo para
+     * mostrar, con impuestos según los ajustes de WooCommerce — o null si
+     * el producto no tiene un precio regular resolvible (no se muestra
+     * nada en ese caso).
+     *
+     * Productos variables: se usa el precio regular MÍNIMO entre las
+     * variaciones ("desde"), no un rango completo — consistente con que
+     * la plantilla de Impreza ya antepone su propio "Desde:" en esos casos.
+     */
+    private function regular_price_html_for_reveal( WC_Product $product ): ?string {
+        if ( $product->is_type( 'variable' ) ) {
+            $prices = $product->get_variation_prices( true );
+            if ( empty( $prices['regular_price'] ) ) return null;
+
+            $min = reset( $prices['regular_price'] );
+            if ( ! is_numeric( $min ) ) return null;
+
+            return wc_price( (float) $min );
+        }
+
+        $regular = $product->get_regular_price();
+        if ( '' === $regular || ! is_numeric( $regular ) ) return null;
+
+        return wc_price( wc_get_price_to_display( $product, [ 'price' => (float) $regular ] ) );
+    }
+
     /* ================================================================ */
     /*  Helpers                                                          */
     /* ================================================================ */
@@ -647,11 +849,23 @@ return new class( $core ) implements MAD_Suite_Module {
             'auto_generate'       => ! empty( $input['auto_generate'] ) ? 1 : 0,
             'overwrite'           => ! empty( $input['overwrite'] ) ? 1 : 0,
             'enable_configurator' => ! empty( $input['enable_configurator'] ) ? 1 : 0,
+            'price_reveal_enabled' => ! empty( $input['price_reveal_enabled'] ) ? 1 : 0,
+            'price_reveal_roles'   => isset( $input['price_reveal_roles'] )
+                                        ? array_values( array_map( 'sanitize_key', (array) $input['price_reveal_roles'] ) )
+                                        : [],
+            'price_reveal_prefix'  => isset( $input['price_reveal_prefix'] ) ? sanitize_text_field( $input['price_reveal_prefix'] ) : '',
         ];
     }
 
     private function get_settings(): array {
-        $defaults = [ 'auto_generate' => 1, 'overwrite' => 0, 'enable_configurator' => 0 ];
+        $defaults = [
+            'auto_generate'       => 1,
+            'overwrite'           => 0,
+            'enable_configurator' => 0,
+            'price_reveal_enabled' => 0,
+            'price_reveal_roles'   => [ 'guest' ],
+            'price_reveal_prefix'  => __( 'Desde:', 'mad-suite' ),
+        ];
         $saved    = get_option( $this->opt_key, [] );
         return wp_parse_args( is_array( $saved ) ? $saved : [], $defaults );
     }
