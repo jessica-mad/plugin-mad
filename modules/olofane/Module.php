@@ -10,6 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 require_once __DIR__ . '/includes/AI_Description.php';
 require_once __DIR__ . '/includes/WPML_Quotes.php';
 require_once __DIR__ . '/includes/Menu_Duplicator.php';
+require_once __DIR__ . '/includes/Legacy_Redirects.php';
 
 return new class ( $core ?? null ) implements MAD_Suite_Module {
 
@@ -44,6 +45,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'ai_prompt_translate_fr'   => "Traduis la description de produit suivante de l'espagnol vers le français. Retourne uniquement le texte traduit :\n\n{text}",
             'ai_wpml_enabled'          => true,
             'wpml_quotes_enabled'      => true,
+            'legacy_redirects_enabled' => true,
         ];
 
         $opts = get_option( self::OPTION_KEY, [] );
@@ -112,6 +114,11 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
         if ( ! empty( $s['wpml_quotes_enabled'] ) ) {
             $wpml = new MAD_Olofane_WPML_Quotes( $s );
             $wpml->init();
+        }
+
+        // Feature 8 – 301 de las fichas de la web antigua (olofane.es) a la nueva
+        if ( ! is_admin() && ! empty( $s['legacy_redirects_enabled'] ) ) {
+            ( new MAD_Olofane_Legacy_Redirects() )->init();
         }
 
         // Feature 7 – Post author selector meta box
@@ -588,6 +595,7 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
             'ai_prompt_translate_fr'   => sanitize_textarea_field( $post['ai_prompt_translate_fr'] ?? '' ),
             'ai_wpml_enabled'          => ! empty( $post['ai_wpml_enabled'] ),
             'wpml_quotes_enabled'      => ! empty( $post['wpml_quotes_enabled'] ),
+            'legacy_redirects_enabled' => ! empty( $post['legacy_redirects_enabled'] ),
         ];
 
         update_option( self::OPTION_KEY, $data );
@@ -778,6 +786,38 @@ return new class ( $core ?? null ) implements MAD_Suite_Module {
                                     <?php checked( ! empty( $s['wpml_quotes_enabled'] ) ); ?>>
                                 <?php esc_html_e( 'Meta box de respuesta/traducción en todos los pedidos de WooCommerce', 'mad-suite' ); ?>
                             </label>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- ── 8: Legacy redirects ───────────────────────────── -->
+                <h2><?php esc_html_e( '8. Redirecciones de la web antigua (olofane.es)', 'mad-suite' ); ?></h2>
+                <table class="form-table" role="presentation">
+                    <tr>
+                        <th><?php esc_html_e( 'Redirigir fichas antiguas', 'mad-suite' ); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="legacy_redirects_enabled" value="1"
+                                    <?php checked( ! empty( $s['legacy_redirects_enabled'] ) ); ?>>
+                                <?php esc_html_e( '301 de /producto/{ID}-…, /novedad/{ID}-…, /product/… y /produit/… al producto nuevo (por SKU o nombre) o, si ya no existe, a su categoría', 'mad-suite' ); ?>
+                            </label>
+                            <?php $stats = MAD_Olofane_Legacy_Redirects::get_stats(); ?>
+                            <?php if ( $stats ) : ?>
+                                <p class="description">
+                                    <?php
+                                    printf(
+                                        /* translators: 1-5: hit counts, 6: date */
+                                        esc_html__( 'Redirecciones hechas — a producto por SKU: %1$d · por nombre: %2$d · a categoría: %3$d · a tienda: %4$d · a home: %5$d. Última: %6$s', 'mad-suite' ),
+                                        (int) ( $stats['sku'] ?? 0 ),
+                                        (int) ( $stats['slug'] ?? 0 ),
+                                        (int) ( $stats['category'] ?? 0 ),
+                                        (int) ( $stats['shop'] ?? 0 ),
+                                        (int) ( $stats['home'] ?? 0 ),
+                                        esc_html( $stats['last'] ?? '—' )
+                                    );
+                                    ?>
+                                </p>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 </table>
