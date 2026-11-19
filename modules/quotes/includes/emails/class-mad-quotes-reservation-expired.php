@@ -103,7 +103,7 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
         $retry_url = '';
         if ( $has_attempts ) {
             if ( $is_pro ) {
-                $retry_url = apply_filters( 'mad_quotes_recompra_url', wc_get_page_permalink( 'shop' ), $order );
+                $retry_url = mad_quotes_recompra_url( $order );
             } else {
                 $parent_quote = wc_get_order( (int) $order->get_meta( '_mad_quote_parent' ) );
                 $retry_url    = $parent_quote instanceof WC_Order ? mad_quotes_quote_selection_url( $parent_quote ) : '';
@@ -246,7 +246,7 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
     private function get_preview_fallback_html(): string {
         ob_start();
         do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo wp_kses_post( wpautop( $this->get_text_for_lang( 'body_text_a', $this->body_text_defaults( 'a' )['es'] ) ) );
+        echo wp_kses_post( wpautop( $this->get_text_for_default_lang( 'body_text_a', $this->body_text_defaults( 'a' )['es'] ) ) );
         if ( $this->get_additional_content() ) {
             echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
         }

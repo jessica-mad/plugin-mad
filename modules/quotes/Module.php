@@ -176,6 +176,7 @@ return new class( $core ) implements MAD_Suite_Module {
             add_filter( 'woocommerce_bacs_process_payment_order_status', [ $this, 'bacs_reservation_status' ], 10, 2 );
             add_filter( 'woocommerce_thankyou_order_received_text', [ $this, 'filter_pro_reservation_thankyou_text' ], 20, 2 );
             add_action( 'woocommerce_thankyou_bacs', [ $this, 'render_pro_reservation_thankyou' ], 20 );
+            add_action( 'template_redirect', [ $this, 'handle_recompra' ], 5 );
 
             // ── Fase 8: admin — "Reservas activas", "Restablecer intentos",
             // aviso en la lista de pedidos (pensado para el personal de la
@@ -963,6 +964,56 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( 'quote-reserved' !== $order->get_status() ) return;
 
         echo $this->render_reservation_payment_page( $order ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+
+    /**
+     * {enlace_recompra} (solo profesionales): vuelve a meter en el carrito
+     * las piezas de un pedido caducado/cancelado que sigan disponibles, y
+     * redirige al carrito — o a la tienda, con un aviso, si ya no quedaba
+     * ninguna.
+     */
+    public function handle_recompra(): void {
+        if ( empty( $_GET['mad_recompra'] ) ) return; // phpcs:ignore WordPress.Security.NonceVerification
+
+        $order_key = sanitize_text_field( wp_unslash( $_GET['mad_recompra'] ) ); // phpcs:ignore WordPress.Security.NonceVerification
+        $order_id  = wc_get_order_id_by_order_key( $order_key );
+        $order     = $order_id ? wc_get_order( $order_id ) : null;
+
+        if ( ! $order || 'pro_purchase' !== $order->get_meta( '_mad_order_type' ) || ! isset( WC()->cart ) ) {
+            wp_safe_redirect( wc_get_page_permalink( 'shop' ) );
+            exit;
+        }
+
+        $added   = [];
+        $skipped = [];
+
+        foreach ( $order->get_items() as $item ) {
+            $product_id = $item->get_product_id();
+            $product    = $product_id ? wc_get_product( $product_id ) : null;
+
+            if ( $product && 'available' === $this->reservations->product_state( $product )
+                && WC()->cart->add_to_cart( $product_id, $item->get_quantity() )
+            ) {
+                $added[] = $item->get_name();
+                continue;
+            }
+
+            $skipped[] = $item->get_name();
+        }
+
+        if ( ! empty( $skipped ) ) {
+            wc_add_notice(
+                sprintf(
+                    /* translators: %s: piezas que ya no se pudieron volver a añadir */
+                    __( 'Estas piezas ya no están disponibles y no se han podido volver a añadir al carrito: %s', 'mad-suite' ),
+                    implode( ', ', $skipped )
+                ),
+                empty( $added ) ? 'error' : 'notice'
+            );
+        }
+
+        wp_safe_redirect( empty( $added ) ? wc_get_page_permalink( 'shop' ) : wc_get_cart_url() );
+        exit;
     }
 
     /* ================================================================ */
@@ -4778,7 +4829,15 @@ return new class( $core ) implements MAD_Suite_Module {
         ] );
 
         if ( is_wp_error( $order ) ) {
-            wp_send_json_error( [ 'message' => $order->get_error_message() ] );
+            // Incluye el product_id (si se conoce) para que la página de
+            // selección marque esa fila como "en proceso de compra" al
+            // instante, sin esperar al sondeo periódico — tal como pide
+            // la sección 3 para el caso de dos clientes reservando a la vez.
+            $error_data = $order->get_error_data();
+            wp_send_json_error( [
+                'message'    => $order->get_error_message(),
+                'product_id' => $error_data['product_id'] ?? null,
+            ] );
         }
 
         wp_send_json_success( [ 'redirect' => mad_quotes_order_payment_url( $order ) ] );

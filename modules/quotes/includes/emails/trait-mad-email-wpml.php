@@ -96,6 +96,27 @@ trait MAD_Email_WPML_Trait {
     }
 
     /**
+     * Igual que get_text_for_lang(), pero ignora el idioma "actual" y usa
+     * siempre el idioma POR DEFECTO de WPML — la vista previa nativa de
+     * WooCommerce (sin pedido real) debe mostrar ese idioma (sección 6.0),
+     * no el que el admin tenga elegido en ese momento en el wp-admin.
+     */
+    private function get_text_for_default_lang( string $field_name, string $fallback = '' ): string {
+        $langs = $this->get_wpml_languages();
+        if ( empty( $langs ) ) {
+            return $this->get_option( $field_name, $fallback );
+        }
+
+        $default_lang = (string) apply_filters( 'wpml_default_language', null );
+        if ( $default_lang ) {
+            $text = $this->get_option( $field_name . '_' . $default_lang, $this->lang_field_default( $field_name, $default_lang ) );
+            if ( '' !== $text ) return $text;
+        }
+
+        return $fallback;
+    }
+
+    /**
      * Resuelve {campo}_{idioma_actual} → {campo}_{idioma_por_defecto} →
      * valor por defecto declarado para ese idioma → '' (y entonces el
      * llamador cae al campo nativo de WC_Email — subject/heading/

@@ -177,7 +177,7 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
     private function get_preview_fallback_html(): string {
         ob_start();
         do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo wp_kses_post( wpautop( $this->get_body_text_for_lang( $this->get_default_body_text() ) ) );
+        echo wp_kses_post( wpautop( $this->get_text_for_default_lang( 'body_text', $this->get_default_body_text() ) ) );
         if ( $this->get_additional_content() ) {
             echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
         }

@@ -408,6 +408,15 @@ function mad_quotes_order_payment_url( WC_Order $order ): string {
     return add_query_arg( 'mad_order_key', $order->get_order_key(), mad_quotes_purchase_page_url() );
 }
 
+/**
+ * {enlace_recompra} (solo profesionales, sección 6 placeholders): vuelve a
+ * meter en el carrito las piezas de un pedido caducado/cancelado que sigan
+ * disponibles. Resuelto por Module::handle_recompra() (template_redirect).
+ */
+function mad_quotes_recompra_url( WC_Order $order ): string {
+    return add_query_arg( 'mad_recompra', $order->get_order_key(), home_url( '/' ) );
+}
+
 /** Cuentas bancarias configuradas en la pasarela nativa BACS de WooCommerce — compartido entre la página de pago y los emails 6.2/6.3. */
 /** {datos_bancarios} en HTML: titular/banco/cuenta/IBAN/BIC + concepto "Pedido #N". Usado en la página de pago y en el email 6.2. */
 function mad_quotes_bacs_details_html( WC_Order $order ): string {

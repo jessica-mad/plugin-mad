@@ -15,7 +15,7 @@ defined( 'ABSPATH' ) || exit;
 do_action( 'woocommerce_email_header', $email_heading, $email );
 ?>
 
-<p><?php echo wp_kses_post( $body_text ); ?></p>
+<?php echo wp_kses_post( wpautop( $body_text ) ); ?>
 
 <!-- Tabla de artículos con precios de presupuesto -->
 <table cellspacing="0" cellpadding="6" style="width:100%;border-collapse:collapse;margin-bottom:20px;">

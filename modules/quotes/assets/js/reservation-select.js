@@ -57,6 +57,13 @@
             showResult( 'error', msg );
             $btn.prop( 'disabled', false ).text( originalText );
             updateReserveButtonState();
+
+            // Dos clientes reservando la misma pieza a la vez (sección 3):
+            // en vez de esperar al sondeo periódico, confirmamos ya mismo
+            // el estado real de la pieza perdida y la marcamos como "en
+            // proceso de compra" al instante.
+            var pid = response && response.data && response.data.product_id;
+            if ( pid ) markRowContested( pid );
         } )
         .fail( function () {
             showResult( 'error', params.i18n.error );
@@ -64,6 +71,25 @@
             updateReserveButtonState();
         } );
     } );
+
+    /** Confirma por AJAX el estado real de una pieza que se nos acaba de escapar y actualiza su fila sin esperar al sondeo periódico. */
+    function markRowContested( productId ) {
+        var $row = $root.find( '.mad-qp__row[data-mad-product-id="' + productId + '"]' );
+        if ( ! $row.length ) return;
+
+        $.post( params.ajax_url, { action: 'mad_quote_state', product_id: productId } )
+            .done( function ( response ) {
+                if ( ! response || ! response.success || ! response.data || ! response.data.product ) return;
+
+                var info = response.data.product;
+                $row.attr( 'data-mad-state', info.state );
+                $row.find( '.mad-qp__checkbox' ).prop( 'checked', false ).prop( 'disabled', 'available' !== info.state );
+                if ( info.message ) {
+                    $row.find( '.mad-qp__state' ).html( info.message );
+                }
+                updateReserveButtonState();
+            } );
+    }
 
     function showResult( type, message ) {
         var $r = $( '#mad-qp-result' );
