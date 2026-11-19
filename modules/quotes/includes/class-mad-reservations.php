@@ -27,12 +27,15 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 
 class MAD_Reservations {
 
-    public const HOOK_EXPIRE      = 'mad_reservation_expire';
-    public const ACTION_GROUP     = 'mad-quotes-reservations';
-    private const LOCK_TTL        = 15; // segundos — solo cubre comprobar+crear, no la reserva en sí.
+    public const HOOK_EXPIRE            = 'mad_reservation_expire';
+    public const HOOK_PIECE_SOLD_BATCH  = 'mad_piece_sold_batch';
+    public const ACTION_GROUP           = 'mad-quotes-reservations';
+    private const LOCK_TTL              = 15; // segundos — solo cubre comprobar+crear, no la reserva en sí.
+    private const PIECE_SOLD_WINDOW     = 10 * MINUTE_IN_SECONDS;
 
     public function init(): void {
-        add_action( self::HOOK_EXPIRE, [ $this, 'handle_expire' ] );
+        add_action( self::HOOK_EXPIRE,           [ $this, 'handle_expire' ] );
+        add_action( self::HOOK_PIECE_SOLD_BATCH, [ $this, 'handle_piece_sold_batch' ] );
 
         // "Compra en la tienda física": si alguien pone el stock a 0 a mano
         // (panel o ATUM) mientras había una reserva activa, se anula esa
@@ -245,6 +248,14 @@ class MAD_Reservations {
             if ( ! empty( $args['parent_quote_id'] ) ) {
                 $this->register_attempt( (int) $args['parent_quote_id'] );
                 $this->append_purchase_order( (int) $args['parent_quote_id'], $order->get_id() );
+            } elseif ( 'pro_purchase' === $order_type ) {
+                // Sin presupuesto padre: el intento se cuenta por cliente +
+                // producto (sección 7 bis) — uno por cada pieza reservada.
+                $user_id = $order->get_customer_id();
+                $email   = $order->get_billing_email();
+                foreach ( $product_ids as $pid ) {
+                    $this->register_pro_attempt( $pid, $user_id, $email );
+                }
             }
 
             $this->schedule_expiry( $order->get_id(), $until );
@@ -467,6 +478,186 @@ class MAD_Reservations {
 
         $settings = mad_quotes_get_settings();
         return (int) min( $attempts ) + ( (int) $settings['reservation_window_hours'] * HOUR_IN_SECONDS );
+    }
+
+    /* ────────────────────────────────────────────────────────────────
+     * Intentos — resolución genérica para un pedido de reserva (por
+     * presupuesto si lo tiene, o por cliente+producto si no — sección 7
+     * bis), usada por el email "Reserva caducada" (6.3) para saber qué
+     * variante (A/B/C/D) corresponde sin que la clase del email tenga que
+     * conocer la diferencia entre ambos caminos.
+     * ──────────────────────────────────────────────────────────────── */
+
+    /** Intentos restantes aplicables a ESTE pedido. Con varios productos y sin presupuesto padre, el más restrictivo manda. */
+    public function order_attempts_remaining( WC_Order $order ): int {
+        $parent_quote_id = (int) $order->get_meta( '_mad_quote_parent' );
+        if ( $parent_quote_id ) {
+            return $this->attempts_remaining( $parent_quote_id );
+        }
+
+        $user_id = $order->get_customer_id();
+        $email   = $order->get_billing_email();
+        $min     = null;
+
+        foreach ( $order->get_items() as $item ) {
+            $remaining = $this->pro_attempts_remaining( $item->get_product_id(), $user_id, $email );
+            $min       = ( null === $min ) ? $remaining : min( $min, $remaining );
+        }
+
+        return $min ?? 0;
+    }
+
+    /** Próximo intento disponible para ESTE pedido — el más tardío entre los productos agotados. */
+    public function order_next_attempt_at( WC_Order $order ): ?int {
+        $parent_quote_id = (int) $order->get_meta( '_mad_quote_parent' );
+        if ( $parent_quote_id ) {
+            return $this->next_attempt_at( $parent_quote_id );
+        }
+
+        $user_id = $order->get_customer_id();
+        $email   = $order->get_billing_email();
+        $latest  = null;
+
+        foreach ( $order->get_items() as $item ) {
+            $next = $this->pro_next_attempt_at( $item->get_product_id(), $user_id, $email );
+            if ( null !== $next ) {
+                $latest = ( null === $latest ) ? $next : max( $latest, $next );
+            }
+        }
+
+        return $latest;
+    }
+
+    /** Quita de la lista de intentos el más cercano al momento en que se creó este pedido — usado al anular una reserva a mano (email 6.6: el intento consumido se devuelve). */
+    public function return_attempt_for_order( WC_Order $order ): void {
+        $created_at       = $order->get_date_created() ? $order->get_date_created()->getTimestamp() : time();
+        $parent_quote_id  = (int) $order->get_meta( '_mad_quote_parent' );
+
+        if ( $parent_quote_id ) {
+            $attempts = $this->remove_closest_timestamp( $this->get_attempts( $parent_quote_id ), $created_at );
+            update_post_meta( $parent_quote_id, '_mad_reservation_attempts', wp_json_encode( $attempts ) );
+            return;
+        }
+
+        $user_id = $order->get_customer_id();
+        $email   = $order->get_billing_email();
+        foreach ( $order->get_items() as $item ) {
+            $product_id = $item->get_product_id();
+            $attempts   = $this->remove_closest_timestamp( $this->get_pro_attempts( $product_id, $user_id, $email ), $created_at );
+            $this->save_pro_attempts( $product_id, $user_id, $email, $attempts );
+        }
+    }
+
+    /** @param int[] $timestamps @return int[] */
+    private function remove_closest_timestamp( array $timestamps, int $target ): array {
+        if ( empty( $timestamps ) ) return $timestamps;
+
+        $closest_i = 0;
+        $closest_d = abs( $timestamps[0] - $target );
+        foreach ( $timestamps as $i => $t ) {
+            $d = abs( $t - $target );
+            if ( $d < $closest_d ) {
+                $closest_d = $d;
+                $closest_i = $i;
+            }
+        }
+        unset( $timestamps[ $closest_i ] );
+        return array_values( $timestamps );
+    }
+
+    /* ────────────────────────────────────────────────────────────────
+     * "Pieza vendida" (6.5) — se dispara por PRESUPUESTO, no por pedido:
+     * cuando una pieza se vende, se avisa a cada otro presupuesto vigente
+     * que la tuviera, agrupando varias piezas de un mismo presupuesto que
+     * se vendan dentro de una ventana de 10 minutos en un solo email.
+     * ──────────────────────────────────────────────────────────────── */
+
+    /**
+     * Encola el aviso de "pieza vendida" para cada presupuesto vigente
+     * (salvo el del propio comprador, si vino de uno) que contenga alguna
+     * de las piezas de este pedido ya confirmado.
+     */
+    public function notify_pieces_sold( WC_Order $order ): void {
+        if ( '1' === $order->get_meta( '_mad_piece_sold_notified' ) ) return;
+        $order->update_meta_data( '_mad_piece_sold_notified', '1' );
+        $order->save();
+
+        $buyer_quote_id = (int) $order->get_meta( '_mad_quote_parent' );
+
+        foreach ( $order->get_items() as $item ) {
+            $product_id = $item->get_product_id();
+            if ( ! $product_id ) continue;
+
+            foreach ( $this->quotes_containing_product( $product_id, $buyer_quote_id ) as $quote_id ) {
+                $this->queue_piece_sold_notice( $quote_id, $product_id );
+            }
+        }
+    }
+
+    /** @return int[] IDs de presupuestos vigentes (quote-sent) que contienen este producto, sin contar $exclude_quote_id. */
+    private function quotes_containing_product( int $product_id, int $exclude_quote_id ): array {
+        $quote_ids = wc_get_orders( [
+            'type'       => 'shop_order',
+            'status'     => [ 'quote-sent' ],
+            'limit'      => -1,
+            'return'     => 'ids',
+            'meta_key'   => '_mad_qwc_quote',
+            'meta_value' => '1',
+        ] );
+
+        $matches = [];
+        foreach ( $quote_ids as $quote_id ) {
+            $quote_id = (int) $quote_id;
+            if ( $quote_id === $exclude_quote_id ) continue;
+
+            $quote = wc_get_order( $quote_id );
+            if ( ! $quote ) continue;
+
+            foreach ( $quote->get_items() as $item ) {
+                if ( (int) $item->get_product_id() === $product_id ) {
+                    $matches[] = $quote_id;
+                    break;
+                }
+            }
+        }
+
+        return $matches;
+    }
+
+    /** Añade la pieza a la cola de este presupuesto y programa su envío dentro de 10 minutos si es la primera de la ventana. */
+    private function queue_piece_sold_notice( int $quote_id, int $product_id ): void {
+        $raw     = get_post_meta( $quote_id, '_mad_piece_sold_pending', true );
+        $pending = $raw ? (array) json_decode( (string) $raw, true ) : [];
+
+        $already_scheduled = ! empty( $pending );
+
+        if ( ! in_array( $product_id, $pending, true ) ) {
+            $pending[] = $product_id;
+        }
+        update_post_meta( $quote_id, '_mad_piece_sold_pending', wp_json_encode( $pending ) );
+
+        if ( $already_scheduled ) return;
+
+        $when = time() + self::PIECE_SOLD_WINDOW;
+        if ( function_exists( 'as_schedule_single_action' ) ) {
+            as_schedule_single_action( $when, self::HOOK_PIECE_SOLD_BATCH, [ 'quote_id' => $quote_id ], self::ACTION_GROUP );
+        } else {
+            wp_schedule_single_event( $when, self::HOOK_PIECE_SOLD_BATCH, [ 'quote_id' => $quote_id ] );
+        }
+    }
+
+    /** Callback del batching: dispara el email 6.5 con todas las piezas acumuladas de la ventana y limpia la cola. */
+    public function handle_piece_sold_batch( int $quote_id ): void {
+        $raw = get_post_meta( $quote_id, '_mad_piece_sold_pending', true );
+        delete_post_meta( $quote_id, '_mad_piece_sold_pending' );
+
+        $product_ids = $raw ? array_map( 'absint', (array) json_decode( (string) $raw, true ) ) : [];
+        if ( empty( $product_ids ) ) return;
+
+        $quote = wc_get_order( $quote_id );
+        if ( ! $quote ) return;
+
+        do_action( 'mad_quotes_pieces_sold_notice', $quote, $product_ids );
     }
 
     /* ────────────────────────────────────────────────────────────────

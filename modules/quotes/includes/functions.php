@@ -387,3 +387,41 @@ function mad_quotes_quote_selection_url( WC_Order $quote ): string {
 function mad_quotes_order_payment_url( WC_Order $order ): string {
     return add_query_arg( 'mad_order_key', $order->get_order_key(), mad_quotes_purchase_page_url() );
 }
+
+/** Cuentas bancarias configuradas en la pasarela nativa BACS de WooCommerce — compartido entre la página de pago y los emails 6.2/6.3. */
+function mad_quotes_bacs_account_details(): array {
+    if ( ! function_exists( 'WC' ) || ! WC()->payment_gateways() ) return [];
+
+    $gateways = WC()->payment_gateways()->payment_gateways();
+    $bacs     = $gateways['bacs'] ?? null;
+
+    if ( ! $bacs || empty( $bacs->account_details ) || ! is_array( $bacs->account_details ) ) return [];
+
+    return $bacs->account_details;
+}
+
+/**
+ * Lista de líneas de un pedido como texto plano, una por renglón:
+ * "Nombre × cantidad" (o solo "Nombre" si la cantidad es 1). Usada en el
+ * placeholder {piezas} de los emails de reservas.
+ */
+function mad_quotes_order_items_text_list( WC_Order $order ): string {
+    $lines = [];
+    foreach ( $order->get_items() as $item ) {
+        $qty  = $item->get_quantity();
+        $name = $item->get_name();
+        $lines[] = $qty > 1 ? sprintf( '%s × %d', $name, $qty ) : $name;
+    }
+    return implode( "\n", $lines );
+}
+
+/** Igual que la anterior, pero como <li> de una lista HTML (ya escapados). */
+function mad_quotes_order_items_html_list( WC_Order $order ): string {
+    $html = '';
+    foreach ( $order->get_items() as $item ) {
+        $qty  = $item->get_quantity();
+        $name = $item->get_name();
+        $html .= '<li>' . esc_html( $qty > 1 ? sprintf( '%s × %d', $name, $qty ) : $name ) . '</li>';
+    }
+    return $html;
+}

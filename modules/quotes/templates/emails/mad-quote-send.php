@@ -92,8 +92,8 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
 <?php endif; ?>
 
 <p>
-    <a href="<?php echo esc_url( $order->get_checkout_payment_url() ); ?>" style="display:inline-block;background:#0073aa;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;">
-        <?php esc_html_e( 'Aceptar y pagar', 'mad-suite' ); ?>
+    <a href="<?php echo esc_url( mad_quotes_quote_selection_url( $order ) ); ?>" style="display:inline-block;background:#0073aa;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;">
+        <?php esc_html_e( 'Ver precios y comprar', 'mad-suite' ); ?>
     </a>
 </p>
 

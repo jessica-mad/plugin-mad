@@ -146,6 +146,12 @@ return new class( $core ) implements MAD_Suite_Module {
             // está vendida) sin tocar el stock, que ya está descontado.
             add_action( 'woocommerce_order_status_processing', [ $this, 'clear_reservation_meta_on_sale' ] );
             add_action( 'woocommerce_order_status_completed',  [ $this, 'clear_reservation_meta_on_sale' ] );
+
+            // El admin rechaza el comprobante (on-hold → cancelled, a mano):
+            // mismo desenlace que una caducidad para el cliente — reutiliza
+            // el email 6.3 con sus variantes. No se confunde con la propia
+            // caducidad (quote-reserved → cancelled, otra transición).
+            add_action( 'woocommerce_order_status_on-hold_to_cancelled', [ $this, 'notify_rejected_as_expired' ] );
         }
 
         // ── Rol: cachear precio HTML antes de que el plugin original lo modifique ──
@@ -764,12 +770,32 @@ return new class( $core ) implements MAD_Suite_Module {
         $this->reservations->release_reservation( $order );
     }
 
-    /** Limpia las metas de reserva del producto cuando la compra se confirma (ya está vendido, no reservado). */
+    /**
+     * Limpia las metas de reserva del producto cuando la compra se confirma
+     * (ya está vendido, no reservado) y avisa (email 6.5, agrupado en una
+     * ventana de 10 min) a los demás presupuestos vigentes que tuvieran
+     * alguna de las mismas piezas.
+     */
     public function clear_reservation_meta_on_sale( int $order_id ): void {
         $order = wc_get_order( $order_id );
         if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) return;
 
         $this->reservations->release_reservation( $order );
+        $this->reservations->notify_pieces_sold( $order );
+    }
+
+    /**
+     * El admin rechaza el comprobante de una reserva (on-hold → cancelled,
+     * decisión manual desde la ficha del pedido): la reserva no llegó a
+     * completarse, así que es el mismo desenlace que una caducidad — se
+     * reutiliza el email "Reserva caducada" (6.3) con sus mismas variantes
+     * según los intentos restantes.
+     */
+    public function notify_rejected_as_expired( int $order_id ): void {
+        $order = wc_get_order( $order_id );
+        if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) return;
+
+        do_action( 'mad_reservation_expired', $order );
     }
 
     public function order_status_css() {
@@ -789,10 +815,24 @@ return new class( $core ) implements MAD_Suite_Module {
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-confirmation.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-request.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-send-quote.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-reservation-confirmed.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-reservation-expired.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-proof-received.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-piece-sold.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-reservation-cancelled.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-reservation-admin.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-proof-received-admin.php';
 
-        $email_classes['MAD_Quotes_Email_Confirmation'] = new MAD_Quotes_Email_Confirmation();
-        $email_classes['MAD_Quotes_Email_New_Request']  = new MAD_Quotes_Email_New_Request();
-        $email_classes['MAD_Quotes_Email_Send_Quote']   = new MAD_Quotes_Email_Send_Quote();
+        $email_classes['MAD_Quotes_Email_Confirmation']            = new MAD_Quotes_Email_Confirmation();
+        $email_classes['MAD_Quotes_Email_New_Request']             = new MAD_Quotes_Email_New_Request();
+        $email_classes['MAD_Quotes_Email_Send_Quote']              = new MAD_Quotes_Email_Send_Quote();
+        $email_classes['MAD_Quotes_Email_Reservation_Confirmed']   = new MAD_Quotes_Email_Reservation_Confirmed();
+        $email_classes['MAD_Quotes_Email_Reservation_Expired']     = new MAD_Quotes_Email_Reservation_Expired();
+        $email_classes['MAD_Quotes_Email_Proof_Received']          = new MAD_Quotes_Email_Proof_Received();
+        $email_classes['MAD_Quotes_Email_Piece_Sold']              = new MAD_Quotes_Email_Piece_Sold();
+        $email_classes['MAD_Quotes_Email_Reservation_Cancelled']   = new MAD_Quotes_Email_Reservation_Cancelled();
+        $email_classes['MAD_Quotes_Email_New_Reservation_Admin']   = new MAD_Quotes_Email_New_Reservation_Admin();
+        $email_classes['MAD_Quotes_Email_Proof_Received_Admin']    = new MAD_Quotes_Email_Proof_Received_Admin();
 
         $this->disable_native_qwc_emails( $email_classes );
 
@@ -4223,14 +4263,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
     /** Cuentas bancarias configuradas en la pasarela nativa BACS de WooCommerce. */
     private function get_bacs_account_details(): array {
-        if ( ! function_exists( 'WC' ) || ! WC()->payment_gateways() ) return [];
-
-        $gateways = WC()->payment_gateways()->payment_gateways();
-        $bacs     = $gateways['bacs'] ?? null;
-
-        if ( ! $bacs || empty( $bacs->account_details ) || ! is_array( $bacs->account_details ) ) return [];
-
-        return $bacs->account_details;
+        return mad_quotes_bacs_account_details();
     }
 
     private function payment_pending_review_text( string $lang ): string {
@@ -4599,7 +4632,15 @@ return new class( $core ) implements MAD_Suite_Module {
 
         // New_Request y los avisos internos a Olofane no llevan estos
         // campos — siguen solo en español, como hoy.
-        $email_ids = [ 'mad_quotes_confirmation', 'mad_quotes_send_quote' ];
+        $email_ids = [
+            'mad_quotes_confirmation',
+            'mad_quotes_send_quote',
+            'mad_quotes_reservation_confirmed',
+            'mad_quotes_reservation_expired',
+            'mad_quotes_proof_received',
+            'mad_quotes_piece_sold',
+            'mad_quotes_reservation_cancelled',
+        ];
 
         foreach ( $email_ids as $id ) {
             $option_key = 'woocommerce_' . $id . '_settings';

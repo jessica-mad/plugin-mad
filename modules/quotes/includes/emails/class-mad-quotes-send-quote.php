@@ -131,18 +131,28 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, tu presupuesto está listo. Puedes revisarlo a continuación.', 'mad-suite' );
+        return __( 'Hola {customer_name}, tu lista de precios está lista. Elige qué piezas quieres comprar y te las reservamos durante {plazo} mientras realizas la transferencia. Tienes {intentos_total} intentos de reserva dentro de una ventana de {ventana}.', 'mad-suite' );
     }
 
     public function init_form_fields() {
         parent::init_form_fields();
         $this->add_subject_heading_footer_form_fields( $this->form_fields );
-        $this->add_body_text_form_fields( $this->form_fields );
+        $this->add_body_text_form_fields(
+            $this->form_fields,
+            __( 'Usa {customer_name}, {plazo} (plazo de reserva), {intentos_total} y {ventana} (sección "Reservas con plazo" de los ajustes).', 'mad-suite' )
+        );
     }
 
-    private function get_body_text( $order ): string {
+    private function get_body_text( WC_Order $order ): string {
+        $lang     = mad_quotes_order_lang( $order );
+        $settings = mad_quotes_get_settings();
+
         $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
-        return str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
+        $text = str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
+        $text = str_replace( '{plazo}', mad_quotes_format_duration( (int) $settings['reservation_minutes'], $lang ), $text );
+        $text = str_replace( '{intentos_total}', (string) (int) $settings['reservation_attempts'], $text );
+        $text = str_replace( '{ventana}', mad_quotes_format_window( (int) $settings['reservation_window_hours'], $lang ), $text );
+        return $text;
     }
 
     private function get_preview_fallback_html(): string {
