@@ -8,6 +8,7 @@
  * @var string   $additional_content
  * @var WC_Email $email
  * @var string   $admin_note   Optional note from the admin.
+ * @var bool     $show_payment_button Whether to show the "Aceptar y pagar" link.
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -15,7 +16,7 @@ defined( 'ABSPATH' ) || exit;
 do_action( 'woocommerce_email_header', $email_heading, $email );
 ?>
 
-<p><?php echo wp_kses_post( $body_text ); ?></p>
+<?php echo wp_kses_post( wpautop( $body_text ) ); ?>
 
 <?php if ( ! empty( $admin_note ) ) : ?>
 <blockquote style="border-left:4px solid #ddd;margin:12px 0;padding:8px 16px;color:#555;">
@@ -64,11 +65,13 @@ do_action( 'woocommerce_email_header', $email_heading, $email );
     </tfoot>
 </table>
 
+<?php if ( ! empty( $show_payment_button ) ) : ?>
 <p>
     <a href="<?php echo esc_url( $order->get_checkout_payment_url() ); ?>" style="display:inline-block;background:#0073aa;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;">
         <?php esc_html_e( 'Aceptar y pagar', 'mad-suite' ); ?>
     </a>
 </p>
+<?php endif; ?>
 
 <?php if ( $additional_content ) : ?>
 <div style="margin-top:20px;">

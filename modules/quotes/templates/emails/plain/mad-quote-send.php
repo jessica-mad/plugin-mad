@@ -53,8 +53,10 @@ printf(
     wp_strip_all_tags( wc_price( $grand_total ) )
 );
 
-echo "\n";
-echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";
+if ( ! empty( $show_payment_button ) ) {
+    echo "\n";
+    echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";
+}
 
 if ( $additional_content ) {
     echo "\n" . wp_strip_all_tags( wptexturize( $additional_content ) ) . "\n";
