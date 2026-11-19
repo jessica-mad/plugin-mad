@@ -26,12 +26,16 @@ define( 'MAD_QUOTES_DIR',           plugin_dir_path( __FILE__ ) );
 define( 'MAD_QUOTES_URL',           plugin_dir_url( __FILE__ ) );
 
 require_once MAD_QUOTES_DIR . 'includes/functions.php';
+require_once MAD_QUOTES_DIR . 'includes/class-mad-reservations.php';
 
 return new class( $core ) implements MAD_Suite_Module {
 
     private $core;
     private $slug   = 'quotes';
     private $active = false;
+
+    /** @var MAD_Reservations Núcleo de la lógica de reservas con plazo. */
+    private $reservations;
 
     /** @var array Cache de precios originales antes de que el plugin original los filtre. */
     private $price_cache = [];
@@ -43,7 +47,8 @@ return new class( $core ) implements MAD_Suite_Module {
     private static $enforcing_status = false;
 
     public function __construct( $core ) {
-        $this->core = $core;
+        $this->core         = $core;
+        $this->reservations = new MAD_Reservations();
     }
 
     /* ================================================================ */
@@ -109,10 +114,39 @@ return new class( $core ) implements MAD_Suite_Module {
             'show_in_admin_status_list' => true,
             'label_count'               => _n_noop( 'Presupuesto enviado (%s)', 'Presupuestos enviados (%s)', 'mad-suite' ),
         ] );
+        // Pedido de COMPRA (no el presupuesto) mientras corre el plazo de
+        // reserva — tanto para compras desde un presupuesto como para
+        // profesionales pagando por transferencia (sección 7 bis).
+        register_post_status( 'wc-quote-reserved', [
+            'label'                     => _x( 'Reservado', 'Order status', 'mad-suite' ),
+            'public'                    => false,
+            'exclude_from_search'       => false,
+            'show_in_admin_all_list'    => true,
+            'show_in_admin_status_list' => true,
+            'label_count'               => _n_noop( 'Reservado (%s)', 'Reservados (%s)', 'mad-suite' ),
+        ] );
         add_filter( 'wc_order_statuses',                           [ $this, 'add_wc_order_statuses' ] );
         add_filter( 'woocommerce_valid_order_statuses_for_payment', [ $this, 'valid_payment_statuses' ] );
         add_filter( 'woocommerce_order_needs_payment',             [ $this, 'quote_sent_needs_payment' ], 10, 2 );
         add_action( 'admin_head', [ $this, 'order_status_css' ] );
+
+        // ── Reservas con plazo ─────────────────────────────────────────
+        $reservation_settings = mad_quotes_get_settings();
+        if ( ! empty( $reservation_settings['reservations_enabled'] ) ) {
+            $this->reservations->init();
+
+            // Al cancelarse un pedido quote-reserved (caducidad, rechazo de
+            // comprobante, venta en tienda física), liberar siempre la
+            // pieza — sin importar por qué camino llegó a 'cancelled'.
+            add_action( 'woocommerce_order_status_cancelled', [ $this, 'release_reservation_on_cancel' ] );
+
+            // Al aprobar la transferencia (processing) o al entregar
+            // (completed), la reserva ya cumplió su función — se limpian
+            // las metas del producto (ya no hace falta el plazo, la pieza
+            // está vendida) sin tocar el stock, que ya está descontado.
+            add_action( 'woocommerce_order_status_processing', [ $this, 'clear_reservation_meta_on_sale' ] );
+            add_action( 'woocommerce_order_status_completed',  [ $this, 'clear_reservation_meta_on_sale' ] );
+        }
 
         // ── Rol: cachear precio HTML antes de que el plugin original lo modifique ──
         add_filter( 'woocommerce_get_price_html',      [ $this, 'cache_original_price' ], 1, 2 );
@@ -462,6 +496,82 @@ return new class( $core ) implements MAD_Suite_Module {
             'mad_quotes_thankyou'
         );
 
+        // ── Sección: Reservas con plazo ─────────────────────────────────
+        add_settings_section(
+            'mad_quotes_reservations',
+            __( 'Reservas con plazo', 'mad-suite' ),
+            function () {
+                echo '<p>' . esc_html__( 'Al elegir qué piezas comprar de un presupuesto (o al pagar por transferencia como profesional), quedan reservadas durante el plazo de abajo mientras se transfiere y se sube el comprobante — nadie más puede comprarlas mientras tanto.', 'mad-suite' ) . '</p>';
+            },
+            $this->menu_slug()
+        );
+        $this->register_field(
+            'reservations_enabled',
+            __( 'Activar reservas', 'mad-suite' ),
+            'field_checkbox',
+            'mad_quotes_reservations'
+        );
+        $this->register_field(
+            'reservation_minutes',
+            __( 'Plazo de reserva · clientes con presupuesto (minutos)', 'mad-suite' ),
+            'field_number',
+            'mad_quotes_reservations',
+            __( 'Se mostrará a los clientes en emails, ficha y carrito. Entre 10 y 1440 (24 horas). Cambiar este valor solo afecta a reservas nuevas — las ya abiertas mantienen el plazo con el que se crearon.', 'mad-suite' )
+        );
+        $this->register_field(
+            'pro_reservation_minutes',
+            __( 'Plazo de reserva · profesionales (minutos)', 'mad-suite' ),
+            'field_number',
+            'mad_quotes_reservations',
+            __( 'Mismo plazo, pero para la compra directa por transferencia en el checkout normal.', 'mad-suite' )
+        );
+        $this->register_field(
+            'reservation_attempts',
+            __( 'Reservas por presupuesto', 'mad-suite' ),
+            'field_number',
+            'mad_quotes_reservations',
+            __( 'Cuántas veces puede reservar un mismo presupuesto dentro de la ventana de abajo (la primera vez y los reintentos si caducan cuentan igual).', 'mad-suite' )
+        );
+        $this->register_field(
+            'pro_reservation_attempts',
+            __( 'Reservas por cliente y producto · profesionales', 'mad-suite' ),
+            'field_number',
+            'mad_quotes_reservations'
+        );
+        $this->register_field(
+            'reservation_window_hours',
+            __( 'Ventana de los intentos (horas)', 'mad-suite' ),
+            'field_number',
+            'mad_quotes_reservations',
+            __( 'Agotados los intentos, hay que esperar esta ventana desde el primer intento para volver a reservar.', 'mad-suite' )
+        );
+        $this->register_field(
+            'terms_page_id',
+            __( 'Página de condiciones de venta', 'mad-suite' ),
+            'field_page_select',
+            'mad_quotes_reservations',
+            __( 'Se muestra como casilla de aceptación obligatoria antes de reservar.', 'mad-suite' )
+        );
+        $this->register_field(
+            'contact_email',
+            __( 'Email de contacto en los avisos', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_reservations'
+        );
+        $this->register_field(
+            'contact_phone',
+            __( 'Teléfono de contacto en los avisos', 'mad-suite' ),
+            'field_text',
+            'mad_quotes_reservations'
+        );
+        $this->register_field(
+            'reservation_messages',
+            __( 'Mensajes en ficha, catálogo y carrito', 'mad-suite' ),
+            'field_reservation_messages',
+            'mad_quotes_reservations',
+            __( 'Se muestran mientras una pieza está reservada, con {tiempo} sustituido por la cuenta atrás o, si corresponde, sin ella.', 'mad-suite' )
+        );
+
         // ── AJAX ───────────────────────────────────────────────────────
         add_action( 'wp_ajax_mad_quotes_update_status',       [ $this, 'ajax_update_status' ] );
         add_action( 'wp_ajax_mad_quotes_send_quote',          [ $this, 'ajax_send_quote' ] );
@@ -518,8 +628,9 @@ return new class( $core ) implements MAD_Suite_Module {
     /* ================================================================ */
 
     public function add_wc_order_statuses( $statuses ) {
-        $statuses['wc-quote-pending'] = __( 'Presupuesto pendiente', 'mad-suite' );
-        $statuses['wc-quote-sent']    = __( 'Presupuesto enviado',   'mad-suite' );
+        $statuses['wc-quote-pending']  = __( 'Presupuesto pendiente', 'mad-suite' );
+        $statuses['wc-quote-sent']     = __( 'Presupuesto enviado',   'mad-suite' );
+        $statuses['wc-quote-reserved'] = __( 'Reservado',             'mad-suite' );
         return $statuses;
     }
 
@@ -604,10 +715,27 @@ return new class( $core ) implements MAD_Suite_Module {
         $order->save();
     }
 
+    /** Libera la pieza (limpia metas + cancela la caducidad programada) cuando su pedido de compra se cancela, sea cual sea el motivo. */
+    public function release_reservation_on_cancel( int $order_id ): void {
+        $order = wc_get_order( $order_id );
+        if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) return;
+
+        $this->reservations->release_reservation( $order );
+    }
+
+    /** Limpia las metas de reserva del producto cuando la compra se confirma (ya está vendido, no reservado). */
+    public function clear_reservation_meta_on_sale( int $order_id ): void {
+        $order = wc_get_order( $order_id );
+        if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) return;
+
+        $this->reservations->release_reservation( $order );
+    }
+
     public function order_status_css() {
         echo '<style>
-            .order-status.status-quote-pending { background: #c0392b !important; color: #fff !important; }
-            .order-status.status-quote-sent    { background: #2980b9 !important; color: #fff !important; }
+            .order-status.status-quote-pending  { background: #c0392b !important; color: #fff !important; }
+            .order-status.status-quote-sent     { background: #2980b9 !important; color: #fff !important; }
+            .order-status.status-quote-reserved { background: #e67e22 !important; color: #fff !important; }
         </style>';
     }
 
@@ -3189,6 +3317,56 @@ return new class( $core ) implements MAD_Suite_Module {
         echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
     }
 
+    /** Tabla estado × idioma para los 4 mensajes de reserva de la sección 5 (textarea, con el texto por defecto como placeholder). */
+    public function field_reservation_messages( $args ) {
+        $settings = mad_quotes_get_settings();
+        $opt_key  = MAD_Suite_Core::option_key( $this->slug );
+        $stored   = (array) ( $settings['reservation_messages'] ?? [] );
+
+        $languages = [
+            'es' => 'Español',
+            'en' => 'English',
+            'fr' => 'Français',
+        ];
+        if ( function_exists( 'icl_get_languages' ) ) {
+            $active = [];
+            foreach ( icl_get_languages( 'skip_missing=0' ) as $code => $info ) {
+                $active[ $code ] = $info['native_name'];
+            }
+            if ( ! empty( $active ) ) $languages = $active;
+        }
+
+        $states = [
+            'reserved'      => __( 'Reservada (con cuenta atrás)', 'mad-suite' ),
+            'pending_proof' => __( 'Comprobante subido (sin cuenta atrás)', 'mad-suite' ),
+            'contested'     => __( 'Reservada mientras otro cliente pulsa a la vez', 'mad-suite' ),
+            'sold'          => __( 'Vendida (solo en el carrito del presupuesto)', 'mad-suite' ),
+        ];
+
+        foreach ( $states as $state => $label ) {
+            echo '<p style="margin-bottom:4px;"><strong>' . esc_html( $label ) . '</strong></p>';
+            echo '<table class="form-table" style="margin:0 0 16px;"><tbody>';
+            foreach ( $languages as $code => $name ) {
+                $value       = $stored[ strtolower( $code ) ][ $state ] ?? '';
+                $placeholder = mad_quotes_default_reservation_message( $state, strtolower( $code ) );
+                printf(
+                    '<tr><th style="padding:4px 10px 4px 0;font-weight:normal;width:80px;">%1$s <small>(%2$s)</small></th>'
+                    . '<td><textarea name="%3$s[reservation_messages][%4$s][%5$s]" rows="2" class="large-text" placeholder="%6$s">%7$s</textarea></td></tr>',
+                    esc_html( $name ),
+                    esc_html( strtoupper( $code ) ),
+                    esc_attr( $opt_key ),
+                    esc_attr( strtolower( $code ) ),
+                    esc_attr( $state ),
+                    esc_attr( $placeholder ),
+                    esc_textarea( $value )
+                );
+            }
+            echo '</tbody></table>';
+        }
+
+        echo '<span class="description">' . esc_html( $args['desc'] ?? '' ) . '</span>';
+    }
+
     public function field_checkbox( $args ) {
         $settings = mad_quotes_get_settings();
         $key      = $args['key'];
@@ -3607,6 +3785,29 @@ return new class( $core ) implements MAD_Suite_Module {
                 'enabled'  => ! empty( $row['enabled'] ) ? 1 : 0,
                 'discount' => max( 0, min( 100, (float) ( $row['discount'] ?? 0 ) ) ),
             ];
+        }
+
+        // ── Reservas con plazo ───────────────────────────────────────
+        $clean['reservations_enabled'] = ! empty( $input['reservations_enabled'] );
+
+        foreach ( [ 'reservation_minutes', 'pro_reservation_minutes' ] as $field ) {
+            $clean[ $field ] = max( 10, min( 1440, absint( $input[ $field ] ?? 30 ) ) );
+        }
+        foreach ( [ 'reservation_attempts', 'pro_reservation_attempts' ] as $field ) {
+            $clean[ $field ] = max( 1, absint( $input[ $field ] ?? 2 ) );
+        }
+        $clean['reservation_window_hours'] = max( 1, absint( $input['reservation_window_hours'] ?? 24 ) );
+        $clean['terms_page_id']            = absint( $input['terms_page_id'] ?? 0 );
+        $clean['contact_email']            = sanitize_email( $input['contact_email'] ?? '' );
+        $clean['contact_phone']            = sanitize_text_field( $input['contact_phone'] ?? '' );
+
+        $clean['reservation_messages'] = [];
+        $raw_messages = $input['reservation_messages'] ?? [];
+        if ( is_array( $raw_messages ) ) {
+            foreach ( $raw_messages as $lang => $states ) {
+                if ( ! is_array( $states ) ) continue;
+                $clean['reservation_messages'][ sanitize_key( $lang ) ] = array_map( 'sanitize_textarea_field', $states );
+            }
         }
 
         return $clean;
