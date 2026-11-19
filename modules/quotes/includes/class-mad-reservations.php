@@ -586,19 +586,30 @@ class MAD_Reservations {
 
         foreach ( $order->get_items() as $item ) {
             $product_id = $item->get_product_id();
-            if ( ! $product_id ) continue;
-
-            foreach ( $this->quotes_containing_product( $product_id, $buyer_quote_id ) as $quote_id ) {
-                $this->queue_piece_sold_notice( $quote_id, $product_id );
-            }
+            if ( $product_id ) $this->notify_piece_sold( $product_id, $buyer_quote_id );
         }
     }
 
-    /** @return int[] IDs de presupuestos vigentes (quote-sent) que contienen este producto, sin contar $exclude_quote_id. */
+    /**
+     * Encola el aviso de "pieza vendida" para una pieza suelta, sin pedido
+     * de referencia — venta en la tienda física (maybe_release_on_manual_stock_change()),
+     * o uso interno desde notify_pieces_sold(). $exclude_quote_id es el
+     * presupuesto del comprador, si lo hay; quotes_containing_product()
+     * además excluye SIEMPRE cualquier presupuesto que ya haya comprado esta
+     * pieza por otra vía, así da igual en qué orden disparen los hooks de
+     * WooCommerce (venta vía pedido vs. cambio de stock).
+     */
+    public function notify_piece_sold( int $product_id, int $exclude_quote_id = 0 ): void {
+        foreach ( $this->quotes_containing_product( $product_id, $exclude_quote_id ) as $quote_id ) {
+            $this->queue_piece_sold_notice( $quote_id, $product_id );
+        }
+    }
+
+    /** @return int[] IDs de presupuestos vigentes (quote-pending o quote-sent) que contienen este producto, sin contar $exclude_quote_id ni los que ya lo compraron. */
     private function quotes_containing_product( int $product_id, int $exclude_quote_id ): array {
         $quote_ids = wc_get_orders( [
             'type'       => 'shop_order',
-            'status'     => [ 'quote-sent' ],
+            'status'     => [ 'quote-pending', 'quote-sent' ],
             'limit'      => -1,
             'return'     => 'ids',
             'meta_key'   => '_mad_qwc_quote',
@@ -609,6 +620,7 @@ class MAD_Reservations {
         foreach ( $quote_ids as $quote_id ) {
             $quote_id = (int) $quote_id;
             if ( $quote_id === $exclude_quote_id ) continue;
+            if ( $this->quote_already_bought_product( $quote_id, $product_id ) ) continue;
 
             $quote = wc_get_order( $quote_id );
             if ( ! $quote ) continue;
@@ -622,6 +634,24 @@ class MAD_Reservations {
         }
 
         return $matches;
+    }
+
+    /**
+     * true si este presupuesto ya compró esta pieza (pedido de compra
+     * ligado en processing/completed) — nunca avisarle "pieza vendida" de
+     * algo que compró él mismo, sea cual sea el orden en que disparen los
+     * hooks de WooCommerce al confirmarse la venta.
+     */
+    public function quote_already_bought_product( int $quote_id, int $product_id ): bool {
+        foreach ( $this->purchase_orders_for_quote( $quote_id ) as $order_id ) {
+            $order = wc_get_order( $order_id );
+            if ( ! $order || ! in_array( $order->get_status(), [ 'processing', 'completed' ], true ) ) continue;
+
+            foreach ( $order->get_items() as $item ) {
+                if ( (int) $item->get_product_id() === $product_id ) return true;
+            }
+        }
+        return false;
     }
 
     /** Añade la pieza a la cola de este presupuesto y programa su envío dentro de 10 minutos si es la primera de la ventana. */
@@ -667,6 +697,13 @@ class MAD_Reservations {
     public function maybe_release_on_manual_stock_change( $product_id, $status, $product ): void {
         if ( 'outofstock' !== $status ) return;
         if ( ! $product instanceof WC_Product ) return;
+
+        // Cuenta como vendida igual, tenga o no una reserva activa encima
+        // (documento, sección 3) — si esta misma caída a 0 la causó una
+        // venta nuestra ya en curso (processing/completed), quote_already_bought_product()
+        // evita el aviso duplicado al propio comprador sin depender del
+        // orden exacto en que disparen los hooks de WooCommerce.
+        $this->notify_piece_sold( $product->get_id() );
 
         $order_id = (int) get_post_meta( $product->get_id(), '_mad_reserved_order', true );
         if ( ! $order_id ) return;

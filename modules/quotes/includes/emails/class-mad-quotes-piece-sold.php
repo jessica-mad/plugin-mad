@@ -28,8 +28,8 @@ class MAD_Quotes_Email_Piece_Sold extends WC_Email {
         $this->description    = __( 'Se envía a los demás presupuestos vigentes que tenían una pieza que acaba de venderse — nunca al comprador.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Una pieza de tu lista de precios se ha vendido', 'mad-suite' );
-        $this->subject = __( '[{blogname}] Una pieza de tu lista de precios ya no está disponible', 'mad-suite' );
+        $this->heading = __( 'Pieza vendida', 'mad-suite' );
+        $this->subject = __( 'Una pieza de su lista de precios ya no está disponible — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-piece-sold.php';
         $this->template_plain = 'emails/plain/mad-quote-piece-sold.php';
@@ -110,41 +110,87 @@ class MAD_Quotes_Email_Piece_Sold extends WC_Email {
         return [
             'order'              => $quote,
             'email_heading'      => $this->get_heading(),
-            'body_text'          => $this->get_body_text( $quote, $sold_names ),
+            'body_text'          => $this->get_body_text( $quote, $sold_names, $available_names ),
             'additional_content' => $this->get_additional_content(),
             'sent_to_admin'      => false,
             'plain_text'         => $plain_text,
             'email'              => $this,
             'available_names'    => $available_names,
-            'selection_url'      => ! empty( $available_names ) ? mad_quotes_quote_selection_url( $quote ) : '',
+            // Solo tiene sentido enlazar a la página de selección si el
+            // presupuesto ya está enviado (quote-pending todavía no tiene
+            // lista de precios que mostrar).
+            'selection_url'      => ( ! empty( $available_names ) && 'quote-sent' === $quote->get_status() ) ? mad_quotes_quote_selection_url( $quote ) : '',
         ];
     }
 
     public function get_default_subject() {
-        return __( '[{blogname}] Una pieza de tu lista de precios ya no está disponible', 'mad-suite' );
+        return __( 'Una pieza de su lista de precios ya no está disponible — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Una pieza de tu lista de precios se ha vendido', 'mad-suite' );
+        return __( 'Pieza vendida', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, queremos avisarte de que {piezas} de tu lista de precios ya se ha vendido y ya no está disponible.', 'mad-suite' );
+        return $this->body_text_defaults()['es'];
+    }
+
+    /**
+     * ES/EN/FR tal cual (sección 6.5). {frase_disponibles} se sustituye por
+     * la frase "el resto sigue disponible" o por nada si no queda ninguna
+     * pieza — así el email sigue siendo UN solo texto editable por idioma,
+     * sin perder la condición del documento.
+     */
+    private function body_text_defaults(): array {
+        return [
+            'es' => "Le informamos de que la siguiente pieza de su lista de precios ha sido vendida: {pieza}.\n\n"
+                . "{frase_disponibles}"
+                . 'Si lo desea, estaremos encantados de ayudarle a encontrar una pieza similar. Puede responder directamente a este correo.',
+            'en' => "We would like to let you know that the following piece from your price list has been sold: {pieza}.\n\n"
+                . "{frase_disponibles}"
+                . 'If you wish, we would be happy to help you find a similar piece. You can reply directly to this email.',
+            'fr' => "Nous vous informons que la pièce suivante de votre liste de prix a été vendue : {pieza}.\n\n"
+                . "{frase_disponibles}"
+                . 'Si vous le souhaitez, nous serons ravis de vous aider à trouver une pièce similaire. Vous pouvez répondre directement à cet e-mail.',
+        ];
+    }
+
+    private function available_sentence( string $lang ): string {
+        $sentences = [
+            'es' => "El resto de piezas de su solicitud siguen disponibles en su lista de precios.\n\n",
+            'en' => "The other pieces in your request are still available in your price list.\n\n",
+            'fr' => "Les autres pièces de votre demande restent disponibles dans votre liste de prix.\n\n",
+        ];
+        return $sentences[ $lang ] ?? $sentences['es'];
     }
 
     public function init_form_fields() {
         parent::init_form_fields();
-        $this->add_subject_heading_footer_form_fields( $this->form_fields );
+        $this->add_subject_heading_footer_form_fields( $this->form_fields, [
+            'subject' => [
+                'es' => 'Una pieza de su lista de precios ya no está disponible — Olofane',
+                'en' => 'A piece from your price list is no longer available — Olofane',
+                'fr' => "Une pièce de votre liste de prix n'est plus disponible — Olofane",
+            ],
+            'heading' => [
+                'es' => 'Pieza vendida',
+                'en' => 'Piece sold',
+                'fr' => 'Pièce vendue',
+            ],
+        ] );
         $this->add_body_text_form_fields(
             $this->form_fields,
-            __( 'Usa {customer_name} y {piezas}. Si quedan otras piezas disponibles, se añade automáticamente un botón para verlas.', 'mad-suite' )
+            __( 'Usa {pieza} (nombre de la pieza vendida, o la lista si se agruparon varias) y {frase_disponibles} (se sustituye por la frase de "el resto sigue disponible", u omite si no queda ninguna).', 'mad-suite' ),
+            $this->body_text_defaults()
         );
     }
 
-    private function get_body_text( WC_Order $quote, array $sold_names ): string {
+    private function get_body_text( WC_Order $quote, array $sold_names, array $available_names ): string {
+        $lang = mad_quotes_order_lang( $quote );
+
         $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
-        $text = str_replace( '{customer_name}', $quote->get_billing_first_name(), $text );
-        $text = str_replace( '{piezas}', implode( ', ', $sold_names ), $text );
+        $text = str_replace( '{pieza}', implode( ', ', $sold_names ), $text );
+        $text = str_replace( '{frase_disponibles}', empty( $available_names ) ? '' : $this->available_sentence( $lang ), $text );
         return $text;
     }
 

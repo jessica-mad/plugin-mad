@@ -389,6 +389,72 @@ function mad_quotes_order_payment_url( WC_Order $order ): string {
 }
 
 /** Cuentas bancarias configuradas en la pasarela nativa BACS de WooCommerce — compartido entre la página de pago y los emails 6.2/6.3. */
+/** {datos_bancarios} en HTML: titular/banco/cuenta/IBAN/BIC + concepto "Pedido #N". Usado en la página de pago y en el email 6.2. */
+function mad_quotes_bacs_details_html( WC_Order $order ): string {
+    $fields = [
+        'account_name'   => __( 'Titular', 'mad-suite' ),
+        'bank_name'      => __( 'Banco', 'mad-suite' ),
+        'account_number' => __( 'Cuenta', 'mad-suite' ),
+        'iban'           => __( 'IBAN', 'mad-suite' ),
+        'bic'            => __( 'BIC/SWIFT', 'mad-suite' ),
+    ];
+
+    ob_start();
+    ?>
+    <table cellspacing="0" cellpadding="6" style="width:100%;max-width:480px;border-collapse:collapse;margin:12px 0;">
+        <?php foreach ( mad_quotes_bacs_account_details() as $account ) : ?>
+            <?php foreach ( $fields as $field => $label ) :
+                if ( empty( $account[ $field ] ) ) continue;
+            ?>
+                <tr>
+                    <th align="left" style="padding:6px 10px;border:1px solid #e5e5e5;background:#f8f8f8;"><?php echo esc_html( $label ); ?></th>
+                    <td style="padding:6px 10px;border:1px solid #e5e5e5;"><?php echo esc_html( $account[ $field ] ); ?></td>
+                </tr>
+            <?php endforeach; ?>
+        <?php endforeach; ?>
+        <tr>
+            <th align="left" style="padding:6px 10px;border:1px solid #e5e5e5;background:#f8f8f8;"><?php esc_html_e( 'Concepto', 'mad-suite' ); ?></th>
+            <td style="padding:6px 10px;border:1px solid #e5e5e5;">
+                <?php
+                printf(
+                    /* translators: %s: número de pedido */
+                    esc_html__( 'Pedido #%s', 'mad-suite' ),
+                    esc_html( $order->get_order_number() )
+                );
+                ?>
+            </td>
+        </tr>
+    </table>
+    <?php
+    return ob_get_clean();
+}
+
+/** Igual que mad_quotes_bacs_details_html() pero en texto plano. */
+function mad_quotes_bacs_details_text( WC_Order $order ): string {
+    $fields = [
+        'account_name'   => __( 'Titular', 'mad-suite' ),
+        'bank_name'      => __( 'Banco', 'mad-suite' ),
+        'account_number' => __( 'Cuenta', 'mad-suite' ),
+        'iban'           => __( 'IBAN', 'mad-suite' ),
+        'bic'            => __( 'BIC/SWIFT', 'mad-suite' ),
+    ];
+
+    $lines = [];
+    foreach ( mad_quotes_bacs_account_details() as $account ) {
+        foreach ( $fields as $field => $label ) {
+            if ( empty( $account[ $field ] ) ) continue;
+            $lines[] = $label . ': ' . $account[ $field ];
+        }
+    }
+    $lines[] = sprintf(
+        /* translators: %s: número de pedido */
+        __( 'Concepto: Pedido #%s', 'mad-suite' ),
+        $order->get_order_number()
+    );
+
+    return implode( "\n", $lines );
+}
+
 function mad_quotes_bacs_account_details(): array {
     if ( ! function_exists( 'WC' ) || ! WC()->payment_gateways() ) return [];
 

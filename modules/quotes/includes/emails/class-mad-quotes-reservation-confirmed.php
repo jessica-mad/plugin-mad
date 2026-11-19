@@ -21,8 +21,8 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
         $this->description    = __( 'Se envía al confirmar una reserva con plazo (presupuesto o profesional) — incluye los datos bancarios y el plazo para subir el comprobante.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Tu reserva está confirmada', 'mad-suite' );
-        $this->subject = __( '[{blogname}] Reserva confirmada — Pedido #{order_number}', 'mad-suite' );
+        $this->heading = __( 'Su reserva', 'mad-suite' );
+        $this->subject = __( 'Su reserva — Olofane (pedido #{order_number})', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-reservation-confirmed.php';
         $this->template_plain = 'emails/plain/mad-quote-reservation-confirmed.php';
@@ -43,7 +43,6 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
         if ( ! $this->get_recipient() ) return;
 
         $this->placeholders['{order_number}'] = $order->get_order_number();
-        $this->placeholders['{total}']        = wp_strip_all_tags( wc_price( $order->get_total() ) );
 
         $orig_lang = $this->switch_to_order_language( $order );
         $content   = $this->get_content();
@@ -71,7 +70,7 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
-                'body_text'          => $this->get_body_text( $this->object ),
+                'body_text'          => $this->get_body_text( $this->object, false ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => false,
@@ -92,7 +91,7 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
-                'body_text'          => $this->get_body_text( $this->object ),
+                'body_text'          => $this->get_body_text( $this->object, true ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => true,
@@ -104,37 +103,73 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( '[{blogname}] Reserva confirmada — Pedido #{order_number}', 'mad-suite' );
+        return __( 'Su reserva — Olofane (pedido #{order_number})', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Tu reserva está confirmada', 'mad-suite' );
+        return __( 'Su reserva', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, hemos reservado {piezas} para ti durante {plazo} (hasta las {hora_limite}). Realiza la transferencia con los datos de abajo y adjunta el comprobante antes de que termine el plazo — si no llega a tiempo, la reserva se cancelará y las piezas volverán a estar disponibles.', 'mad-suite' );
+        return $this->body_text_defaults()['es'];
+    }
+
+    /** ES/EN/FR tal cual (sección 6.2) — {datos_bancarios} se sustituye en get_body_text() (HTML o texto plano según el caso). */
+    private function body_text_defaults(): array {
+        return [
+            'es' => "Hemos reservado para usted las piezas que ha seleccionado hasta las {hora_limite} (hora de Madrid).\n\n"
+                . "Para completar la compra, realice una transferencia de {total} a la siguiente cuenta y adjunte el comprobante con el botón «Adjuntar comprobante» que encontrará más abajo:\n\n"
+                . "{datos_bancarios}\n\n"
+                . "Si no recibimos el comprobante antes de esa hora, la reserva se liberará y las piezas volverán a estar disponibles.\n\n"
+                . 'Quedamos a su disposición para cualquier consulta.',
+            'en' => "We have reserved the pieces you selected for you until {hora_limite} (Madrid time).\n\n"
+                . "To complete your purchase, please make a bank transfer of {total} to the account below and attach the proof of payment using the \u{201c}Attach proof of payment\u{201d} button below:\n\n"
+                . "{datos_bancarios}\n\n"
+                . "If we do not receive the proof of payment by then, the reservation will be released and the pieces will become available again.\n\n"
+                . 'We remain at your disposal for any questions.',
+            'fr' => "Nous avons réservé pour vous les pièces sélectionnées jusqu'à {hora_limite} (heure de Madrid).\n\n"
+                . "Pour finaliser votre achat, effectuez un virement de {total} sur le compte ci-dessous et joignez le justificatif à l'aide du bouton « Joindre le justificatif » ci-dessous :\n\n"
+                . "{datos_bancarios}\n\n"
+                . "Si nous ne recevons pas le justificatif avant cette heure, la réservation sera libérée et les pièces seront de nouveau disponibles.\n\n"
+                . 'Nous restons à votre disposition pour toute question.',
+        ];
     }
 
     public function init_form_fields() {
         parent::init_form_fields();
-        $this->add_subject_heading_footer_form_fields( $this->form_fields );
+        $this->add_subject_heading_footer_form_fields( $this->form_fields, [
+            'subject' => [
+                'es' => 'Su reserva — Olofane (pedido #{order_number})',
+                'en' => 'Your reservation — Olofane (order #{order_number})',
+                'fr' => 'Votre réservation — Olofane (commande n°{order_number})',
+            ],
+            'heading' => [
+                'es' => 'Su reserva',
+                'en' => 'Your reservation',
+                'fr' => 'Votre réservation',
+            ],
+        ] );
         $this->add_body_text_form_fields(
             $this->form_fields,
-            __( 'Usa {customer_name}, {piezas}, {plazo} y {hora_limite}.', 'mad-suite' )
+            __( 'Usa {hora_limite}, {total} y {datos_bancarios} (se sustituye por los datos bancarios y el concepto de la transferencia).', 'mad-suite' ),
+            $this->body_text_defaults()
         );
     }
 
-    private function get_body_text( WC_Order $order ): string {
+    private function get_body_text( WC_Order $order, bool $plain ): string {
         $lang    = mad_quotes_order_lang( $order );
         $minutes = (int) $order->get_meta( '_mad_reservation_minutes' );
         $created = $order->get_date_created();
         $until   = ( $created ? $created->getTimestamp() : time() ) + $minutes * MINUTE_IN_SECONDS;
 
         $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
-        $text = str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
-        $text = str_replace( '{piezas}', mad_quotes_order_items_text_list( $order ), $text );
-        $text = str_replace( '{plazo}', mad_quotes_format_duration( $minutes, $lang ), $text );
         $text = str_replace( '{hora_limite}', mad_quotes_madrid_time( $until ), $text );
+        $text = str_replace( '{total}', wp_strip_all_tags( wc_price( $order->get_total() ) ), $text );
+        $text = str_replace(
+            '{datos_bancarios}',
+            $plain ? mad_quotes_bacs_details_text( $order ) : mad_quotes_bacs_details_html( $order ),
+            $text
+        );
 
         return $text;
     }

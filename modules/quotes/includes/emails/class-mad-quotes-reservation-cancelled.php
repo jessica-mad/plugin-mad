@@ -24,8 +24,8 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
         $this->description    = __( 'Se envía cuando el admin anula manualmente una reserva (p. ej. la pieza se vendió en la tienda física). El intento consumido se devuelve al cliente.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Tu reserva ha sido anulada', 'mad-suite' );
-        $this->subject = __( '[{blogname}] Reserva anulada — Pedido #{order_number}', 'mad-suite' );
+        $this->heading = __( 'Reserva anulada', 'mad-suite' );
+        $this->subject = __( 'Su reserva ha sido anulada — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-reservation-cancelled.php';
         $this->template_plain = 'emails/plain/mad-quote-reservation-cancelled.php';
@@ -113,31 +113,45 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( '[{blogname}] Reserva anulada — Pedido #{order_number}', 'mad-suite' );
+        return __( 'Su reserva ha sido anulada — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Tu reserva ha sido anulada', 'mad-suite' );
+        return __( 'Reserva anulada', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, lamentamos informarte de que tu reserva de {piezas} ha sido anulada por nuestro equipo. Te hemos devuelto el intento de reserva utilizado, así que puedes volver a intentarlo cuando quieras.', 'mad-suite' );
+        return $this->body_text_defaults()['es'];
+    }
+
+    /** ES/EN/FR tal cual (sección 6.6). */
+    private function body_text_defaults(): array {
+        return [
+            'es' => 'Lamentamos informarle de que hemos tenido que anular su reserva porque la pieza ya no está disponible. No se ha descontado ningún intento de reserva. Quedamos a su disposición para cualquier consulta.',
+            'en' => 'We regret to inform you that we have had to cancel your reservation as the piece is no longer available. No reservation attempt has been used. We remain at your disposal for any questions.',
+            'fr' => "Nous sommes au regret de vous informer que nous avons dû annuler votre réservation, la pièce n'étant plus disponible. Aucune tentative de réservation n'a été décomptée. Nous restons à votre disposition pour toute question.",
+        ];
     }
 
     public function init_form_fields() {
         parent::init_form_fields();
-        $this->add_subject_heading_footer_form_fields( $this->form_fields );
-        $this->add_body_text_form_fields(
-            $this->form_fields,
-            __( 'Usa {customer_name} y {piezas}.', 'mad-suite' )
-        );
+        $this->add_subject_heading_footer_form_fields( $this->form_fields, [
+            'subject' => [
+                'es' => 'Su reserva ha sido anulada — Olofane',
+                'en' => 'Your reservation has been cancelled — Olofane',
+                'fr' => 'Votre réservation a été annulée — Olofane',
+            ],
+            'heading' => [
+                'es' => 'Reserva anulada',
+                'en' => 'Reservation cancelled',
+                'fr' => 'Réservation annulée',
+            ],
+        ] );
+        $this->add_body_text_form_fields( $this->form_fields, '', $this->body_text_defaults() );
     }
 
     private function get_body_text( WC_Order $order ): string {
-        $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
-        $text = str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
-        $text = str_replace( '{piezas}', mad_quotes_order_items_text_list( $order ), $text );
-        return $text;
+        return $this->get_body_text_for_lang( $this->get_default_body_text() );
     }
 
     private function get_preview_fallback_html(): string {

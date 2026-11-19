@@ -21,8 +21,8 @@ class MAD_Quotes_Email_Proof_Received extends WC_Email {
         $this->description    = __( 'Se envía al cliente cuando su comprobante de transferencia se verifica correctamente y queda a la espera de revisión del admin.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Hemos recibido tu comprobante', 'mad-suite' );
-        $this->subject = __( '[{blogname}] Comprobante recibido — Pedido #{order_number}', 'mad-suite' );
+        $this->heading = __( 'Comprobante recibido', 'mad-suite' );
+        $this->subject = __( 'Hemos recibido su comprobante — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-proof-received.php';
         $this->template_plain = 'emails/plain/mad-quote-proof-received.php';
@@ -103,31 +103,45 @@ class MAD_Quotes_Email_Proof_Received extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( '[{blogname}] Comprobante recibido — Pedido #{order_number}', 'mad-suite' );
+        return __( 'Hemos recibido su comprobante — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Hemos recibido tu comprobante', 'mad-suite' );
+        return __( 'Comprobante recibido', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, hemos recibido el comprobante de tu transferencia para el pedido #{order_number} y el importe coincide. Un miembro de nuestro equipo lo revisará en breve y te avisaremos en cuanto tu compra quede confirmada.', 'mad-suite' );
+        return $this->body_text_defaults()['es'];
+    }
+
+    /** ES/EN/FR tal cual (sección 6.4). */
+    private function body_text_defaults(): array {
+        return [
+            'es' => "Hemos recibido el comprobante de su transferencia. Lo revisaremos en breve y le confirmaremos la compra por correo.\n\nMientras tanto, las piezas quedan apartadas para usted.",
+            'en' => "We have received your bank transfer receipt. We will review it shortly and confirm your purchase by email.\n\nIn the meantime, the pieces are set aside for you.",
+            'fr' => "Nous avons bien reçu le justificatif de votre virement. Nous le vérifierons sous peu et vous confirmerons l'achat par e-mail.\n\nEn attendant, les pièces vous sont réservées.",
+        ];
     }
 
     public function init_form_fields() {
         parent::init_form_fields();
-        $this->add_subject_heading_footer_form_fields( $this->form_fields );
-        $this->add_body_text_form_fields(
-            $this->form_fields,
-            __( 'Usa {customer_name} y {order_number}.', 'mad-suite' )
-        );
+        $this->add_subject_heading_footer_form_fields( $this->form_fields, [
+            'subject' => [
+                'es' => 'Hemos recibido su comprobante — Olofane',
+                'en' => 'We have received your proof of payment — Olofane',
+                'fr' => 'Nous avons bien reçu votre justificatif — Olofane',
+            ],
+            'heading' => [
+                'es' => 'Comprobante recibido',
+                'en' => 'Proof of payment received',
+                'fr' => 'Justificatif reçu',
+            ],
+        ] );
+        $this->add_body_text_form_fields( $this->form_fields, '', $this->body_text_defaults() );
     }
 
     private function get_body_text( WC_Order $order ): string {
-        $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
-        $text = str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
-        $text = str_replace( '{order_number}', $order->get_order_number(), $text );
-        return $text;
+        return $this->get_body_text_for_lang( $this->get_default_body_text() );
     }
 
     private function get_preview_fallback_html(): string {

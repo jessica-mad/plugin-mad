@@ -27,6 +27,7 @@ define( 'MAD_QUOTES_URL',           plugin_dir_url( __FILE__ ) );
 
 require_once MAD_QUOTES_DIR . 'includes/functions.php';
 require_once MAD_QUOTES_DIR . 'includes/class-mad-reservations.php';
+require_once MAD_QUOTES_DIR . 'includes/class-mad-order-types.php';
 
 return new class( $core ) implements MAD_Suite_Module {
 
@@ -36,6 +37,9 @@ return new class( $core ) implements MAD_Suite_Module {
 
     /** @var MAD_Reservations Núcleo de la lógica de reservas con plazo. */
     private $reservations;
+
+    /** @var MAD_Order_Types Numeración P-/C-, columna/filtro "Tipo", pedidos relacionados, Analytics, Mis presupuestos (sección 7). */
+    private $order_types;
 
     /** @var array Cache de precios originales antes de que el plugin original los filtre. */
     private $price_cache = [];
@@ -49,6 +53,7 @@ return new class( $core ) implements MAD_Suite_Module {
     public function __construct( $core ) {
         $this->core         = $core;
         $this->reservations = new MAD_Reservations();
+        $this->order_types  = new MAD_Order_Types();
     }
 
     /* ================================================================ */
@@ -129,6 +134,13 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_valid_order_statuses_for_payment', [ $this, 'valid_payment_statuses' ] );
         add_filter( 'woocommerce_order_needs_payment',             [ $this, 'quote_sent_needs_payment' ], 10, 2 );
         add_action( 'admin_head', [ $this, 'order_status_css' ] );
+
+        // ── Sección 7: tipo de pedido, numeración P-/C-, columna/filtro,
+        // pedidos relacionados, Analytics, "Mis presupuestos" ────────────
+        // Independiente del interruptor "Activar reservas": distingue
+        // presupuestos/compras en la pantalla de Pedidos aunque las
+        // reservas con plazo estén desactivadas.
+        $this->order_types->init();
 
         // ── Reservas con plazo ─────────────────────────────────────────
         $reservation_settings = mad_quotes_get_settings();
@@ -318,6 +330,7 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'wp_enqueue_scripts',            [ $this, 'enqueue_proof_scripts' ] );
         add_action( 'wp_ajax_mad_upload_payment_proof',        [ $this, 'ajax_upload_payment_proof' ] );
         add_action( 'wp_ajax_nopriv_mad_upload_payment_proof', [ $this, 'ajax_upload_payment_proof' ] );
+        add_action( 'mad_quotes_late_proof_received', [ $this, 'notify_admin_late_proof' ] );
 
         // ── Reservas con plazo: página de selección/pago ──────────────
         add_shortcode( 'mad_quote_purchase', [ $this, 'shortcode_quote_purchase' ] );
@@ -380,6 +393,7 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $this->active ) return;
 
         $this->maybe_migrate_email_wpml_fields();
+        $this->maybe_migrate_order_types();
 
         $option_key = MAD_Suite_Core::option_key( $this->slug );
 
@@ -1492,6 +1506,7 @@ return new class( $core ) implements MAD_Suite_Module {
             $order->set_shipping_tax( 0 );
             $order->set_total( $order_total );
             $order->update_meta_data( '_mad_qwc_quote', '1' );
+            $order->update_meta_data( '_mad_order_type', 'quote' );
 
             if ( $is_store_manager ) {
                 // Gestión de tienda ya vio precio real + IVA al armar la lista
@@ -1574,6 +1589,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $order_total = $this->populate_quote_line_prices( $order );
 
         $order->update_meta_data( '_mad_qwc_quote', '1' );
+        $order->update_meta_data( '_mad_order_type', 'quote' );
         $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
         $order->set_payment_method( 'quotes-gateway' );
         $order->set_cart_tax( 0 );
@@ -2259,6 +2275,7 @@ return new class( $core ) implements MAD_Suite_Module {
         // Marcar como pedido de presupuesto MAD
         $order->update_meta_data( '_mad_quote_status', 'quote-pending' );
         $order->update_meta_data( '_mad_qwc_quote', '1' );
+        $order->update_meta_data( '_mad_order_type', 'quote' );
 
         // Poner a 0 todos los importes: se revelarán cuando el admin envíe el presupuesto
         foreach ( $order->get_items() as $item ) {
@@ -2867,6 +2884,51 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
+     * Caso límite (sección 8): el comprobante llega al servidor en el
+     * último segundo del plazo, justo cuando la caducidad ya canceló el
+     * pedido. Se admite igual — se guarda en el pedido ya cancelado y se
+     * avisa al admin para decidir a mano — en vez de rechazarlo con un
+     * error genérico.
+     */
+    private function order_accepts_late_payment_proof( WC_Order $order ): bool {
+        $is_reservation = in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true );
+        return $is_reservation && 'cancelled' === $order->get_status() && ! $order->get_meta( '_mad_payment_proof_url' );
+    }
+
+    /** "Su reserva ha caducado; hemos recibido su comprobante y nos pondremos en contacto con usted." (ES/EN/FR, sección 8). */
+    private function late_proof_message( string $lang ): string {
+        $messages = [
+            'es' => 'Su reserva ha caducado; hemos recibido su comprobante y nos pondremos en contacto con usted.',
+            'en' => 'Your reservation has expired; we have received your proof of payment and will contact you.',
+            'fr' => "Votre réservation a expiré ; nous avons bien reçu votre justificatif et nous vous contacterons.",
+        ];
+        return $messages[ $lang ] ?? $messages['es'];
+    }
+
+    /** Aviso interno (sin plantilla propia — caso raro) cuando llega un comprobante tras caducar la reserva. */
+    public function notify_admin_late_proof( WC_Order $order ): void {
+        $settings  = get_option( 'woocommerce_mad_quotes_new_request_settings', [] );
+        $recipient = is_array( $settings ) ? ( $settings['recipient'] ?? '' ) : '';
+        $recipient = $recipient ?: get_option( 'admin_email' );
+
+        wp_mail(
+            $recipient,
+            sprintf(
+                /* translators: %s: número de pedido */
+                __( '[%1$s] Comprobante recibido tras caducar una reserva — Pedido #%2$s', 'mad-suite' ),
+                get_bloginfo( 'name' ),
+                $order->get_order_number()
+            ),
+            sprintf(
+                /* translators: 1: número de pedido, 2: URL de edición del pedido */
+                __( "Ha llegado un comprobante para el pedido #%1\$s después de que su reserva caducara.\n\nRevísalo y decide manualmente si se puede aceptar la venta:\n%2\$s", 'mad-suite' ),
+                $order->get_order_number(),
+                $order->get_edit_order_url()
+            )
+        );
+    }
+
+    /**
      * Inyecta el formulario de subida de comprobante en la página de detalle
      * de pedido del cliente.
      */
@@ -2892,8 +2954,10 @@ return new class( $core ) implements MAD_Suite_Module {
             wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
         }
 
-        $order = wc_get_order( $order_id );
-        if ( ! $order || ! $this->order_accepts_payment_proof( $order ) ) {
+        $order   = wc_get_order( $order_id );
+        $is_late = $order && $this->order_accepts_late_payment_proof( $order );
+
+        if ( ! $order || ( ! $this->order_accepts_payment_proof( $order ) && ! $is_late ) ) {
             wp_send_json_error( [ 'message' => __( 'Pedido no válido.', 'mad-suite' ) ] );
         }
 
@@ -2945,6 +3009,20 @@ return new class( $core ) implements MAD_Suite_Module {
         $order->update_meta_data( '_mad_payment_proof_path', $target );
         $order->update_meta_data( '_mad_payment_proof_url', $file_url );
         $order->save();
+
+        if ( $is_late ) {
+            // Caso límite (sección 8): el comprobante llegó justo cuando la
+            // reserva ya había caducado. Se guarda igual, sin verificar ni
+            // cambiar el estado (ya está cancelado) — un admin lo revisa a
+            // mano y decide si la venta se puede rescatar.
+            $order->add_order_note( __( 'Comprobante recibido después de que la reserva caducara. Pendiente de revisión manual.', 'mad-suite' ) );
+            do_action( 'mad_quotes_late_proof_received', $order );
+
+            wp_send_json_success( [
+                'message' => $this->late_proof_message( mad_quotes_order_lang( $order ) ),
+                'reload'  => false,
+            ] );
+        }
 
         // Verificar con IA.
         $result = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
@@ -3989,15 +4067,7 @@ return new class( $core ) implements MAD_Suite_Module {
      * propios pedidos de compra del presupuesto.
      */
     private function quote_bought_product( WC_Order $quote, int $product_id ): bool {
-        foreach ( $this->reservations->purchase_orders_for_quote( $quote->get_id() ) as $order_id ) {
-            $order = wc_get_order( $order_id );
-            if ( ! $order || ! in_array( $order->get_status(), [ 'processing', 'completed' ], true ) ) continue;
-
-            foreach ( $order->get_items() as $item ) {
-                if ( (int) $item->get_product_id() === $product_id ) return true;
-            }
-        }
-        return false;
+        return $this->reservations->quote_already_bought_product( $quote->get_id(), $product_id );
     }
 
     /** "{plural:intentos|...}" ya resuelto, en los 3 idiomas. */
@@ -4660,6 +4730,34 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         update_option( 'mad_quotes_wpml_subject_migrated', '1' );
+    }
+
+    /**
+     * Migración única (sección 7): los pedidos de presupuesto ya existentes
+     * tienen _mad_qwc_quote='1' pero no la nueva _mad_order_type — se
+     * recorren una vez y se marcan como 'quote'. Cualquier pedido sin esa
+     * meta se trata como pedido normal de tienda (sin tocarlo).
+     */
+    private function maybe_migrate_order_types(): void {
+        if ( get_option( 'mad_quotes_order_type_migrated' ) ) return;
+
+        $order_ids = wc_get_orders( [
+            'type'       => 'shop_order',
+            'limit'      => -1,
+            'return'     => 'ids',
+            'meta_key'   => '_mad_qwc_quote',
+            'meta_value' => '1',
+        ] );
+
+        foreach ( $order_ids as $order_id ) {
+            $order = wc_get_order( $order_id );
+            if ( ! $order || $order->get_meta( '_mad_order_type' ) ) continue;
+
+            $order->update_meta_data( '_mad_order_type', 'quote' );
+            $order->save();
+        }
+
+        update_option( 'mad_quotes_order_type_migrated', '1' );
     }
 
     /** Registra en el log de WooCommerce los fallos de entrega de email. */
