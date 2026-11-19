@@ -42,8 +42,14 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
         if ( ! $order instanceof WC_Order ) return;
 
         // El intento se devuelve siempre, esté o no activado este email —
-        // es un efecto de la anulación, no de la notificación.
-        $this->reservations->return_attempt_for_order( $order );
+        // es un efecto de la anulación, no de la notificación. Guarda
+        // propia por si mad_reservation_voided se disparase más de una vez
+        // para el mismo pedido.
+        if ( '1' !== $order->get_meta( '_mad_attempt_returned' ) ) {
+            $order->update_meta_data( '_mad_attempt_returned', '1' );
+            $order->save();
+            $this->reservations->return_attempt_for_order( $order );
+        }
 
         if ( ! $this->is_enabled() ) return;
 

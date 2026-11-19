@@ -362,24 +362,22 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_reservation_scripts' ] );
         add_action( 'wp_head', [ $this, 'reservation_css' ] );
 
-        // Disponibilidad: una pieza reservada o pendiente de confirmación de
-        // pago no se puede comprar — ni desde la ficha, ni variación por
-        // variación, ni desde el carrito/checkout.
-        add_filter( 'woocommerce_is_purchasable',           [ $this, 'reservation_blocks_purchasable' ], 20, 2 );
-        add_filter( 'woocommerce_variation_is_purchasable', [ $this, 'reservation_blocks_purchasable' ], 20, 2 );
-
-        // Ficha + catálogo: aviso (con cuenta atrás si aplica) mientras está
-        // reservada o pendiente — visible para cualquier visitante, sea quien
-        // sea el que la reservó (sección 5: el resto de presupuestos y
-        // profesionales también deben verla).
+        // Disponibilidad real: SIEMPRE se exige en el momento de añadir al
+        // carrito (validate_add_to_cart_not_reserved, más abajo) — nunca en
+        // woocommerce_is_purchasable/woocommerce_loop_add_to_cart_link, que
+        // deciden el HTML de la ficha/catálogo en el momento en que LiteSpeed
+        // Cache lo guarda. Si bloqueáramos ahí, una ficha cacheada mientras
+        // la pieza estaba reservada se quedaría sin botón para siempre,
+        // incluso después de liberarse. Por eso el aviso + la desactivación
+        // visual del botón se pintan enteramente por JS (sección 5).
         add_action( 'woocommerce_single_product_summary',    [ $this, 'render_reservation_notice_product_page' ], 25 );
         add_action( 'woocommerce_after_shop_loop_item_title', [ $this, 'render_reservation_notice_catalog' ],      15 );
-        add_filter( 'woocommerce_loop_add_to_cart_link',      [ $this, 'disable_loop_add_to_cart_if_reserved' ],   20, 2 );
 
         // Carrito/checkout de profesionales (o de cualquier otro visitante):
         // si una pieza que ya tenían en el carrito se reserva mientras tanto,
         // se bloquea, se excluye del total y se reactiva sola cuando la
-        // reserva caduca — sin intervención del cliente.
+        // reserva caduca — sin intervención del cliente. Esto SÍ puede
+        // comprobar el estado real: el carrito nunca se cachea.
         add_filter( 'woocommerce_add_to_cart_validation',  [ $this, 'validate_add_to_cart_not_reserved' ], 20, 2 );
         add_action( 'woocommerce_check_cart_items',        [ $this, 'check_cart_items_not_reserved' ] );
         add_action( 'woocommerce_before_calculate_totals', [ $this, 'zero_price_for_reserved_cart_items' ], 40 );
@@ -816,6 +814,18 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $this->reservations->release_reservation( $order );
         $this->reservations->notify_pieces_sold( $order );
+
+        // Una reserva que termina en compra no cuenta contra el límite de
+        // intentos del presupuesto (sección 4: "si una reserva acaba en
+        // compra, no cuenta para las siguientes"). Se "devuelve" el
+        // intento, igual que al anular una reserva — con guarda propia,
+        // porque este método se dispara dos veces (processing y luego
+        // completed) para el mismo pedido.
+        if ( '1' !== $order->get_meta( '_mad_attempt_returned' ) ) {
+            $order->update_meta_data( '_mad_attempt_returned', '1' );
+            $order->save();
+            $this->reservations->return_attempt_for_order( $order );
+        }
     }
 
     /**
@@ -4774,6 +4784,25 @@ return new class( $core ) implements MAD_Suite_Module {
         wp_send_json_success( [ 'redirect' => mad_quotes_order_payment_url( $order ) ] );
     }
 
+    /** @return array{id:int,state:string,until:int,message:string}|null */
+    private function product_state_payload( int $product_id ): ?array {
+        $product = $product_id ? wc_get_product( $product_id ) : null;
+        if ( ! $product ) return null;
+
+        $state = $this->reservations->product_state( $product );
+        $until = (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true );
+        $lang  = $this->visitor_lang();
+
+        return [
+            'id'      => $product->get_id(),
+            'state'   => $state,
+            'until'   => $until,
+            'message' => in_array( $state, [ 'reserved', 'pending_proof' ], true )
+                ? $this->reservation_message_for_catalog( $state, $lang, $until )
+                : '',
+        ];
+    }
+
     /**
      * AJAX público (sin caché): estado en vivo de un producto y/o de un
      * pedido de reserva, por su order_key — usado por reservation-timer.js
@@ -4783,13 +4812,20 @@ return new class( $core ) implements MAD_Suite_Module {
         $response = [];
 
         if ( ! empty( $_POST['product_id'] ) ) {
-            $product = wc_get_product( absint( $_POST['product_id'] ) );
-            if ( $product ) {
-                $response['product'] = [
-                    'id'    => $product->get_id(),
-                    'state' => $this->reservations->product_state( $product ),
-                    'until' => (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true ),
-                ];
+            $response['product'] = $this->product_state_payload( absint( $_POST['product_id'] ) );
+        }
+
+        // Variante en lote: la ficha/catálogo consultan de una sola vez el
+        // estado de todos los productos marcados en la página, en vez de
+        // una petición por producto — igual de a salvo de la caché de
+        // LiteSpeed (es una respuesta de admin-ajax.php, nunca cacheada),
+        // pero sin multiplicar peticiones en una página de catálogo.
+        if ( ! empty( $_POST['product_ids'] ) && is_array( $_POST['product_ids'] ) ) {
+            $response['products'] = [];
+            foreach ( array_unique( array_map( 'absint', $_POST['product_ids'] ) ) as $pid ) {
+                if ( ! $pid ) continue;
+                $payload = $this->product_state_payload( $pid );
+                if ( $payload ) $response['products'][ $pid ] = $payload;
             }
         }
 
@@ -4883,17 +4919,16 @@ return new class( $core ) implements MAD_Suite_Module {
 </style>';
     }
 
-    /** Bloquea la compra (ficha, variación, carrito) de una pieza reservada o pendiente de confirmación. */
-    public function reservation_blocks_purchasable( $purchasable, $product ) {
-        if ( ! $purchasable || ! $product instanceof WC_Product ) return $purchasable;
-
-        $settings = mad_quotes_get_settings();
-        if ( empty( $settings['reservations_enabled'] ) ) return $purchasable;
-
-        return in_array( $this->reservations->product_state( $product ), [ 'reserved', 'pending_proof' ], true ) ? false : $purchasable;
-    }
-
-    /** Aviso (+ cuenta atrás) en la ficha de producto mientras está reservada/pendiente. */
+    /**
+     * Aviso (+ cuenta atrás) en la ficha de producto mientras está
+     * reservada/pendiente. SIEMPRE imprime el mismo marcador vacío, sea
+     * cual sea el estado real — rellenarlo con el estado real es trabajo
+     * de reservation-timer.js, vía AJAX, en cada carga de página (incluida
+     * una servida desde la caché de LiteSpeed). Si esto imprimiera el
+     * aviso ya resuelto aquí, quedaría horneado en el HTML cacheado y una
+     * ficha cacheada mientras la pieza estaba reservada se quedaría fija
+     * en ese estado para siempre, incluso tras liberarse.
+     */
     public function render_reservation_notice_product_page(): void {
         global $product;
         if ( ! $product instanceof WC_Product ) return;
@@ -4901,20 +4936,13 @@ return new class( $core ) implements MAD_Suite_Module {
         $settings = mad_quotes_get_settings();
         if ( empty( $settings['reservations_enabled'] ) ) return;
 
-        $state = $this->reservations->product_state( $product );
-        if ( ! in_array( $state, [ 'reserved', 'pending_proof' ], true ) ) return;
-
-        $until = (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true );
-
         printf(
-            '<div class="mad-reservation-notice woocommerce-info" data-mad-product-id="%1$d" data-mad-state="%2$s">%3$s</div>',
-            esc_attr( $product->get_id() ),
-            esc_attr( $state ),
-            wp_kses_post( $this->reservation_message_for_catalog( $state, $this->visitor_lang(), $until ) )
+            '<div class="mad-reservation-notice woocommerce-info" data-mad-product-id="%1$d" data-mad-disable-form="1" style="display:none;"></div>',
+            esc_attr( $product->get_id() )
         );
     }
 
-    /** Mismo aviso que en la ficha, pero en la tarjeta del catálogo. */
+    /** Mismo marcador vacío que en la ficha, pero en la tarjeta del catálogo — ver la nota de render_reservation_notice_product_page(). */
     public function render_reservation_notice_catalog(): void {
         global $product;
         if ( ! $product instanceof WC_Product ) return;
@@ -4922,32 +4950,9 @@ return new class( $core ) implements MAD_Suite_Module {
         $settings = mad_quotes_get_settings();
         if ( empty( $settings['reservations_enabled'] ) ) return;
 
-        $state = $this->reservations->product_state( $product );
-        if ( ! in_array( $state, [ 'reserved', 'pending_proof' ], true ) ) return;
-
-        $until = (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true );
-
         printf(
-            '<div class="mad-reservation-notice mad-reservation-notice--catalog" data-mad-product-id="%1$d" data-mad-state="%2$s">%3$s</div>',
-            esc_attr( $product->get_id() ),
-            esc_attr( $state ),
-            wp_kses_post( $this->reservation_message_for_catalog( $state, $this->visitor_lang(), $until ) )
-        );
-    }
-
-    /** Sustituye el botón "Añadir al carrito" del catálogo por uno deshabilitado mientras está reservada/pendiente. */
-    public function disable_loop_add_to_cart_if_reserved( $html, $product ) {
-        if ( ! $product instanceof WC_Product ) return $html;
-
-        $settings = mad_quotes_get_settings();
-        if ( empty( $settings['reservations_enabled'] ) ) return $html;
-
-        if ( ! in_array( $this->reservations->product_state( $product ), [ 'reserved', 'pending_proof' ], true ) ) return $html;
-
-        return sprintf(
-            '<span class="button disabled mad-reservation-disabled-btn" data-mad-product-id="%d">%s</span>',
-            esc_attr( $product->get_id() ),
-            esc_html__( 'No disponible', 'mad-suite' )
+            '<div class="mad-reservation-notice mad-reservation-notice--catalog" data-mad-product-id="%1$d" data-mad-disable-link="1" style="display:none;"></div>',
+            esc_attr( $product->get_id() )
         );
     }
 

@@ -2,9 +2,12 @@
 /**
  * MAD Quotes – Reservas con plazo: cuenta atrás en vivo + confirmación por
  * AJAX antes de dar nada por libre otra vez. Se pinta siempre en cliente
- * (nunca horneado en el HTML) porque el sitio usa LiteSpeed Cache: una
- * página de producto o de catálogo cacheada no debe quedarse mostrando un
- * estado de reserva ya caducado.
+ * (nunca horneado en el HTML) porque el sitio usa LiteSpeed Cache: la
+ * ficha de producto y el catálogo nunca deciden en PHP si una pieza está
+ * reservada — solo imprimen un marcador vacío con el product_id, y este
+ * script resuelve el estado real por AJAX en cada carga de página,
+ * incluida una servida desde caché. Lo mismo para la página de pago y la
+ * de selección de un presupuesto (sección 3).
  */
 ( function ( $ ) {
     'use strict';
@@ -45,43 +48,98 @@
             return;
         }
 
-        var $productRow = $el.closest( '[data-mad-product-id]' );
-        if ( $productRow.length ) {
-            var insideSelection = $productRow.closest( '.mad-quote-purchase--selection' ).length > 0;
-            refreshProductState( $productRow.attr( 'data-mad-product-id' ), $productRow, ! insideSelection );
+        var $notice = $el.closest( '.mad-reservation-notice[data-mad-product-id]' );
+        if ( $notice.length ) {
+            refreshNotice( $notice );
+            return;
+        }
+
+        var $selectionRow = $el.closest( '.mad-qp__row[data-mad-product-id]' );
+        if ( $selectionRow.length ) {
+            refreshSelectionRow( $selectionRow );
         }
     }
 
-    /**
-     * Confirma el estado real de un producto. Si ya está libre: en la
-     * página de producto/catálogo recargamos (el botón de compra y el resto
-     * de la ficha deben volver a su forma normal); en la página de
-     * selección reactivamos la casilla sin perder las demás ya marcadas.
-     */
-    function refreshProductState( productId, $scope, allowReload ) {
-        $.post( params.ajax_url, { action: 'mad_quote_state', product_id: productId } )
+    /* ────────────────────────────────────────────────────────────────
+     * Ficha de producto y catálogo — marcador vacío + AJAX en lote.
+     * ──────────────────────────────────────────────────────────────── */
+
+    function allNotices() {
+        return $( '.mad-reservation-notice[data-mad-product-id]' );
+    }
+
+    function applyNoticeState( $notice, state, message ) {
+        $notice.attr( 'data-mad-state', state );
+
+        var unavailable = ( 'reserved' === state || 'pending_proof' === state );
+
+        if ( unavailable ) {
+            $notice.html( message ).show();
+        } else {
+            $notice.hide().empty();
+        }
+
+        if ( $notice.is( '[data-mad-disable-form]' ) ) {
+            var $form = $notice.nextAll( 'form.cart' ).first();
+            if ( ! $form.length ) $form = $notice.closest( '.summary, .product' ).find( 'form.cart' ).first();
+            $form.find( '.single_add_to_cart_button, button[type="submit"]' )
+                .prop( 'disabled', unavailable )
+                .toggleClass( 'disabled', unavailable );
+        }
+
+        if ( $notice.is( '[data-mad-disable-link]' ) ) {
+            var $li = $notice.closest( 'li.product, .product' );
+            $li.find( '.add_to_cart_button' ).each( function () {
+                var $btn = $( this );
+                if ( unavailable ) {
+                    $btn.addClass( 'disabled mad-reservation-disabled-btn' )
+                        .attr( 'aria-disabled', 'true' )
+                        .on( 'click.madReservation', function ( e ) { e.preventDefault(); } );
+                } else {
+                    $btn.removeClass( 'disabled mad-reservation-disabled-btn' )
+                        .removeAttr( 'aria-disabled' )
+                        .off( 'click.madReservation' );
+                }
+            } );
+        }
+    }
+
+    /** Vuelve a consultar UN aviso (cuenta atrás a cero) y lo actualiza, sin recargar la página. */
+    function refreshNotice( $notice ) {
+        var id = $notice.attr( 'data-mad-product-id' );
+        $.post( params.ajax_url, { action: 'mad_quote_state', product_id: id } )
             .done( function ( response ) {
                 if ( ! response || ! response.success || ! response.data || ! response.data.product ) return;
-
-                var state = response.data.product.state;
-                $scope.attr( 'data-mad-state', state );
-
-                if ( 'available' !== state ) return;
-
-                if ( allowReload ) {
-                    window.location.reload();
-                    return;
-                }
-
-                var $checkbox = $scope.find( '.mad-qp__checkbox' );
-                if ( $checkbox.length ) {
-                    $checkbox.prop( 'disabled', false );
-                }
-                $scope.find( '.mad-qp__state' ).html(
-                    '<span class="mad-qp__badge mad-qp__badge--available">' + ( params.i18n && params.i18n.available ? params.i18n.available : 'Disponible' ) + '</span>'
-                );
+                applyNoticeState( $notice, response.data.product.state, response.data.product.message );
             } );
     }
+
+    /** Al cargar la página (incluida una copia cacheada): resuelve de una vez el estado de todas las piezas marcadas. */
+    function initNotices() {
+        var $notices = allNotices();
+        if ( ! $notices.length ) return;
+
+        var ids = [];
+        $notices.each( function () {
+            var id = $( this ).attr( 'data-mad-product-id' );
+            if ( id && -1 === ids.indexOf( id ) ) ids.push( id );
+        } );
+
+        $.post( params.ajax_url, { action: 'mad_quote_state', product_ids: ids } )
+            .done( function ( response ) {
+                if ( ! response || ! response.success || ! response.data || ! response.data.products ) return;
+
+                $notices.each( function () {
+                    var $notice = $( this );
+                    var info    = response.data.products[ $notice.attr( 'data-mad-product-id' ) ];
+                    if ( info ) applyNoticeState( $notice, info.state, info.message );
+                } );
+            } );
+    }
+
+    /* ────────────────────────────────────────────────────────────────
+     * Página de pago de una reserva.
+     * ──────────────────────────────────────────────────────────────── */
 
     /** Página de pago: si el estado del pedido cambió, recargamos para mostrar el desenlace real. */
     function pollOrderState( $box, forceReloadIfStillReserved ) {
@@ -107,23 +165,55 @@
             } );
     }
 
-    /** Filas no disponibles de la página de selección: reintenta cada 20s por si se liberan mientras el cliente sigue mirando. */
-    function pollSelectionRows() {
-        $( '.mad-quote-purchase--selection .mad-qp__row' ).each( function () {
-            var $row = $( this );
-            if ( 'available' === $row.attr( 'data-mad-state' ) ) return;
-            refreshProductState( $row.attr( 'data-mad-product-id' ), $row, false );
-        } );
-    }
-
     /** Página de pago: sondeo periódico aunque no haya llegado a cero todavía (aprobación/rechazo manual del admin). */
     function pollPaymentBox() {
         var $box = $( '.mad-quote-purchase--payment[data-mad-order-key]' );
         if ( $box.length ) pollOrderState( $box, false );
     }
 
+    /* ────────────────────────────────────────────────────────────────
+     * Página de selección de un presupuesto.
+     * ──────────────────────────────────────────────────────────────── */
+
+    /**
+     * Confirma el estado real de una fila de la página de selección. Si ya
+     * está libre, reactivamos la casilla sin perder las demás ya marcadas
+     * por el cliente — nunca recargamos esta página.
+     */
+    function refreshSelectionRow( $row ) {
+        var id = $row.attr( 'data-mad-product-id' );
+
+        $.post( params.ajax_url, { action: 'mad_quote_state', product_id: id } )
+            .done( function ( response ) {
+                if ( ! response || ! response.success || ! response.data || ! response.data.product ) return;
+
+                var state = response.data.product.state;
+                $row.attr( 'data-mad-state', state );
+
+                if ( 'available' !== state ) return;
+
+                var $checkbox = $row.find( '.mad-qp__checkbox' );
+                if ( $checkbox.length ) $checkbox.prop( 'disabled', false );
+
+                $row.find( '.mad-qp__state' ).html(
+                    '<span class="mad-qp__badge mad-qp__badge--available">' + ( params.i18n && params.i18n.available ? params.i18n.available : 'Disponible' ) + '</span>'
+                );
+            } );
+    }
+
+    /** Filas no disponibles de la página de selección: reintenta cada 20s por si se liberan mientras el cliente sigue mirando. */
+    function pollSelectionRows() {
+        $( '.mad-quote-purchase--selection .mad-qp__row' ).each( function () {
+            var $row = $( this );
+            if ( 'available' === $row.attr( 'data-mad-state' ) ) return;
+            refreshSelectionRow( $row );
+        } );
+    }
+
+    initNotices();
     tickCountdowns();
     setInterval( tickCountdowns, 1000 );
+    setInterval( initNotices, 20000 );
     setInterval( pollSelectionRows, 20000 );
     setInterval( pollPaymentBox, 15000 );
 
