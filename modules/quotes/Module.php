@@ -176,6 +176,14 @@ return new class( $core ) implements MAD_Suite_Module {
             add_filter( 'woocommerce_bacs_process_payment_order_status', [ $this, 'bacs_reservation_status' ], 10, 2 );
             add_filter( 'woocommerce_thankyou_order_received_text', [ $this, 'filter_pro_reservation_thankyou_text' ], 20, 2 );
             add_action( 'woocommerce_thankyou_bacs', [ $this, 'render_pro_reservation_thankyou' ], 20 );
+
+            // ── Fase 8: admin — "Reservas activas", "Restablecer intentos",
+            // aviso en la lista de pedidos (pensado para el personal de la
+            // tienda física).
+            add_action( 'admin_menu', [ $this, 'register_active_reservations_page' ] );
+            add_action( 'admin_post_mad_quotes_void_reservation', [ $this, 'handle_void_reservation' ] );
+            add_action( 'admin_post_mad_quotes_reset_attempts',   [ $this, 'handle_reset_attempts' ] );
+            add_action( 'admin_notices', [ $this, 'render_active_reservations_notice' ] );
         }
 
         // ── Rol: cachear precio HTML antes de que el plugin original lo modifique ──
@@ -945,6 +953,170 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( 'quote-reserved' !== $order->get_status() ) return;
 
         echo $this->render_reservation_payment_page( $order ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+
+    /* ================================================================ */
+    /*  Fase 8 — admin: Reservas activas, Restablecer intentos           */
+    /* ================================================================ */
+
+    /** @return array Filas de piezas realmente reservadas/pendientes en este momento: ['product'=>WC_Product,'order'=>WC_Order,'state'=>string,'until'=>int]. */
+    private function active_reservation_rows(): array {
+        $product_ids = get_posts( [
+            'post_type'      => [ 'product', 'product_variation' ],
+            'post_status'    => 'any',
+            'posts_per_page' => -1,
+            'fields'         => 'ids',
+            'meta_query'      => [ [ 'key' => '_mad_reserved_order', 'compare' => 'EXISTS' ] ],
+        ] );
+
+        $rows = [];
+        foreach ( $product_ids as $product_id ) {
+            $product = wc_get_product( $product_id );
+            if ( ! $product ) continue;
+
+            $state = $this->reservations->product_state( $product );
+            if ( ! in_array( $state, [ 'reserved', 'pending_proof' ], true ) ) continue;
+
+            $order_id = (int) get_post_meta( $product_id, '_mad_reserved_order', true );
+            $order    = $order_id ? wc_get_order( $order_id ) : null;
+            if ( ! $order ) continue;
+
+            $rows[] = [
+                'product' => $product,
+                'order'   => $order,
+                'state'   => $state,
+                'until'   => (int) get_post_meta( $product_id, '_mad_reserved_until', true ),
+            ];
+        }
+
+        return $rows;
+    }
+
+    public function register_active_reservations_page(): void {
+        add_submenu_page(
+            MAD_Suite_Core::MENU_SLUG_ROOT,
+            __( 'Reservas activas', 'mad-suite' ),
+            __( 'Reservas activas', 'mad-suite' ),
+            'manage_woocommerce',
+            'mad-quotes-active-reservations',
+            [ $this, 'render_active_reservations_page' ]
+        );
+    }
+
+    /** Pantalla "Reservas activas" (pensada para el personal de la tienda física): pieza, cliente, tiempo restante y botón "Anular reserva". */
+    public function render_active_reservations_page(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) wp_die( esc_html__( 'Permiso denegado.', 'mad-suite' ) );
+
+        $rows = $this->active_reservation_rows();
+
+        echo '<div class="wrap"><h1>' . esc_html__( 'Reservas activas', 'mad-suite' ) . '</h1>';
+        echo '<p>' . esc_html__( 'Piezas reservadas o pendientes de confirmación de pago en este momento.', 'mad-suite' ) . '</p>';
+
+        if ( ! empty( $_GET['voided'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__( 'Reserva anulada.', 'mad-suite' ) . '</p></div>';
+        }
+
+        if ( empty( $rows ) ) {
+            echo '<p>' . esc_html__( 'No hay ninguna reserva activa en este momento.', 'mad-suite' ) . '</p></div>';
+            return;
+        }
+
+        echo '<table class="widefat striped"><thead><tr>'
+            . '<th>' . esc_html__( 'Pieza', 'mad-suite' ) . '</th>'
+            . '<th>' . esc_html__( 'Cliente', 'mad-suite' ) . '</th>'
+            . '<th>' . esc_html__( 'Pedido', 'mad-suite' ) . '</th>'
+            . '<th>' . esc_html__( 'Estado', 'mad-suite' ) . '</th>'
+            . '<th>' . esc_html__( 'Tiempo restante', 'mad-suite' ) . '</th>'
+            . '<th>&nbsp;</th>'
+            . '</tr></thead><tbody>';
+
+        foreach ( $rows as $row ) {
+            $product   = $row['product'];
+            $order     = $row['order'];
+            $remaining = ( 'reserved' === $row['state'] && $row['until'] > time() )
+                ? human_time_diff( time(), $row['until'] )
+                : '—';
+            $state_label = 'reserved' === $row['state']
+                ? __( 'En proceso de compra', 'mad-suite' )
+                : __( 'Pendiente de confirmación', 'mad-suite' );
+
+            $void_url = wp_nonce_url(
+                admin_url( 'admin-post.php?action=mad_quotes_void_reservation&order_id=' . $order->get_id() ),
+                'mad_quotes_void_reservation_' . $order->get_id()
+            );
+
+            printf(
+                '<tr><td><a href="%1$s">%2$s</a></td><td>%3$s</td><td><a href="%4$s">%5$s</a></td><td>%6$s</td><td>%7$s</td>'
+                . '<td><a class="button button-small" href="%8$s" onclick="return confirm(\'%9$s\');">%10$s</a></td></tr>',
+                esc_url( (string) get_edit_post_link( $product->get_id() ) ),
+                esc_html( $product->get_name() ),
+                esc_html( $order->get_formatted_billing_full_name() . ' — ' . $order->get_billing_email() ),
+                esc_url( $order->get_edit_order_url() ),
+                esc_html( $order->get_order_number() ),
+                esc_html( $state_label ),
+                esc_html( $remaining ),
+                esc_url( $void_url ),
+                esc_js( __( '¿Anular esta reserva?', 'mad-suite' ) ),
+                esc_html__( 'Anular reserva', 'mad-suite' )
+            );
+        }
+
+        echo '</tbody></table></div>';
+    }
+
+    /** Aviso en la lista de pedidos (clásica y HPOS) con el número de reservas activas y un enlace a la pantalla completa. */
+    public function render_active_reservations_notice(): void {
+        $screen = get_current_screen();
+        if ( ! $screen || ! in_array( $screen->id, [ 'edit-shop_order', 'woocommerce_page_wc-orders' ], true ) ) return;
+
+        $count = count( $this->active_reservation_rows() );
+        if ( $count <= 0 ) return;
+
+        $link = '<a href="' . esc_url( admin_url( 'admin.php?page=mad-quotes-active-reservations' ) ) . '">' . esc_html__( 'Ver reservas activas', 'mad-suite' ) . '</a>';
+
+        printf(
+            '<div class="notice notice-info"><p>%s</p></div>',
+            wp_kses_post( sprintf(
+                /* translators: 1: número de reservas activas, 2: enlace a la pantalla de reservas activas */
+                _n( 'Hay %1$d reserva activa en este momento. %2$s', 'Hay %1$d reservas activas en este momento. %2$s', $count, 'mad-suite' ),
+                $count,
+                $link
+            ) )
+        );
+    }
+
+    /** Botón "Anular reserva" de la pantalla "Reservas activas" — mismo desenlace que anular por venta en tienda física (sección 3): email 6.6 + intento devuelto. */
+    public function handle_void_reservation(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) wp_die( esc_html__( 'Permiso denegado.', 'mad-suite' ) );
+
+        $order_id = absint( $_GET['order_id'] ?? 0 );
+        check_admin_referer( 'mad_quotes_void_reservation_' . $order_id );
+
+        $order = wc_get_order( $order_id );
+        if ( $order && in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) {
+            $order->update_status( 'cancelled', __( 'Reserva anulada manualmente desde el panel.', 'mad-suite' ) );
+            do_action( 'mad_reservation_voided', $order );
+        }
+
+        wp_safe_redirect( admin_url( 'admin.php?page=mad-quotes-active-reservations&voided=1' ) );
+        exit;
+    }
+
+    /** Botón "Restablecer intentos" de la ficha del presupuesto — para cuando el cliente llama y el admin quiere ayudarle a pasar por encima del límite. */
+    public function handle_reset_attempts(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) wp_die( esc_html__( 'Permiso denegado.', 'mad-suite' ) );
+
+        $order_id = absint( $_GET['order_id'] ?? 0 );
+        check_admin_referer( 'mad_quotes_reset_attempts_' . $order_id );
+
+        $order = wc_get_order( $order_id );
+        if ( $order ) {
+            $this->reservations->reset_attempts( $order_id );
+            $order->add_order_note( __( 'Intentos de reserva restablecidos por el administrador.', 'mad-suite' ) );
+        }
+
+        wp_safe_redirect( $order ? $order->get_edit_order_url() : admin_url( 'edit.php?post_type=shop_order' ) );
+        exit;
     }
 
     public function order_status_css() {
@@ -2567,6 +2739,29 @@ return new class( $core ) implements MAD_Suite_Module {
                       rows="2"
                       style="display:block;width:100%;max-width:480px;margin-top:6px;"></textarea>
             <span id="mad_quote_msg" style="display:block;margin-top:4px;font-weight:bold;"></span>
+
+            <?php if ( 'quote-sent' === $quote_status && ! empty( mad_quotes_get_settings()['reservations_enabled'] ) ) :
+                $remaining = $this->reservations->attempts_remaining( $order->get_id() );
+                $reset_url = wp_nonce_url(
+                    admin_url( 'admin-post.php?action=mad_quotes_reset_attempts&order_id=' . $order->get_id() ),
+                    'mad_quotes_reset_attempts_' . $order->get_id()
+                );
+            ?>
+                <p style="margin-top:12px;">
+                    <a class="button" href="<?php echo esc_url( $reset_url ); ?>">
+                        <?php esc_html_e( 'Restablecer intentos de reserva', 'mad-suite' ); ?>
+                    </a>
+                    <span class="description">
+                        <?php
+                        printf(
+                            /* translators: %d: intentos de reserva restantes ahora mismo */
+                            esc_html__( '(%d intentos restantes ahora mismo)', 'mad-suite' ),
+                            $remaining
+                        );
+                        ?>
+                    </span>
+                </p>
+            <?php endif; ?>
             <?php
         }
     }
