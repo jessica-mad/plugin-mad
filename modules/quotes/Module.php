@@ -164,6 +164,18 @@ return new class( $core ) implements MAD_Suite_Module {
             // el email 6.3 con sus variantes. No se confunde con la propia
             // caducidad (quote-reserved → cancelled, otra transición).
             add_action( 'woocommerce_order_status_on-hold_to_cancelled', [ $this, 'notify_rejected_as_expired' ] );
+
+            // ── Sección 7 bis: profesionales — compra directa por transferencia.
+            // Mismo mecanismo de reserva que presupuestos, sin presupuesto
+            // padre: se detecta en el propio checkout (BACS + rol fuera de
+            // quote_roles) y se convierte el pedido que WooCommerce ya creó
+            // en una reserva atómica (MAD_Reservations::try_reserve() con
+            // existing_order), en vez de dejarlo pasar a on-hold con stock
+            // descontado sin plazo.
+            add_action( 'woocommerce_checkout_process', [ $this, 'validate_cart_availability_before_checkout' ] );
+            add_filter( 'woocommerce_bacs_process_payment_order_status', [ $this, 'bacs_reservation_status' ], 10, 2 );
+            add_filter( 'woocommerce_thankyou_order_received_text', [ $this, 'filter_pro_reservation_thankyou_text' ], 20, 2 );
+            add_action( 'woocommerce_thankyou_bacs', [ $this, 'render_pro_reservation_thankyou' ], 20 );
         }
 
         // ── Rol: cachear precio HTML antes de que el plugin original lo modifique ──
@@ -810,6 +822,129 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) return;
 
         do_action( 'mad_reservation_expired', $order );
+    }
+
+    /* ================================================================ */
+    /*  Sección 7 bis — profesionales: compra directa por transferencia  */
+    /* ================================================================ */
+
+    /**
+     * Al pulsar «Realizar pedido»: comprobación temprana (sin bloqueo —
+     * el bloqueo atómico real ocurre en bacs_reservation_status(), al
+     * convertir el pedido que cree WooCommerce). Si alguna pieza del
+     * carrito de un profesional ya no está disponible, se quita y se
+     * bloquea el envío con el aviso editable de la sección 5 — así el
+     * caso común (alguien la reservó hace un rato) no llega siquiera a
+     * crear el pedido.
+     */
+    public function validate_cart_availability_before_checkout(): void {
+        if ( $this->current_user_is_quote_role() ) return;
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return;
+
+        $lang = $this->visitor_lang();
+
+        foreach ( WC()->cart->get_cart() as $cart_item_key => $cart_item ) {
+            $product = $cart_item['data'] ?? null;
+            if ( ! $product instanceof WC_Product ) continue;
+
+            if ( in_array( $this->reservations->product_state( $product ), [ 'reserved', 'pending_proof', 'sold' ], true ) ) {
+                wc_add_notice( mad_quotes_removed_from_cart_message( $product->get_name(), $lang ), 'error' );
+                WC()->cart->remove_cart_item( $cart_item_key );
+            }
+        }
+    }
+
+    /**
+     * Filtro de WooCommerce BACS (woocommerce_bacs_process_payment_order_status):
+     * para un profesional (rol fuera de quote_roles), convierte el pedido
+     * que WooCommerce ya creó en una reserva atómica en vez de dejarlo
+     * pasar a on-hold con stock descontado y sin plazo. try_reserve() ya
+     * deja el pedido en quote-reserved — el valor que devolvemos aquí es
+     * solo para que WooCommerce no lo vuelva a pisar con "on-hold".
+     */
+    public function bacs_reservation_status( $status, $order ) {
+        if ( ! $order instanceof WC_Order ) return $status;
+        if ( $this->current_user_is_quote_role() ) return $status;
+        if ( '1' === $order->get_meta( '_mad_qwc_quote' ) ) return $status;
+        if ( $order->get_meta( '_mad_order_type' ) ) return $status; // ya procesado — no debería ocurrir, pero por si process_payment() se llama dos veces.
+
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return $status;
+
+        $lang = $this->visitor_lang();
+        $order->update_meta_data( '_mad_quote_lang', $lang );
+
+        $lines = [];
+        foreach ( $order->get_items() as $item ) {
+            if ( ! $item->get_product_id() ) continue;
+            $lines[] = [
+                'product_id' => $item->get_product_id(),
+                'qty'        => $item->get_quantity(),
+                'name'       => $item->get_name(),
+            ];
+        }
+
+        $result = $this->reservations->try_reserve( $lines, [
+            'order_type'     => 'pro_purchase',
+            'lang'           => $lang,
+            'minutes'        => (int) $settings['pro_reservation_minutes'],
+            'existing_order' => $order,
+        ] );
+
+        if ( is_wp_error( $result ) ) {
+            // Caso límite: la pieza se volvió a reservar/vender en el
+            // instante entre la comprobación del checkout y este punto.
+            // El pedido ya existe (WooCommerce lo creó antes de llegar
+            // aquí) — se cancela con el motivo, en vez de dejarlo colgado.
+            $order->add_order_note( sprintf(
+                /* translators: %s: motivo del error */
+                __( 'No se pudo reservar al procesar el pago: %s. Pedido cancelado.', 'mad-suite' ),
+                $result->get_error_message()
+            ) );
+            return 'cancelled';
+        }
+
+        return 'quote-reserved';
+    }
+
+    /** "Su reserva está confirmada hasta las {hora_limite}..." — reemplaza el texto nativo de WC en la página de pedido recibido, salvo que el admin ya tenga uno propio configurado para quote-reserved. */
+    public function filter_pro_reservation_thankyou_text( $text, $order ) {
+        if ( ! $order instanceof WC_Order ) return $text;
+        if ( 'pro_purchase' !== $order->get_meta( '_mad_order_type' ) ) return $text;
+        if ( 'quote-reserved' !== $order->get_status() ) return $text;
+
+        $settings = mad_quotes_get_settings();
+        $custom   = (array) ( $settings['thankyou_texts']['quote-reserved'] ?? [] );
+        if ( '' !== trim( $this->resolve_lang_text( $custom ) ) ) return $text; // el admin ya personalizó este estado — no lo pisamos.
+
+        $lang    = mad_quotes_order_lang( $order );
+        $minutes = (int) $order->get_meta( '_mad_reservation_minutes' );
+        $created = $order->get_date_created();
+        $until   = ( $created ? $created->getTimestamp() : time() ) + $minutes * MINUTE_IN_SECONDS;
+
+        $templates = [
+            'es' => 'Su reserva está confirmada hasta las %s (hora de Madrid). Realice la transferencia y adjunte el comprobante más abajo antes de que termine el plazo.',
+            'en' => 'Your reservation is confirmed until %s (Madrid time). Please make the bank transfer and attach the proof of payment below before the deadline.',
+            'fr' => "Votre réservation est confirmée jusqu'à %s (heure de Madrid). Veuillez effectuer le virement et joindre le justificatif ci-dessous avant la fin du délai.",
+        ];
+
+        return sprintf( $templates[ $lang ] ?? $templates['es'], mad_quotes_madrid_time( $until ) );
+    }
+
+    /**
+     * Cuenta atrás + datos bancarios + comprobante en la página de pedido
+     * recibido de un profesional — reutiliza exactamente la misma vista
+     * que la página de pago de las reservas de presupuesto (sección 3),
+     * en el mismo hook donde la pasarela BACS nativa pinta sus propias
+     * instrucciones (que no llegan a aparecer: solo lo hace para pedidos
+     * en on-hold, y este ya está en quote-reserved).
+     */
+    public function render_pro_reservation_thankyou( $order_id ): void {
+        $order = wc_get_order( $order_id );
+        if ( ! $order || 'pro_purchase' !== $order->get_meta( '_mad_order_type' ) ) return;
+        if ( 'quote-reserved' !== $order->get_status() ) return;
+
+        echo $this->render_reservation_payment_page( $order ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
     }
 
     public function order_status_css() {
@@ -3552,10 +3687,11 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         $states = [
-            'reserved'      => __( 'Reservada (con cuenta atrás)', 'mad-suite' ),
-            'pending_proof' => __( 'Comprobante subido (sin cuenta atrás)', 'mad-suite' ),
-            'contested'     => __( 'Reservada mientras otro cliente pulsa a la vez', 'mad-suite' ),
-            'sold'          => __( 'Vendida (solo en el carrito del presupuesto)', 'mad-suite' ),
+            'reserved'          => __( 'Reservada (con cuenta atrás)', 'mad-suite' ),
+            'pending_proof'     => __( 'Comprobante subido (sin cuenta atrás)', 'mad-suite' ),
+            'contested'         => __( 'Reservada mientras otro cliente pulsa a la vez', 'mad-suite' ),
+            'sold'              => __( 'Vendida (solo en el carrito del presupuesto)', 'mad-suite' ),
+            'removed_from_cart' => __( 'Retirada del carrito al pagar (checkout de profesionales)', 'mad-suite' ),
         ];
 
         foreach ( $states as $state => $label ) {

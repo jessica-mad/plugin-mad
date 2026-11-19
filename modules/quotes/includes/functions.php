@@ -311,9 +311,29 @@ function mad_quotes_reservation_message( string $state, string $lang, string $ti
     return str_replace( '{tiempo}', $tiempo_html, $text );
 }
 
+/**
+ * Texto configurado (sección 5) para cuando una pieza se retira del
+ * carrito en el checkout de profesionales porque dejó de estar
+ * disponible, con {pieza} ya sustituido. Editable por idioma igual que
+ * el resto de mensajes, pero no lleva {tiempo} — por eso es una función
+ * aparte de mad_quotes_reservation_message().
+ */
+function mad_quotes_removed_from_cart_message( string $piece_name, string $lang ): string {
+    $settings = mad_quotes_get_settings();
+    $custom   = $settings['reservation_messages'][ $lang ]['removed_from_cart'] ?? '';
+    $text     = '' !== trim( (string) $custom ) ? $custom : mad_quotes_default_reservation_message( 'removed_from_cart', $lang );
+
+    return str_replace( '{pieza}', $piece_name, $text );
+}
+
 /** Textos por defecto de la sección 5 del documento, tal cual. */
 function mad_quotes_default_reservation_message( string $state, string $lang ): string {
     $texts = [
+        'removed_from_cart' => [
+            'es' => 'Lo sentimos, {pieza} ya no está disponible en este momento y la hemos retirado de su pedido.',
+            'en' => 'We are sorry, {pieza} is no longer available at the moment and has been removed from your order.',
+            'fr' => "Nous sommes désolés, {pieza} n'est plus disponible pour le moment et a été retirée de votre commande.",
+        ],
         'reserved' => [
             'es' => 'Esta pieza está en proceso de compra. De no ser comprada, se libera en {tiempo}.',
             'en' => 'This piece is currently being purchased. If the purchase is not completed, it will be released in {tiempo}.',
