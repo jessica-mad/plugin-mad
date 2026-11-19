@@ -119,6 +119,7 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
 
     public function init_form_fields() {
         parent::init_form_fields();
+        $this->add_subject_heading_footer_form_fields( $this->form_fields );
         $this->add_body_text_form_fields( $this->form_fields );
     }
 
@@ -130,7 +131,7 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
     private function get_preview_fallback_html(): string {
         ob_start();
         do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo '<p>' . esc_html( $this->get_option( 'body_text', $this->get_default_body_text() ) ) . '</p>';
+        echo wp_kses_post( wpautop( $this->get_body_text_for_lang( $this->get_default_body_text() ) ) );
         if ( $this->get_additional_content() ) {
             echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
         }

@@ -373,6 +373,8 @@ return new class( $core ) implements MAD_Suite_Module {
     public function admin_init() {
         if ( ! $this->active ) return;
 
+        $this->maybe_migrate_email_wpml_fields();
+
         $option_key = MAD_Suite_Core::option_key( $this->slug );
 
         register_setting( $this->menu_slug(), $option_key, [
@@ -4580,6 +4582,43 @@ return new class( $core ) implements MAD_Suite_Module {
                 $product->set_price( 0 );
             }
         }
+    }
+
+    /**
+     * Migración única (sección 6.0): hasta ahora solo el cuerpo del email
+     * tenía soporte por idioma — asunto, encabezado y firma eran un único
+     * valor en español para todos los idiomas. Al añadir los campos
+     * subject_{idioma}/heading_{idioma}/additional_content_{idioma}, copia
+     * el valor actual de cada email a su campo "_es" para que un cliente en
+     * español no deje de ver el texto que el admin ya tenía escrito.
+     * Los emails en inglés/francés seguirán usando el texto por defecto de
+     * la clase hasta que el admin rellene sus propios campos.
+     */
+    private function maybe_migrate_email_wpml_fields(): void {
+        if ( get_option( 'mad_quotes_wpml_subject_migrated' ) ) return;
+
+        // New_Request y los avisos internos a Olofane no llevan estos
+        // campos — siguen solo en español, como hoy.
+        $email_ids = [ 'mad_quotes_confirmation', 'mad_quotes_send_quote' ];
+
+        foreach ( $email_ids as $id ) {
+            $option_key = 'woocommerce_' . $id . '_settings';
+            $settings   = get_option( $option_key, [] );
+            if ( ! is_array( $settings ) ) continue;
+
+            $changed = false;
+            foreach ( [ 'subject', 'heading', 'additional_content' ] as $field ) {
+                if ( empty( $settings[ $field ] ) || ! empty( $settings[ $field . '_es' ] ) ) continue;
+                $settings[ $field . '_es' ] = $settings[ $field ];
+                $changed = true;
+            }
+
+            if ( $changed ) {
+                update_option( $option_key, $settings );
+            }
+        }
+
+        update_option( 'mad_quotes_wpml_subject_migrated', '1' );
     }
 
     /** Registra en el log de WooCommerce los fallos de entrega de email. */

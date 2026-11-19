@@ -82,6 +82,97 @@ trait MAD_Email_WPML_Trait {
     }
 
     /**
+     * Resuelve {campo}_{idioma_actual} → {campo}_{idioma_por_defecto} → ''
+     * (sin WPML, o sin override en ningún idioma: el llamador cae al campo
+     * nativo de WC_Email — subject/heading/additional_content — que sigue
+     * existiendo siempre, tal como pide la sección 6.0).
+     */
+    private function get_lang_option_value( string $field ): string {
+        $langs = $this->get_wpml_languages();
+        if ( empty( $langs ) ) return '';
+
+        $current_lang = (string) apply_filters( 'wpml_current_language', null );
+        $default_lang = (string) apply_filters( 'wpml_default_language', null );
+
+        $value = $current_lang ? $this->get_option( $field . '_' . $current_lang, '' ) : '';
+        if ( '' === $value && $default_lang && $default_lang !== $current_lang ) {
+            $value = $this->get_option( $field . '_' . $default_lang, '' );
+        }
+        return $value;
+    }
+
+    /**
+     * Asunto por idioma del pedido (sección 6.0 — hasta ahora el asunto era
+     * un único valor en español para todos los idiomas). Pasa por
+     * format_string() igual que el nativo, para que {order_number},
+     * {blogname}, etc. se sigan sustituyendo.
+     */
+    public function get_subject() {
+        $override = $this->get_lang_option_value( 'subject' );
+        if ( '' === $override ) return parent::get_subject();
+
+        return apply_filters( 'woocommerce_email_subject_' . $this->id, $this->format_string( $override ), $this->object );
+    }
+
+    /** Encabezado por idioma del pedido — mismo mecanismo que get_subject(). */
+    public function get_heading() {
+        $override = $this->get_lang_option_value( 'heading' );
+        if ( '' === $override ) return parent::get_heading();
+
+        return apply_filters( 'woocommerce_email_heading_' . $this->id, $this->format_string( $override ), $this->object );
+    }
+
+    /** Firma/contenido adicional por idioma del pedido — mismo mecanismo que get_subject(). */
+    public function get_additional_content() {
+        $override = $this->get_lang_option_value( 'additional_content' );
+        if ( '' === $override ) return parent::get_additional_content();
+
+        return apply_filters( 'woocommerce_email_additional_content_' . $this->id, $this->format_string( $override ), $this->object );
+    }
+
+    /**
+     * Añade subject_{idioma}/heading_{idioma}/additional_content_{idioma}
+     * por cada idioma activo de WPML — ADEMÁS de los campos nativos
+     * "Asunto"/"Encabezado"/"Contenido adicional" de WC_Email (que no se
+     * tocan: siguen siendo el valor de reserva cuando un idioma no tiene
+     * override propio). Sin WPML no añade nada — el comportamiento de
+     * siempre, un único valor para todos.
+     */
+    private function add_subject_heading_footer_form_fields( array &$form_fields ): void {
+        $langs = $this->get_wpml_languages();
+        if ( empty( $langs ) ) return;
+
+        foreach ( $langs as $code => $name ) {
+            $suffix = sprintf( ' <small>(%s)</small>', esc_html( strtoupper( $code ) ) );
+
+            $form_fields[ 'subject_' . $code ] = [
+                'title'       => __( 'Asunto', 'mad-suite' ) . $suffix,
+                'type'        => 'text',
+                'desc_tip'    => true,
+                'description' => __( 'Vacío = se usa el "Asunto" de arriba.', 'mad-suite' ),
+                'placeholder' => method_exists( $this, 'get_default_subject' ) ? $this->get_default_subject() : '',
+                'default'     => '',
+            ];
+            $form_fields[ 'heading_' . $code ] = [
+                'title'       => __( 'Encabezado', 'mad-suite' ) . $suffix,
+                'type'        => 'text',
+                'desc_tip'    => true,
+                'description' => __( 'Vacío = se usa el "Encabezado" de arriba.', 'mad-suite' ),
+                'placeholder' => method_exists( $this, 'get_default_heading' ) ? $this->get_default_heading() : '',
+                'default'     => '',
+            ];
+            $form_fields[ 'additional_content_' . $code ] = [
+                'title'       => __( 'Contenido adicional (firma)', 'mad-suite' ) . $suffix,
+                'type'        => 'textarea',
+                'desc_tip'    => true,
+                'description' => __( 'Vacío = se usa el "Contenido adicional" de arriba.', 'mad-suite' ),
+                'css'         => 'width:400px;height:60px;',
+                'default'     => '',
+            ];
+        }
+    }
+
+    /**
      * Append per-language body_text form fields (or a single field when WPML is absent).
      *
      * @param  array  $form_fields  Reference to the email's form_fields array.
