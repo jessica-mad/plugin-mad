@@ -383,6 +383,36 @@ class MAD_Reservations {
         return $raw ? array_map( 'absint', (array) json_decode( (string) $raw, true ) ) : [];
     }
 
+    /**
+     * true si este pedido de reserva sigue "vivo": o bien reservado contra
+     * el reloj, o bien con el comprobante ya subido y a la espera de que el
+     * admin apruebe/rechace la transferencia. false si ya se resolvió
+     * (vendida, caducada, cancelada).
+     */
+    public function order_is_awaiting_payment( WC_Order $order ): bool {
+        return in_array( $order->get_status(), [ 'quote-reserved', 'on-hold' ], true );
+    }
+
+    /**
+     * El pedido de compra todavía "vivo" de este presupuesto, si lo hay —
+     * usado para que la página de selección redirija sola a la de pago
+     * cuando el cliente ya reservó (caso límite: vuelve a usar el enlace
+     * del presupuesto). El más reciente manda si hubiera más de uno.
+     */
+    public function active_purchase_order_for_quote( int $quote_id ): ?WC_Order {
+        $order_ids = $this->purchase_orders_for_quote( $quote_id );
+        rsort( $order_ids );
+
+        foreach ( $order_ids as $order_id ) {
+            $order = wc_get_order( $order_id );
+            if ( $order instanceof WC_Order && $this->order_is_awaiting_payment( $order ) ) {
+                return $order;
+            }
+        }
+
+        return null;
+    }
+
     /* ────────────────────────────────────────────────────────────────
      * Intentos de reserva — profesionales (sin presupuesto padre): por
      * cliente + producto. user_meta si está logueado, si no un transient

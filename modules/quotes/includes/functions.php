@@ -162,6 +162,7 @@ function mad_quotes_get_settings() {
         'pro_reservation_attempts' => 2,    // Por cliente+producto, sin presupuesto padre.
         'reservation_window_hours' => 24,
         'terms_page_id'            => 0,
+        'purchase_page_id'         => 0,
         // [lang][state] => texto, con {tiempo}. Ver mad_quotes_reservation_message().
         'reservation_messages'     => [],
         'contact_email'            => 'info@olofane.com',
@@ -336,4 +337,53 @@ function mad_quotes_default_reservation_message( string $state, string $lang ): 
     ];
 
     return $texts[ $state ][ $lang ] ?? ( $texts[ $state ]['es'] ?? '' );
+}
+
+/** "mm:ss" a partir de un número de segundos (nunca negativo). */
+function mad_quotes_format_mmss( int $seconds ): string {
+    $seconds = max( 0, $seconds );
+    return sprintf( '%d:%02d', intdiv( $seconds, 60 ), $seconds % 60 );
+}
+
+/**
+ * Span con la cuenta atrás en vivo (JS la actualiza leyendo data-mad-until;
+ * el valor en el HTML es solo el estado inicial para quien tenga JS
+ * deshabilitado). Usado como {tiempo} en los estados 'reserved'/'contested'.
+ */
+function mad_quotes_countdown_html( int $until_ts ): string {
+    return sprintf(
+        '<span class="mad-reservation-countdown" data-mad-until="%d">%s</span>',
+        $until_ts,
+        esc_html( mad_quotes_format_mmss( $until_ts - time() ) )
+    );
+}
+
+/**
+ * URL base de la página de selección/pago ([mad_quote_purchase]), o la
+ * portada si no hay ninguna configurada todavía.
+ */
+function mad_quotes_purchase_page_url(): string {
+    $settings = mad_quotes_get_settings();
+    $page_id  = absint( $settings['purchase_page_id'] ?? 0 );
+    return $page_id ? get_permalink( $page_id ) : home_url( '/' );
+}
+
+/**
+ * URL de la página de selección de un presupuesto ({enlace_presupuesto}):
+ * lista sus líneas para elegir qué comprar. Si el presupuesto ya tiene una
+ * reserva activa, esta misma URL redirige sola a la página de pago.
+ */
+function mad_quotes_quote_selection_url( WC_Order $quote ): string {
+    return add_query_arg( 'mad_quote_key', $quote->get_order_key(), mad_quotes_purchase_page_url() );
+}
+
+/**
+ * URL de la página de pago de un pedido de reserva ya creado
+ * ({enlace_pago}): datos bancarios + cuenta atrás + subida de comprobante.
+ * Sirve tanto para compras de presupuesto como para profesionales (estos
+ * no tienen presupuesto padre, por eso identifican su propia reserva por
+ * su propio order_key en vez de por el del presupuesto).
+ */
+function mad_quotes_order_payment_url( WC_Order $order ): string {
+    return add_query_arg( 'mad_order_key', $order->get_order_key(), mad_quotes_purchase_page_url() );
 }

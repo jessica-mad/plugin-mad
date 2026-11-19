@@ -313,6 +313,38 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'wp_ajax_mad_upload_payment_proof',        [ $this, 'ajax_upload_payment_proof' ] );
         add_action( 'wp_ajax_nopriv_mad_upload_payment_proof', [ $this, 'ajax_upload_payment_proof' ] );
 
+        // ── Reservas con plazo: página de selección/pago ──────────────
+        add_shortcode( 'mad_quote_purchase', [ $this, 'shortcode_quote_purchase' ] );
+        add_action( 'template_redirect', [ $this, 'maybe_redirect_quote_to_payment' ], 5 );
+        add_action( 'wp_ajax_mad_quote_reserve',        [ $this, 'ajax_quote_reserve' ] );
+        add_action( 'wp_ajax_nopriv_mad_quote_reserve', [ $this, 'ajax_quote_reserve' ] );
+        add_action( 'wp_ajax_mad_quote_state',           [ $this, 'ajax_quote_state' ] );
+        add_action( 'wp_ajax_nopriv_mad_quote_state',    [ $this, 'ajax_quote_state' ] );
+        add_action( 'wp_enqueue_scripts', [ $this, 'enqueue_reservation_scripts' ] );
+        add_action( 'wp_head', [ $this, 'reservation_css' ] );
+
+        // Disponibilidad: una pieza reservada o pendiente de confirmación de
+        // pago no se puede comprar — ni desde la ficha, ni variación por
+        // variación, ni desde el carrito/checkout.
+        add_filter( 'woocommerce_is_purchasable',           [ $this, 'reservation_blocks_purchasable' ], 20, 2 );
+        add_filter( 'woocommerce_variation_is_purchasable', [ $this, 'reservation_blocks_purchasable' ], 20, 2 );
+
+        // Ficha + catálogo: aviso (con cuenta atrás si aplica) mientras está
+        // reservada o pendiente — visible para cualquier visitante, sea quien
+        // sea el que la reservó (sección 5: el resto de presupuestos y
+        // profesionales también deben verla).
+        add_action( 'woocommerce_single_product_summary',    [ $this, 'render_reservation_notice_product_page' ], 25 );
+        add_action( 'woocommerce_after_shop_loop_item_title', [ $this, 'render_reservation_notice_catalog' ],      15 );
+        add_filter( 'woocommerce_loop_add_to_cart_link',      [ $this, 'disable_loop_add_to_cart_if_reserved' ],   20, 2 );
+
+        // Carrito/checkout de profesionales (o de cualquier otro visitante):
+        // si una pieza que ya tenían en el carrito se reserva mientras tanto,
+        // se bloquea, se excluye del total y se reactiva sola cuando la
+        // reserva caduca — sin intervención del cliente.
+        add_filter( 'woocommerce_add_to_cart_validation',  [ $this, 'validate_add_to_cart_not_reserved' ], 20, 2 );
+        add_action( 'woocommerce_check_cart_items',        [ $this, 'check_cart_items_not_reserved' ] );
+        add_action( 'woocommerce_before_calculate_totals', [ $this, 'zero_price_for_reserved_cart_items' ], 40 );
+
         // ── Email exclusivo MAD: presupuesto con precios y nota ────────
         // Prioridad 999: tiene que correr DESPUÉS de que el plugin base
         // "Quotes for WooCommerce" registre los suyos (prioridad 10 por
@@ -551,6 +583,13 @@ return new class( $core ) implements MAD_Suite_Module {
             'field_page_select',
             'mad_quotes_reservations',
             __( 'Se muestra como casilla de aceptación obligatoria antes de reservar.', 'mad-suite' )
+        );
+        $this->register_field(
+            'purchase_page_id',
+            __( 'Página de selección y pago', 'mad-suite' ),
+            'field_page_select',
+            'mad_quotes_reservations',
+            __( 'Página donde se incrusta el shortcode [mad_quote_purchase] — es la página de "Ver precios y comprar" del email, y donde el cliente sube el comprobante de su reserva.', 'mad-suite' )
         );
         $this->register_field(
             'contact_email',
@@ -2733,8 +2772,21 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $order_id ) return;
 
         $order = wc_get_order( $order_id );
-        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( ! $order ) return;
+
+        $this->enqueue_proof_scripts_for_order( $order );
+    }
+
+    /**
+     * Encola el JS de subida de comprobante para un pedido concreto —
+     * compartido entre la página "Ver pedido" de Mi Cuenta y la nueva
+     * página de pago de reservas ([mad_quote_purchase]).
+     */
+    private function enqueue_proof_scripts_for_order( WC_Order $order ): void {
+        if ( ! $this->order_accepts_payment_proof( $order ) ) return;
         if ( $order->get_meta( '_mad_payment_proof_url' ) ) return;
+
+        $order_id = $order->get_id();
 
         wp_enqueue_script(
             'mad-payment-proof',
@@ -3745,6 +3797,791 @@ return new class( $core ) implements MAD_Suite_Module {
         return ob_get_clean();
     }
 
+    /* ================================================================ */
+    /*  Reservas con plazo — página de selección/pago ([mad_quote_purchase]) */
+    /* ================================================================ */
+
+    /**
+     * Renderiza [mad_quote_purchase]: la página de selección de un
+     * presupuesto (?mad_quote_key=) o la de pago de una reserva ya creada
+     * (?mad_order_key=) — ambas conviven en la misma página configurada en
+     * "Página de selección y pago".
+     */
+    public function shortcode_quote_purchase(): string {
+        $order_key = isset( $_GET['mad_order_key'] ) ? sanitize_text_field( wp_unslash( $_GET['mad_order_key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification
+        $quote_key = isset( $_GET['mad_quote_key'] ) ? sanitize_text_field( wp_unslash( $_GET['mad_quote_key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification
+
+        if ( '' !== $order_key ) {
+            $order_id = wc_get_order_id_by_order_key( $order_key );
+            $order    = $order_id ? wc_get_order( $order_id ) : false;
+
+            if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) {
+                return $this->reservation_notice_box( __( 'No encontramos esa reserva. Comprueba el enlace de tu email.', 'mad-suite' ) );
+            }
+
+            return $this->render_reservation_payment_page( $order );
+        }
+
+        if ( '' !== $quote_key ) {
+            $quote_id = wc_get_order_id_by_order_key( $quote_key );
+            $quote    = $quote_id ? wc_get_order( $quote_id ) : false;
+
+            if ( ! $quote || '1' !== $quote->get_meta( '_mad_qwc_quote' ) ) {
+                return $this->reservation_notice_box( __( 'No encontramos ese presupuesto. Comprueba el enlace de tu email.', 'mad-suite' ) );
+            }
+
+            // Respaldo: maybe_redirect_quote_to_payment() (template_redirect,
+            // antes de cualquier salida) ya debería haber redirigido a la
+            // página de pago si había una reserva activa.
+            $active = $this->reservations->active_purchase_order_for_quote( $quote->get_id() );
+            if ( $active ) {
+                return $this->render_reservation_payment_page( $active );
+            }
+
+            return $this->render_quote_selection_page( $quote );
+        }
+
+        return $this->reservation_notice_box( __( 'Enlace incompleto: falta identificar el presupuesto o la reserva.', 'mad-suite' ) );
+    }
+
+    /**
+     * Antes de cualquier salida: si ?mad_quote_key= ya tiene una reserva
+     * activa, redirige directo a la página de pago de esa reserva (caso
+     * límite del documento: el cliente vuelve a usar el enlace del email de
+     * la lista de precios después de haber reservado).
+     */
+    public function maybe_redirect_quote_to_payment(): void {
+        if ( empty( $_GET['mad_quote_key'] ) ) return; // phpcs:ignore WordPress.Security.NonceVerification
+
+        $quote_key = sanitize_text_field( wp_unslash( $_GET['mad_quote_key'] ) ); // phpcs:ignore WordPress.Security.NonceVerification
+        $quote_id  = wc_get_order_id_by_order_key( $quote_key );
+        if ( ! $quote_id ) return;
+
+        $active = $this->reservations->active_purchase_order_for_quote( $quote_id );
+        if ( ! $active ) return;
+
+        wp_safe_redirect( mad_quotes_order_payment_url( $active ) );
+        exit;
+    }
+
+    /** Caja de aviso simple para enlaces que no resuelven a nada válido. */
+    private function reservation_notice_box( string $message ): string {
+        return '<div class="woocommerce-info mad-reservation-notice">' . esc_html( $message ) . '</div>';
+    }
+
+    /**
+     * Idioma del visitante anónimo (sin pedido de referencia): el de WPML
+     * activo en este momento, o 'es' si no hay WPML. Usado en ficha,
+     * catálogo y carrito — a diferencia de mad_quotes_order_lang(), que
+     * sigue siempre el idioma GUARDADO en un pedido concreto.
+     */
+    private function visitor_lang(): string {
+        $lang = function_exists( 'apply_filters' ) ? (string) apply_filters( 'wpml_current_language', null ) : '';
+        $lang = strtolower( $lang );
+        return in_array( $lang, [ 'es', 'en', 'fr' ], true ) ? $lang : 'es';
+    }
+
+    /**
+     * Texto (sección 5) para un estado no disponible en ficha/catálogo o al
+     * intentar añadir al carrito. 'sold' queda fuera a propósito: esa
+     * insignia es "Vendida (solo en el carrito del presupuesto)" según el
+     * documento — un producto agotado por cualquier otro motivo no debe
+     * mostrar el texto de reservas. Ver reservation_message_for_cart() para
+     * el único contexto donde 'sold' sí corresponde.
+     */
+    private function reservation_message_for_catalog( string $state, string $lang, int $until = 0 ): string {
+        if ( 'reserved' === $state ) {
+            return mad_quotes_reservation_message( 'reserved', $lang, mad_quotes_countdown_html( $until ) );
+        }
+        if ( 'pending_proof' === $state ) {
+            return mad_quotes_reservation_message( 'pending_proof', $lang );
+        }
+        return '';
+    }
+
+    /** Igual que la anterior, pero para el carrito — ahí "Vendida" sí debe mostrarse (sección 5). */
+    private function reservation_message_for_cart( string $state, string $lang, int $until = 0 ): string {
+        if ( 'sold' === $state ) {
+            return mad_quotes_reservation_message( 'sold', $lang );
+        }
+        return $this->reservation_message_for_catalog( $state, $lang, $until );
+    }
+
+    /** "Disponible" / "Available" / "Disponible", en los 3 idiomas soportados. */
+    private function available_label( string $lang ): string {
+        $labels = [ 'es' => __( 'Disponible', 'mad-suite' ), 'en' => 'Available', 'fr' => 'Disponible' ];
+        return $labels[ $lang ] ?? $labels['es'];
+    }
+
+    /** "Ya comprada por usted" — solo tiene sentido en la página de selección del propio presupuesto. */
+    private function bought_by_you_label( string $lang ): string {
+        $labels = [ 'es' => 'Ya comprada por usted', 'en' => 'Already purchased by you', 'fr' => 'Déjà achetée par vous' ];
+        return $labels[ $lang ] ?? $labels['es'];
+    }
+
+    /** Insignia de estado para una línea de la página de selección. */
+    private function reservation_state_label( string $state, string $lang, int $until = 0 ): string {
+        if ( 'available' === $state ) {
+            return '<span class="mad-qp__badge mad-qp__badge--available">' . esc_html( $this->available_label( $lang ) ) . '</span>';
+        }
+        if ( 'bought_by_you' === $state ) {
+            return '<span class="mad-qp__badge mad-qp__badge--bought">' . esc_html( $this->bought_by_you_label( $lang ) ) . '</span>';
+        }
+
+        $classes = [
+            'reserved'      => 'mad-qp__badge--reserved',
+            'pending_proof' => 'mad-qp__badge--pending',
+            'sold'          => 'mad-qp__badge--sold',
+        ];
+        $class = $classes[ $state ] ?? '';
+
+        return '<span class="mad-qp__badge ' . esc_attr( $class ) . '">' . wp_kses_post( $this->reservation_message_for_cart( $state, $lang, $until ) ) . '</span>';
+    }
+
+    /**
+     * true si ESTE presupuesto ya compró este producto (pedido de compra
+     * ligado en estado processing/completed) — distingue "Vendida" (a otro)
+     * de "Ya comprada por usted" en la página de selección. No puede
+     * leerse de las metas del producto: se limpian al confirmarse la venta
+     * (clear_reservation_meta_on_sale), así que se comprueba contra los
+     * propios pedidos de compra del presupuesto.
+     */
+    private function quote_bought_product( WC_Order $quote, int $product_id ): bool {
+        foreach ( $this->reservations->purchase_orders_for_quote( $quote->get_id() ) as $order_id ) {
+            $order = wc_get_order( $order_id );
+            if ( ! $order || ! in_array( $order->get_status(), [ 'processing', 'completed' ], true ) ) continue;
+
+            foreach ( $order->get_items() as $item ) {
+                if ( (int) $item->get_product_id() === $product_id ) return true;
+            }
+        }
+        return false;
+    }
+
+    /** "{plural:intentos|...}" ya resuelto, en los 3 idiomas. */
+    private function attempts_remaining_text( int $remaining, string $lang ): string {
+        $templates = [
+            'es' => '{plural:intentos|Le queda|Le quedan} {intentos} {plural:intentos|intento|intentos} de reserva.',
+            'en' => 'You have {intentos} {plural:intentos|attempt|attempts} left to reserve.',
+            'fr' => 'Il vous reste {intentos} {plural:intentos|tentative|tentatives} de réservation.',
+        ];
+        $text = mad_quotes_apply_plural_placeholders( $templates[ $lang ] ?? $templates['es'], [ 'intentos' => $remaining ], $lang );
+        return str_replace( '{intentos}', (string) $remaining, $text );
+    }
+
+    /** Sin intentos: próxima fecha disponible (hora de Madrid) + contacto. */
+    private function no_attempts_text( ?int $next_at, string $lang ): string {
+        $settings = mad_quotes_get_settings();
+        $when     = $next_at ? ( mad_quotes_madrid_time( $next_at ) . ' (' . date_i18n( 'd/m/Y', $next_at ) . ')' ) : '';
+        $contact  = trim( trim( (string) ( $settings['contact_email'] ?? '' ) ) . ' · ' . trim( (string) ( $settings['contact_phone'] ?? '' ) ), ' ·' );
+
+        $templates = [
+            'es' => 'Has agotado tus intentos de reserva. Podrás volver a intentarlo a partir del %1$s. Si necesitas ayuda, contáctanos: %2$s.',
+            'en' => 'You have used all your reservation attempts. You can try again from %1$s. If you need help, contact us: %2$s.',
+            'fr' => 'Vous avez épuisé vos tentatives de réservation. Vous pourrez réessayer à partir du %1$s. Besoin d\'aide ? Contactez-nous : %2$s.',
+        ];
+        return sprintf( $templates[ $lang ] ?? $templates['es'], $when, $contact );
+    }
+
+    /**
+     * Página de selección: lista cada línea del presupuesto con su precio
+     * fijado y su estado actual, para que el cliente elija qué comprar.
+     */
+    private function render_quote_selection_page( WC_Order $quote ): string {
+        $lang = mad_quotes_order_lang( $quote );
+
+        if ( 'quote-sent' !== $quote->get_status() ) {
+            return $this->reservation_notice_box( __( 'Este presupuesto ya no está disponible para comprar — puede haber caducado o haberse resuelto de otra forma. Contáctanos si crees que es un error.', 'mad-suite' ) );
+        }
+
+        $settings  = mad_quotes_get_settings();
+        $remaining = $this->reservations->attempts_remaining( $quote->get_id() );
+        $next_at   = $this->reservations->next_attempt_at( $quote->get_id() );
+        $can_select = $remaining > 0;
+
+        $lines = [];
+        foreach ( $quote->get_items() as $item ) {
+            $product = $item->get_product();
+            if ( ! $product ) continue;
+
+            $price = $item->get_meta( '_mad_quote_line_price' );
+            $price = ( '' !== $price && false !== $price ) ? (float) $price : mad_quotes_get_product_quote_price( $item->get_product_id() );
+
+            $state = $this->reservations->product_state( $product );
+            if ( 'sold' === $state && $this->quote_bought_product( $quote, $product->get_id() ) ) {
+                $state = 'bought_by_you';
+            }
+
+            $lines[] = [
+                'product_id' => $product->get_id(),
+                'name'       => $item->get_name(),
+                'qty'        => $item->get_quantity(),
+                'price'      => $price,
+                'state'      => $state,
+            ];
+        }
+
+        $terms_page_id = absint( $settings['terms_page_id'] ?? 0 );
+        $has_terms     = $terms_page_id && 'publish' === get_post_status( $terms_page_id );
+
+        ob_start();
+        ?>
+        <div class="mad-quote-purchase mad-quote-purchase--selection">
+            <?php wc_print_notices(); ?>
+
+            <table class="mad-quote-purchase__table">
+                <thead>
+                    <tr>
+                        <th class="mad-qp__select"></th>
+                        <th><?php esc_html_e( 'Pieza', 'mad-suite' ); ?></th>
+                        <th><?php esc_html_e( 'Precio', 'mad-suite' ); ?></th>
+                        <th><?php esc_html_e( 'Estado', 'mad-suite' ); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ( $lines as $line ) :
+                    $is_selectable = $can_select && 'available' === $line['state'];
+                    $until         = (int) get_post_meta( $line['product_id'], '_mad_reserved_until', true );
+                ?>
+                    <tr class="mad-qp__row" data-mad-product-id="<?php echo esc_attr( $line['product_id'] ); ?>" data-mad-state="<?php echo esc_attr( $line['state'] ); ?>">
+                        <td class="mad-qp__select">
+                            <input type="checkbox"
+                                   class="mad-qp__checkbox"
+                                   name="mad_lines[]"
+                                   value="<?php echo esc_attr( $line['product_id'] ); ?>"
+                                   <?php disabled( ! $is_selectable ); ?>>
+                        </td>
+                        <td>
+                            <?php echo esc_html( $line['name'] ); ?>
+                            <?php if ( $line['qty'] > 1 ) : ?>
+                                &times;<?php echo esc_html( $line['qty'] ); ?>
+                            <?php endif; ?>
+                        </td>
+                        <td><?php echo wp_kses_post( wc_price( $line['price'] * $line['qty'] ) ); ?></td>
+                        <td class="mad-qp__state">
+                            <?php echo wp_kses_post( $this->reservation_state_label( $line['state'], $lang, $until ) ); ?>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <?php if ( $can_select ) : ?>
+                <p class="mad-qp__attempts"><?php echo esc_html( $this->attempts_remaining_text( $remaining, $lang ) ); ?></p>
+
+                <?php if ( $has_terms ) : ?>
+                    <p class="mad-qp__terms">
+                        <label>
+                            <input type="checkbox" id="mad-qp-terms">
+                            <?php
+                            printf(
+                                /* translators: %s: enlace a las condiciones de venta */
+                                esc_html__( 'He leído y acepto las %s.', 'mad-suite' ),
+                                '<a href="' . esc_url( get_permalink( $terms_page_id ) ) . '" target="_blank" rel="noopener">' . esc_html__( 'condiciones de venta', 'mad-suite' ) . '</a>' // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+                            );
+                            ?>
+                        </label>
+                    </p>
+                <?php endif; ?>
+
+                <p>
+                    <button type="button" id="mad-qp-reserve" class="button wp-element-button" disabled>
+                        <?php esc_html_e( 'Reservar y pagar', 'mad-suite' ); ?>
+                    </button>
+                </p>
+                <div id="mad-qp-result" role="alert" style="display:none;"></div>
+            <?php else : ?>
+                <div class="woocommerce-info mad-qp__no-attempts">
+                    <?php echo esc_html( $this->no_attempts_text( $next_at, $lang ) ); ?>
+                </div>
+            <?php endif; ?>
+        </div>
+        <?php
+
+        if ( $can_select ) {
+            $this->enqueue_reservation_select_script( $quote );
+        }
+
+        return ob_get_clean();
+    }
+
+    /** Encola el JS de la página de selección, con los parámetros AJAX + i18n. */
+    private function enqueue_reservation_select_script( WC_Order $quote ): void {
+        wp_enqueue_script(
+            'mad-reservation-select',
+            MAD_QUOTES_URL . 'assets/js/reservation-select.js',
+            [ 'jquery' ],
+            '1.0',
+            true
+        );
+
+        wp_localize_script( 'mad-reservation-select', 'mad_reserve_params', [
+            'ajax_url'   => admin_url( 'admin-ajax.php' ),
+            'nonce'      => wp_create_nonce( 'mad_quote_reserve_' . $quote->get_id() ),
+            'quote_key'  => $quote->get_order_key(),
+            'i18n'       => [
+                'select_one'   => __( 'Selecciona al menos una pieza.', 'mad-suite' ),
+                'accept_terms' => __( 'Debes aceptar las condiciones de venta.', 'mad-suite' ),
+                'reserving'    => __( 'Reservando…', 'mad-suite' ),
+                'error'        => __( 'No se pudo completar la reserva. Inténtalo de nuevo.', 'mad-suite' ),
+                'available'    => $this->available_label( mad_quotes_order_lang( $quote ) ),
+            ],
+        ] );
+    }
+
+    /**
+     * Página de pago de una reserva ({enlace_pago}): datos bancarios +
+     * cuenta atrás + comprobante mientras está viva (quote-reserved), o el
+     * estado final si ya se resolvió (en revisión, vendida, caducada).
+     */
+    private function render_reservation_payment_page( WC_Order $order ): string {
+        $lang   = mad_quotes_order_lang( $order );
+        $status = $order->get_status();
+
+        ob_start();
+        ?>
+        <div class="mad-quote-purchase mad-quote-purchase--payment" data-mad-order-key="<?php echo esc_attr( $order->get_order_key() ); ?>">
+            <?php wc_print_notices(); ?>
+
+            <?php if ( 'quote-reserved' === $status ) :
+                $minutes = (int) $order->get_meta( '_mad_reservation_minutes' );
+                $created = $order->get_date_created();
+                $until   = ( $created ? $created->getTimestamp() : time() ) + $minutes * MINUTE_IN_SECONDS;
+            ?>
+                <p class="mad-qp__countdown">
+                    <?php echo wp_kses_post( mad_quotes_reservation_message( 'reserved', $lang, mad_quotes_countdown_html( $until ) ) ); ?>
+                </p>
+
+                <h2><?php esc_html_e( 'Datos para la transferencia', 'mad-suite' ); ?></h2>
+                <?php echo $this->render_bacs_details_table( $order ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+
+                <?php
+                $existing_proof = $order->get_meta( '_mad_payment_proof_url' );
+                $proof_template = MAD_QUOTES_TEMPLATE_PATH . 'payment-proof-upload.php';
+                if ( file_exists( $proof_template ) ) {
+                    include $proof_template;
+                }
+                $this->enqueue_proof_scripts_for_order( $order );
+                ?>
+
+            <?php elseif ( 'on-hold' === $status ) : ?>
+                <div class="woocommerce-message"><?php echo esc_html( $this->payment_pending_review_text( $lang ) ); ?></div>
+
+            <?php elseif ( in_array( $status, [ 'processing', 'completed' ], true ) ) : ?>
+                <div class="woocommerce-message"><?php echo esc_html( $this->payment_confirmed_text( $lang ) ); ?></div>
+
+            <?php else : ?>
+                <div class="woocommerce-info"><?php echo esc_html( $this->reservation_resolved_text( $lang ) ); ?></div>
+            <?php endif; ?>
+        </div>
+        <?php
+        return ob_get_clean();
+    }
+
+    /** Cuenta regresiva + datos bancarios de BACS para una reserva, agrupados en una tabla. */
+    private function render_bacs_details_table( WC_Order $order ): string {
+        $fields = [
+            'account_name'   => __( 'Titular', 'mad-suite' ),
+            'bank_name'      => __( 'Banco', 'mad-suite' ),
+            'account_number' => __( 'Cuenta', 'mad-suite' ),
+            'iban'           => __( 'IBAN', 'mad-suite' ),
+            'bic'            => __( 'BIC/SWIFT', 'mad-suite' ),
+        ];
+
+        ob_start();
+        ?>
+        <table class="mad-qp__bank-details">
+            <?php foreach ( $this->get_bacs_account_details() as $account ) : ?>
+                <?php foreach ( $fields as $field => $label ) :
+                    if ( empty( $account[ $field ] ) ) continue;
+                ?>
+                    <tr><th><?php echo esc_html( $label ); ?></th><td><?php echo esc_html( $account[ $field ] ); ?></td></tr>
+                <?php endforeach; ?>
+            <?php endforeach; ?>
+            <tr>
+                <th><?php esc_html_e( 'Importe', 'mad-suite' ); ?></th>
+                <td><?php echo wp_kses_post( wc_price( $order->get_total() ) ); ?></td>
+            </tr>
+            <tr>
+                <th><?php esc_html_e( 'Concepto', 'mad-suite' ); ?></th>
+                <td>
+                    <?php
+                    printf(
+                        /* translators: %s: número de pedido */
+                        esc_html__( 'Pedido #%s', 'mad-suite' ),
+                        esc_html( $order->get_order_number() )
+                    );
+                    ?>
+                </td>
+            </tr>
+        </table>
+        <?php
+        return ob_get_clean();
+    }
+
+    /** Cuentas bancarias configuradas en la pasarela nativa BACS de WooCommerce. */
+    private function get_bacs_account_details(): array {
+        if ( ! function_exists( 'WC' ) || ! WC()->payment_gateways() ) return [];
+
+        $gateways = WC()->payment_gateways()->payment_gateways();
+        $bacs     = $gateways['bacs'] ?? null;
+
+        if ( ! $bacs || empty( $bacs->account_details ) || ! is_array( $bacs->account_details ) ) return [];
+
+        return $bacs->account_details;
+    }
+
+    private function payment_pending_review_text( string $lang ): string {
+        $templates = [
+            'es' => 'Hemos recibido tu comprobante y lo estamos revisando. Te avisaremos por email en cuanto se confirme.',
+            'en' => 'We have received your proof of payment and are reviewing it. We will email you as soon as it is confirmed.',
+            'fr' => 'Nous avons reçu votre justificatif de paiement et nous l\'examinons. Nous vous informerons par email dès sa confirmation.',
+        ];
+        return $templates[ $lang ] ?? $templates['es'];
+    }
+
+    private function payment_confirmed_text( string $lang ): string {
+        $templates = [
+            'es' => '¡Gracias! Tu compra ya está confirmada.',
+            'en' => 'Thank you! Your purchase is now confirmed.',
+            'fr' => 'Merci ! Votre achat est désormais confirmé.',
+        ];
+        return $templates[ $lang ] ?? $templates['es'];
+    }
+
+    private function reservation_resolved_text( string $lang ): string {
+        $templates = [
+            'es' => 'Esta reserva ya no está activa — puede haber caducado o haberse anulado. Si quieres volver a intentarlo, visita de nuevo la tienda.',
+            'en' => 'This reservation is no longer active — it may have expired or been cancelled. If you would like to try again, please visit the shop.',
+            'fr' => 'Cette réservation n\'est plus active — elle a peut-être expiré ou été annulée. Si vous souhaitez réessayer, visitez à nouveau la boutique.',
+        ];
+        return $templates[ $lang ] ?? $templates['es'];
+    }
+
+    /**
+     * AJAX: crea la reserva desde la página de selección. Los precios se
+     * leen siempre de las líneas del propio presupuesto (_mad_quote_line_price)
+     * — nunca de lo que mande el cliente.
+     */
+    public function ajax_quote_reserve(): void {
+        $quote_key = isset( $_POST['quote_key'] ) ? sanitize_text_field( wp_unslash( $_POST['quote_key'] ) ) : '';
+        $quote_id  = $quote_key ? wc_get_order_id_by_order_key( $quote_key ) : 0;
+        $nonce     = sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) );
+
+        if ( ! $quote_id || ! wp_verify_nonce( $nonce, 'mad_quote_reserve_' . $quote_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Sesión no válida. Recarga la página e inténtalo de nuevo.', 'mad-suite' ) ] );
+        }
+
+        $quote = wc_get_order( $quote_id );
+        if ( ! $quote || '1' !== $quote->get_meta( '_mad_qwc_quote' ) || 'quote-sent' !== $quote->get_status() ) {
+            wp_send_json_error( [ 'message' => __( 'Este presupuesto ya no está disponible.', 'mad-suite' ) ] );
+        }
+
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) {
+            wp_send_json_error( [ 'message' => __( 'Las reservas no están activas en este momento.', 'mad-suite' ) ] );
+        }
+
+        if ( $this->reservations->attempts_remaining( $quote_id ) <= 0 ) {
+            wp_send_json_error( [ 'message' => __( 'Has agotado tus intentos de reserva para este presupuesto.', 'mad-suite' ) ] );
+        }
+
+        $terms_page_id = absint( $settings['terms_page_id'] ?? 0 );
+        if ( $terms_page_id && 'publish' === get_post_status( $terms_page_id ) && empty( $_POST['accepts_terms'] ) ) {
+            wp_send_json_error( [ 'message' => __( 'Debes aceptar las condiciones de venta.', 'mad-suite' ) ] );
+        }
+
+        $selected = isset( $_POST['product_ids'] ) && is_array( $_POST['product_ids'] )
+            ? array_filter( array_unique( array_map( 'absint', $_POST['product_ids'] ) ) )
+            : [];
+
+        if ( empty( $selected ) ) {
+            wp_send_json_error( [ 'message' => __( 'Selecciona al menos una pieza.', 'mad-suite' ) ] );
+        }
+
+        $lines = [];
+        foreach ( $quote->get_items() as $item ) {
+            if ( ! in_array( $item->get_product_id(), $selected, true ) ) continue;
+
+            $price = $item->get_meta( '_mad_quote_line_price' );
+            $price = ( '' !== $price && false !== $price ) ? (float) $price : mad_quotes_get_product_quote_price( $item->get_product_id() );
+
+            $lines[] = [
+                'product_id' => $item->get_product_id(),
+                'qty'        => $item->get_quantity(),
+                'price'      => $price,
+                'name'       => $item->get_name(),
+            ];
+        }
+
+        if ( empty( $lines ) ) {
+            wp_send_json_error( [ 'message' => __( 'No encontramos esas piezas en el presupuesto.', 'mad-suite' ) ] );
+        }
+
+        $order = $this->reservations->try_reserve( $lines, [
+            'order_type'      => 'quote_purchase',
+            'parent_quote_id' => $quote_id,
+            'lang'            => mad_quotes_order_lang( $quote ),
+            'minutes'         => (int) $settings['reservation_minutes'],
+            'billing'         => [
+                'email'      => $quote->get_billing_email(),
+                'first_name' => $quote->get_billing_first_name(),
+                'last_name'  => $quote->get_billing_last_name(),
+                'phone'      => $quote->get_billing_phone(),
+            ],
+        ] );
+
+        if ( is_wp_error( $order ) ) {
+            wp_send_json_error( [ 'message' => $order->get_error_message() ] );
+        }
+
+        wp_send_json_success( [ 'redirect' => mad_quotes_order_payment_url( $order ) ] );
+    }
+
+    /**
+     * AJAX público (sin caché): estado en vivo de un producto y/o de un
+     * pedido de reserva, por su order_key — usado por reservation-timer.js
+     * para no depender de HTML servido por LiteSpeed Cache.
+     */
+    public function ajax_quote_state(): void {
+        $response = [];
+
+        if ( ! empty( $_POST['product_id'] ) ) {
+            $product = wc_get_product( absint( $_POST['product_id'] ) );
+            if ( $product ) {
+                $response['product'] = [
+                    'id'    => $product->get_id(),
+                    'state' => $this->reservations->product_state( $product ),
+                    'until' => (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true ),
+                ];
+            }
+        }
+
+        if ( ! empty( $_POST['order_key'] ) ) {
+            $order_key = sanitize_text_field( wp_unslash( $_POST['order_key'] ) );
+            $order_id  = wc_get_order_id_by_order_key( $order_key );
+            $order     = $order_id ? wc_get_order( $order_id ) : false;
+            if ( $order ) {
+                $response['order'] = [ 'status' => $order->get_status() ];
+            }
+        }
+
+        wp_send_json_success( $response );
+    }
+
+    /**
+     * Encola reservation-timer.js en todas las páginas del front — es un
+     * script pequeño e inactivo salvo que encuentre cuentas atrás/estados
+     * en el DOM, y así cubre también la página de selección/pago (que
+     * puede vivir en cualquier página) sin tener que detectarla de antemano.
+     */
+    public function enqueue_reservation_scripts(): void {
+        if ( is_admin() ) return;
+
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return;
+
+        wp_enqueue_script(
+            'mad-reservation-timer',
+            MAD_QUOTES_URL . 'assets/js/reservation-timer.js',
+            [ 'jquery' ],
+            '1.0',
+            true
+        );
+        wp_localize_script( 'mad-reservation-timer', 'mad_reservation_timer_params', [
+            'ajax_url' => admin_url( 'admin-ajax.php' ),
+            'i18n'     => [ 'available' => $this->available_label( $this->visitor_lang() ) ],
+        ] );
+    }
+
+    /** Estilos mínimos de las insignias/avisos/página de selección-pago de reservas. */
+    public function reservation_css(): void {
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return;
+
+        echo '<style>
+.mad-reservation-notice {
+    margin: 10px 0;
+}
+.mad-reservation-disabled-btn {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.mad-quote-purchase__table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1em;
+}
+.mad-quote-purchase__table th,
+.mad-quote-purchase__table td {
+    padding: 8px 10px;
+    border: 1px solid #e5e5e5;
+    text-align: left;
+}
+.mad-qp__badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.85em;
+}
+.mad-qp__badge--available { background: #e8f5e9; color: #2e7d32; }
+.mad-qp__badge--reserved,
+.mad-qp__badge--pending { background: #fff3e0; color: #e65100; }
+.mad-qp__badge--sold { background: #fdecea; color: #b71c1c; }
+.mad-qp__badge--bought { background: #e3f2fd; color: #1565c0; }
+.mad-qp__bank-details {
+    width: 100%;
+    max-width: 480px;
+    border-collapse: collapse;
+    margin: 1em 0;
+}
+.mad-qp__bank-details th,
+.mad-qp__bank-details td {
+    padding: 6px 10px;
+    border: 1px solid #e5e5e5;
+}
+.mad-qp__countdown {
+    font-size: 1.1em;
+    font-weight: 600;
+}
+</style>';
+    }
+
+    /** Bloquea la compra (ficha, variación, carrito) de una pieza reservada o pendiente de confirmación. */
+    public function reservation_blocks_purchasable( $purchasable, $product ) {
+        if ( ! $purchasable || ! $product instanceof WC_Product ) return $purchasable;
+
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return $purchasable;
+
+        return in_array( $this->reservations->product_state( $product ), [ 'reserved', 'pending_proof' ], true ) ? false : $purchasable;
+    }
+
+    /** Aviso (+ cuenta atrás) en la ficha de producto mientras está reservada/pendiente. */
+    public function render_reservation_notice_product_page(): void {
+        global $product;
+        if ( ! $product instanceof WC_Product ) return;
+
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return;
+
+        $state = $this->reservations->product_state( $product );
+        if ( ! in_array( $state, [ 'reserved', 'pending_proof' ], true ) ) return;
+
+        $until = (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true );
+
+        printf(
+            '<div class="mad-reservation-notice woocommerce-info" data-mad-product-id="%1$d" data-mad-state="%2$s">%3$s</div>',
+            esc_attr( $product->get_id() ),
+            esc_attr( $state ),
+            wp_kses_post( $this->reservation_message_for_catalog( $state, $this->visitor_lang(), $until ) )
+        );
+    }
+
+    /** Mismo aviso que en la ficha, pero en la tarjeta del catálogo. */
+    public function render_reservation_notice_catalog(): void {
+        global $product;
+        if ( ! $product instanceof WC_Product ) return;
+
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return;
+
+        $state = $this->reservations->product_state( $product );
+        if ( ! in_array( $state, [ 'reserved', 'pending_proof' ], true ) ) return;
+
+        $until = (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true );
+
+        printf(
+            '<div class="mad-reservation-notice mad-reservation-notice--catalog" data-mad-product-id="%1$d" data-mad-state="%2$s">%3$s</div>',
+            esc_attr( $product->get_id() ),
+            esc_attr( $state ),
+            wp_kses_post( $this->reservation_message_for_catalog( $state, $this->visitor_lang(), $until ) )
+        );
+    }
+
+    /** Sustituye el botón "Añadir al carrito" del catálogo por uno deshabilitado mientras está reservada/pendiente. */
+    public function disable_loop_add_to_cart_if_reserved( $html, $product ) {
+        if ( ! $product instanceof WC_Product ) return $html;
+
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return $html;
+
+        if ( ! in_array( $this->reservations->product_state( $product ), [ 'reserved', 'pending_proof' ], true ) ) return $html;
+
+        return sprintf(
+            '<span class="button disabled mad-reservation-disabled-btn" data-mad-product-id="%d">%s</span>',
+            esc_attr( $product->get_id() ),
+            esc_html__( 'No disponible', 'mad-suite' )
+        );
+    }
+
+    /**
+     * Bloquea añadir al carrito una pieza ya reservada/pendiente, para
+     * cualquier visitante. Una pieza ya vendida (sin relación con una
+     * reserva) es un caso aparte — WooCommerce ya impide añadir al carrito
+     * un producto agotado sin esperar a este filtro.
+     */
+    public function validate_add_to_cart_not_reserved( $passed, $product_id ) {
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return $passed;
+
+        $product = wc_get_product( $product_id );
+        if ( ! $product ) return $passed;
+
+        $state = $this->reservations->product_state( $product );
+        if ( in_array( $state, [ 'reserved', 'pending_proof' ], true ) ) {
+            $until = (int) get_post_meta( $product_id, '_mad_reserved_until', true );
+            wc_add_notice( $this->reservation_message_for_catalog( $state, $this->visitor_lang(), $until ), 'error' );
+            return false;
+        }
+
+        return $passed;
+    }
+
+    /**
+     * Si una pieza del carrito se reservó/vendió mientras tanto, bloquea el
+     * pago con un aviso — zero_price_for_reserved_cart_items() ya excluyó su
+     * importe del total, así que el aviso es la única señal que falta. Aquí
+     * "Vendida" sí corresponde (doc: "solo en el carrito del presupuesto").
+     */
+    public function check_cart_items_not_reserved(): void {
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return;
+        if ( ! isset( WC()->cart ) || is_null( WC()->cart ) ) return;
+
+        foreach ( WC()->cart->get_cart() as $cart_item ) {
+            $product = $cart_item['data'] ?? null;
+            if ( ! $product instanceof WC_Product ) continue;
+
+            $state = $this->reservations->product_state( $product );
+            if ( in_array( $state, [ 'reserved', 'pending_proof', 'sold' ], true ) ) {
+                $until = (int) get_post_meta( $product->get_id(), '_mad_reserved_until', true );
+                wc_add_notice( $this->reservation_message_for_cart( $state, $this->visitor_lang(), $until ), 'error' );
+            }
+        }
+    }
+
+    /**
+     * Pone a 0 el precio de cualquier línea del carrito que se haya
+     * reservado/vendido mientras tanto, para que no cuente en el total
+     * mostrado mientras check_cart_items_not_reserved() bloquea el pago.
+     * Mismo patrón que zero_price_for_quote_role_cart().
+     */
+    public function zero_price_for_reserved_cart_items( $cart ): void {
+        $settings = mad_quotes_get_settings();
+        if ( empty( $settings['reservations_enabled'] ) ) return;
+        if ( is_admin() && ! defined( 'DOING_AJAX' ) ) return;
+
+        foreach ( $cart->get_cart() as $cart_item ) {
+            $product = $cart_item['data'] ?? null;
+            if ( ! $product instanceof WC_Product ) continue;
+
+            if ( in_array( $this->reservations->product_state( $product ), [ 'reserved', 'pending_proof', 'sold' ], true ) ) {
+                $product->set_price( 0 );
+            }
+        }
+    }
+
     /** Registra en el log de WooCommerce los fallos de entrega de email. */
     public function log_mail_failure( WP_Error $error ): void {
         wc_get_logger()->error(
@@ -3841,6 +4678,7 @@ return new class( $core ) implements MAD_Suite_Module {
         }
         $clean['reservation_window_hours'] = max( 1, absint( $input['reservation_window_hours'] ?? 24 ) );
         $clean['terms_page_id']            = absint( $input['terms_page_id'] ?? 0 );
+        $clean['purchase_page_id']         = absint( $input['purchase_page_id'] ?? 0 );
         $clean['contact_email']            = sanitize_email( $input['contact_email'] ?? '' );
         $clean['contact_phone']            = sanitize_text_field( $input['contact_phone'] ?? '' );
 
