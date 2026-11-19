@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 do_action( 'woocommerce_email_header', $email_heading, $email );
 ?>
 
-<p><?php echo wp_kses_post( $body_text ); ?></p>
+<?php echo wp_kses_post( wpautop( $body_text ) ); ?>
 
 <?php do_action( 'woocommerce_email_order_details', $order, true, false, $email ); ?>
 

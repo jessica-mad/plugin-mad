@@ -85,6 +85,7 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
                 'plain_text'         => false,
                 'email'              => $this,
                 'admin_note'         => $this->admin_note ?? '',
+                'show_payment_button' => $this->show_payment_button(),
             ],
             '',
             $this->template_base
@@ -107,6 +108,7 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
                 'plain_text'         => true,
                 'email'              => $this,
                 'admin_note'         => $this->admin_note ?? '',
+                'show_payment_button' => $this->show_payment_button(),
             ],
             '',
             $this->template_base
@@ -128,6 +130,18 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
     public function init_form_fields() {
         parent::init_form_fields();
         $this->add_body_text_form_fields( $this->form_fields );
+
+        $this->form_fields['show_payment_button'] = [
+            'title'       => __( 'Botón de pago', 'mad-suite' ),
+            'type'        => 'checkbox',
+            'label'       => __( 'Mostrar el botón "Aceptar y pagar" con el enlace de pago del pedido', 'mad-suite' ),
+            'description' => __( 'Desactivado: el cliente responde al email para comprar. Las piezas no se reservan, así que con el botón activo varias personas podrían pagar la misma pieza.', 'mad-suite' ),
+            'default'     => 'no',
+        ];
+    }
+
+    private function show_payment_button(): bool {
+        return 'yes' === $this->get_option( 'show_payment_button', 'no' );
     }
 
     private function get_body_text( $order ): string {
