@@ -292,6 +292,16 @@ class MAD_Reservations {
         }
     }
 
+    /**
+     * Cancela solo la caducidad programada, SIN tocar las metas de reserva
+     * del producto (a diferencia de release_reservation()) — se usa al
+     * recibir el comprobante: la pieza sigue "apartada" para este pedido
+     * (estado pending_proof), ya no corre contra el reloj.
+     */
+    public function cancel_expiry_only( int $order_id ): void {
+        $this->cancel_scheduled_expiry( $order_id );
+    }
+
     private function cancel_scheduled_expiry( int $order_id ): void {
         if ( function_exists( 'as_unschedule_all_actions' ) ) {
             as_unschedule_all_actions( self::HOOK_EXPIRE, [ 'order_id' => $order_id ], self::ACTION_GROUP );

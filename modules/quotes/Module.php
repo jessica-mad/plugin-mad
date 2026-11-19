@@ -1963,6 +1963,18 @@ return new class( $core ) implements MAD_Suite_Module {
      * Impide que WooCommerce reduzca el stock para pedidos de presupuesto.
      */
     public function prevent_stock_reduction( $can_reduce, $order ) {
+        $order_type = $order->get_meta( '_mad_order_type' );
+
+        if ( in_array( $order_type, [ 'quote_purchase', 'pro_purchase' ], true ) ) {
+            // Reserva con plazo: el stock se descuenta al subir el
+            // comprobante (on-hold ya verificado) o al confirmarse la
+            // venta — nunca mientras solo está reservado (quote-reserved,
+            // sin tocar el stock todavía) ni en un on-hold sin comprobante.
+            if ( in_array( $order->get_status(), [ 'processing', 'completed' ], true ) ) return $can_reduce;
+            if ( 'on-hold' === $order->get_status() && '1' === $order->get_meta( '_mad_payment_proof_verified' ) ) return $can_reduce;
+            return false;
+        }
+
         if ( '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return $can_reduce;
 
         // Solo se reduce stock cuando el pago está confirmado.
@@ -2746,12 +2758,27 @@ return new class( $core ) implements MAD_Suite_Module {
     }
 
     /**
+     * Determina si un pedido puede recibir un comprobante de pago: los
+     * presupuestos clásicos (_mad_qwc_quote) en on-hold, y los pedidos de
+     * reserva con plazo (presupuesto o profesional) en on-hold o todavía
+     * reservados (quote-reserved).
+     */
+    private function order_accepts_payment_proof( WC_Order $order ): bool {
+        $is_legacy_quote = '1' === $order->get_meta( '_mad_qwc_quote' );
+        $is_reservation  = in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true );
+
+        if ( ! $is_legacy_quote && ! $is_reservation ) return false;
+
+        return in_array( $order->get_status(), [ 'on-hold', 'quote-reserved' ], true );
+    }
+
+    /**
      * Inyecta el formulario de subida de comprobante en la página de detalle
      * de pedido del cliente.
      */
     public function inject_payment_proof_upload( int $order_id ): void {
         $order = wc_get_order( $order_id );
-        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        if ( ! $order || ! $this->order_accepts_payment_proof( $order ) ) return;
 
         $existing_proof = $order->get_meta( '_mad_payment_proof_url' );
         $template = MAD_QUOTES_TEMPLATE_PATH . 'payment-proof-upload.php';
@@ -2772,7 +2799,7 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         $order = wc_get_order( $order_id );
-        if ( ! $order || $order->get_status() !== 'on-hold' || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
+        if ( ! $order || ! $this->order_accepts_payment_proof( $order ) ) {
             wp_send_json_error( [ 'message' => __( 'Pedido no válido.', 'mad-suite' ) ] );
         }
 
@@ -2841,10 +2868,26 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( $result['amount_matches'] ) {
             $order->update_meta_data( '_mad_payment_proof_verified', '1' );
             $order->save();
-            $order->update_status( 'processing', sprintf(
-                __( 'Comprobante verificado por IA. Importe detectado: %s. Pendiente de revisión por el administrador.', 'mad-suite' ),
-                wc_price( (float) $result['detected_amount'] )
-            ) );
+
+            $is_reservation = in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true );
+
+            if ( $is_reservation ) {
+                // Reserva con plazo: el comprobante NO aprueba la venta por
+                // sí solo — pasa a "En espera" (se descuenta el stock, deja
+                // de caducar) y un humano revisa la transferencia a mano
+                // (aprobar → Procesando, rechazar → Cancelado).
+                $this->reservations->cancel_expiry_only( $order->get_id() );
+                $order->update_status( 'on-hold', sprintf(
+                    __( 'Comprobante verificado por IA. Importe detectado: %s. Pendiente de revisión por el administrador.', 'mad-suite' ),
+                    wc_price( (float) $result['detected_amount'] )
+                ) );
+                do_action( 'mad_payment_proof_received', $order, $result );
+            } else {
+                $order->update_status( 'processing', sprintf(
+                    __( 'Comprobante verificado por IA. Importe detectado: %s. Pendiente de revisión por el administrador.', 'mad-suite' ),
+                    wc_price( (float) $result['detected_amount'] )
+                ) );
+            }
 
             wp_send_json_success( [
                 'message' => __( 'Comprobante verificado. Tu pedido está siendo procesado.', 'mad-suite' ),
