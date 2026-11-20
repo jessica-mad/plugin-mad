@@ -4783,6 +4783,8 @@ return new class( $core ) implements MAD_Suite_Module {
                     </p>
                 <?php endif; ?>
 
+                <?php echo $this->render_billing_fields( $lang, $quote ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped — ya escapado dentro. ?>
+
                 <p>
                     <button type="button" id="mad-qp-reserve" class="button wp-element-button" disabled>
                         <?php esc_html_e( 'Comprar', 'mad-suite' ); ?>
@@ -4801,6 +4803,164 @@ return new class( $core ) implements MAD_Suite_Module {
             $this->enqueue_reservation_select_script( $quote );
         }
 
+        return ob_get_clean();
+    }
+
+    /** Etiquetas del formulario de facturación (sección 2 del documento de cambios), en los 3 idiomas. */
+    private function billing_field_labels( string $lang ): array {
+        $labels = [
+            'es' => [
+                'heading'      => 'Datos para la factura',
+                'first_name'   => 'Nombre',
+                'last_name'    => 'Apellidos',
+                'is_company'   => 'Soy empresa',
+                'company'      => 'Razón social',
+                'vat'          => 'NIF / CIF / VAT',
+                'address_1'    => 'Dirección',
+                'postcode'     => 'Código postal',
+                'city'         => 'Ciudad',
+                'state'        => 'Provincia',
+                'country'      => 'País',
+                'phone'        => 'Teléfono',
+                'email'        => 'Email',
+            ],
+            'en' => [
+                'heading'      => 'Billing details',
+                'first_name'   => 'First name',
+                'last_name'    => 'Last name',
+                'is_company'   => 'I am a business',
+                'company'      => 'Company name',
+                'vat'          => 'Tax ID / VAT number',
+                'address_1'    => 'Address',
+                'postcode'     => 'Postcode',
+                'city'         => 'City',
+                'state'        => 'State / Province',
+                'country'      => 'Country',
+                'phone'        => 'Phone',
+                'email'        => 'Email',
+            ],
+            'fr' => [
+                'heading'      => 'Informations de facturation',
+                'first_name'   => 'Prénom',
+                'last_name'    => 'Nom',
+                'is_company'   => 'Je suis une entreprise',
+                'company'      => 'Raison sociale',
+                'vat'          => 'SIRET / Numéro de TVA',
+                'address_1'    => 'Adresse',
+                'postcode'     => 'Code postal',
+                'city'         => 'Ville',
+                'state'        => 'Région',
+                'country'      => 'Pays',
+                'phone'        => 'Téléphone',
+                'email'        => 'E-mail',
+            ],
+        ];
+        return $labels[ $lang ] ?? $labels['es'];
+    }
+
+    /**
+     * Valores con los que se prellena el formulario: los del usuario
+     * logueado (billing_* de su cuenta) tienen prioridad; si no hay sesión,
+     * se usa lo que ya traía el presupuesto (nombre/email de la solicitud
+     * original) como punto de partida.
+     */
+    private function billing_field_values( WC_Order $quote ): array {
+        $values = [
+            'first_name' => $quote->get_billing_first_name(),
+            'last_name'  => $quote->get_billing_last_name(),
+            'company'    => $quote->get_billing_company(),
+            'vat'        => (string) $quote->get_meta( '_billing_vat' ),
+            'address_1'  => $quote->get_billing_address_1(),
+            'postcode'   => $quote->get_billing_postcode(),
+            'city'       => $quote->get_billing_city(),
+            'state'      => $quote->get_billing_state(),
+            'country'    => $quote->get_billing_country() ?: 'ES',
+            'phone'      => $quote->get_billing_phone(),
+            'email'      => $quote->get_billing_email(),
+        ];
+
+        if ( is_user_logged_in() ) {
+            $user_id = get_current_user_id();
+            foreach ( array_keys( $values ) as $key ) {
+                $meta_key = 'vat' === $key ? 'billing_vat' : 'billing_' . $key;
+                $saved    = get_user_meta( $user_id, $meta_key, true );
+                if ( '' !== $saved ) $values[ $key ] = $saved;
+            }
+            if ( '' === $values['email'] ) {
+                $values['email'] = wp_get_current_user()->user_email;
+            }
+        }
+
+        return $values;
+    }
+
+    /** Formulario de facturación (sección 2): se piden ANTES de pulsar "Comprar" — WooCommerce espera estos datos en billing_* del pedido y del usuario. */
+    private function render_billing_fields( string $lang, WC_Order $quote ): string {
+        $l = $this->billing_field_labels( $lang );
+        $v = $this->billing_field_values( $quote );
+        $is_company = '' !== $v['company'] || '' !== $v['vat'];
+
+        ob_start();
+        ?>
+        <div class="mad-qp__billing">
+            <h3><?php echo esc_html( $l['heading'] ); ?></h3>
+            <p>
+                <label><?php echo esc_html( $l['first_name'] ); ?>
+                    <input type="text" id="mad-billing-first_name" value="<?php echo esc_attr( $v['first_name'] ); ?>" required>
+                </label>
+                <label><?php echo esc_html( $l['last_name'] ); ?>
+                    <input type="text" id="mad-billing-last_name" value="<?php echo esc_attr( $v['last_name'] ); ?>" required>
+                </label>
+            </p>
+            <p>
+                <label>
+                    <input type="checkbox" id="mad-billing-is_company" <?php checked( $is_company ); ?>>
+                    <?php echo esc_html( $l['is_company'] ); ?>
+                </label>
+            </p>
+            <p id="mad-billing-company-row" style="<?php echo $is_company ? '' : 'display:none;'; ?>">
+                <label><?php echo esc_html( $l['company'] ); ?>
+                    <input type="text" id="mad-billing-company" value="<?php echo esc_attr( $v['company'] ); ?>">
+                </label>
+                <label><?php echo esc_html( $l['vat'] ); ?>
+                    <input type="text" id="mad-billing-vat" value="<?php echo esc_attr( $v['vat'] ); ?>">
+                </label>
+            </p>
+            <p>
+                <label><?php echo esc_html( $l['address_1'] ); ?>
+                    <input type="text" id="mad-billing-address_1" value="<?php echo esc_attr( $v['address_1'] ); ?>" required>
+                </label>
+            </p>
+            <p>
+                <label><?php echo esc_html( $l['postcode'] ); ?>
+                    <input type="text" id="mad-billing-postcode" value="<?php echo esc_attr( $v['postcode'] ); ?>" required>
+                </label>
+                <label><?php echo esc_html( $l['city'] ); ?>
+                    <input type="text" id="mad-billing-city" value="<?php echo esc_attr( $v['city'] ); ?>" required>
+                </label>
+                <label><?php echo esc_html( $l['state'] ); ?>
+                    <input type="text" id="mad-billing-state" value="<?php echo esc_attr( $v['state'] ); ?>">
+                </label>
+            </p>
+            <p>
+                <label><?php echo esc_html( $l['country'] ); ?>
+                    <select id="mad-billing-country">
+                        <?php foreach ( WC()->countries->get_countries() as $code => $name ) : ?>
+                            <option value="<?php echo esc_attr( $code ); ?>" <?php selected( $v['country'], $code ); ?>><?php echo esc_html( $name ); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
+            </p>
+            <p>
+                <label><?php echo esc_html( $l['phone'] ); ?>
+                    <input type="tel" id="mad-billing-phone" value="<?php echo esc_attr( $v['phone'] ); ?>" required>
+                </label>
+                <label><?php echo esc_html( $l['email'] ); ?>
+                    <input type="email" id="mad-billing-email" value="<?php echo esc_attr( $v['email'] ); ?>" required>
+                </label>
+            </p>
+        </div>
+        <?php
         return ob_get_clean();
     }
 
@@ -4824,8 +4984,18 @@ return new class( $core ) implements MAD_Suite_Module {
                 'reserving'    => __( 'Procesando…', 'mad-suite' ),
                 'error'        => __( 'No se pudo completar la compra. Inténtalo de nuevo.', 'mad-suite' ),
                 'available'    => $this->available_label( mad_quotes_order_lang( $quote ) ),
+                'billing_required' => $this->billing_required_text( mad_quotes_order_lang( $quote ) ),
             ],
         ] );
+    }
+
+    private function billing_required_text( string $lang ): string {
+        $texts = [
+            'es' => 'Completa los datos de facturación obligatorios.',
+            'en' => 'Please fill in the required billing details.',
+            'fr' => 'Veuillez renseigner les informations de facturation obligatoires.',
+        ];
+        return $texts[ $lang ] ?? $texts['es'];
     }
 
     /**
@@ -5011,17 +5181,18 @@ return new class( $core ) implements MAD_Suite_Module {
             wp_send_json_error( [ 'message' => __( 'No encontramos esas piezas en el presupuesto.', 'mad-suite' ) ] );
         }
 
+        $lang    = mad_quotes_order_lang( $quote );
+        $billing = $this->collect_and_validate_billing( (array) ( $_POST['billing'] ?? [] ), $lang );
+        if ( is_wp_error( $billing ) ) {
+            wp_send_json_error( [ 'message' => $billing->get_error_message() ] );
+        }
+
         $order = $this->reservations->try_reserve( $lines, [
             'order_type'      => 'quote_purchase',
             'parent_quote_id' => $quote_id,
-            'lang'            => mad_quotes_order_lang( $quote ),
+            'lang'            => $lang,
             'minutes'         => (int) $settings['reservation_minutes'],
-            'billing'         => [
-                'email'      => $quote->get_billing_email(),
-                'first_name' => $quote->get_billing_first_name(),
-                'last_name'  => $quote->get_billing_last_name(),
-                'phone'      => $quote->get_billing_phone(),
-            ],
+            'billing'         => $billing,
         ] );
 
         if ( is_wp_error( $order ) ) {
@@ -5036,7 +5207,86 @@ return new class( $core ) implements MAD_Suite_Module {
             ] );
         }
 
+        $this->save_billing_to_customer( $order, $billing );
+
         wp_send_json_success( [ 'redirect' => mad_quotes_order_payment_url( $order ) ] );
+    }
+
+    /**
+     * Valida el formulario de facturación de la página de selección
+     * (sección 2 del documento de cambios). NIF/VAT obligatorio en España
+     * siempre; en el resto de la UE, solo si marcó "Soy empresa".
+     *
+     * @return array|WP_Error
+     */
+    private function collect_and_validate_billing( array $raw, string $lang ) {
+        $billing = [
+            'first_name' => sanitize_text_field( wp_unslash( $raw['first_name'] ?? '' ) ),
+            'last_name'  => sanitize_text_field( wp_unslash( $raw['last_name'] ?? '' ) ),
+            'company'    => sanitize_text_field( wp_unslash( $raw['company'] ?? '' ) ),
+            'vat'        => sanitize_text_field( wp_unslash( $raw['vat'] ?? '' ) ),
+            'address_1'  => sanitize_text_field( wp_unslash( $raw['address_1'] ?? '' ) ),
+            'postcode'   => sanitize_text_field( wp_unslash( $raw['postcode'] ?? '' ) ),
+            'city'       => sanitize_text_field( wp_unslash( $raw['city'] ?? '' ) ),
+            'state'      => sanitize_text_field( wp_unslash( $raw['state'] ?? '' ) ),
+            'country'    => sanitize_text_field( wp_unslash( $raw['country'] ?? '' ) ) ?: 'ES',
+            'phone'      => sanitize_text_field( wp_unslash( $raw['phone'] ?? '' ) ),
+            'email'      => sanitize_email( wp_unslash( $raw['email'] ?? '' ) ),
+        ];
+        $is_company = ! empty( $raw['is_company'] );
+
+        $required = [ 'first_name', 'last_name', 'address_1', 'postcode', 'city', 'country', 'phone', 'email' ];
+        foreach ( $required as $key ) {
+            if ( '' === $billing[ $key ] ) {
+                return new WP_Error( 'mad_billing_incomplete', $this->billing_error_text( 'incomplete', $lang ) );
+            }
+        }
+        if ( ! is_email( $billing['email'] ) ) {
+            return new WP_Error( 'mad_billing_email', $this->billing_error_text( 'email', $lang ) );
+        }
+
+        $eu_countries   = WC()->countries ? WC()->countries->get_european_union_countries() : [];
+        $vat_required   = 'ES' === $billing['country'] || ( $is_company && in_array( $billing['country'], $eu_countries, true ) );
+        if ( $vat_required && '' === $billing['vat'] ) {
+            return new WP_Error( 'mad_billing_vat', $this->billing_error_text( 'vat', $lang ) );
+        }
+
+        return $billing;
+    }
+
+    private function billing_error_text( string $which, string $lang ): string {
+        $texts = [
+            'incomplete' => [
+                'es' => 'Completa todos los campos obligatorios de facturación.',
+                'en' => 'Please fill in all required billing fields.',
+                'fr' => 'Veuillez renseigner tous les champs de facturation obligatoires.',
+            ],
+            'email' => [
+                'es' => 'Introduce un email válido.',
+                'en' => 'Please enter a valid email address.',
+                'fr' => 'Veuillez saisir une adresse e-mail valide.',
+            ],
+            'vat' => [
+                'es' => 'El NIF/CIF/VAT es obligatorio.',
+                'en' => 'The Tax ID / VAT number is required.',
+                'fr' => 'Le numéro de SIRET/TVA est obligatoire.',
+            ],
+        ];
+        return $texts[ $which ][ $lang ] ?? $texts[ $which ]['es'];
+    }
+
+    /** Copia los datos de facturación a la cuenta del cliente logueado (sección 3) — los invitados se resuelven en C3. */
+    private function save_billing_to_customer( WC_Order $order, array $billing ): void {
+        $order->update_meta_data( '_billing_vat', $billing['vat'] );
+        $order->save();
+
+        if ( ! is_user_logged_in() ) return;
+
+        $user_id = get_current_user_id();
+        foreach ( $billing as $key => $value ) {
+            $meta_key = 'vat' === $key ? 'billing_vat' : 'billing_' . $key;
+            update_user_meta( $user_id, $meta_key, $value );
+        }
     }
 
     /** @return array{id:int,state:string,until:int,message:string}|null */

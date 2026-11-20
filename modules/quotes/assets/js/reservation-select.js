@@ -20,6 +20,21 @@
     $root.on( 'change', '.mad-qp__checkbox, #mad-qp-terms', updateReserveButtonState );
     updateReserveButtonState();
 
+    // "Soy empresa": muestra razón social + VAT.
+    $root.on( 'change', '#mad-billing-is_company', function () {
+        $root.find( '#mad-billing-company-row' ).toggle( $( this ).is( ':checked' ) );
+    } );
+
+    function billingFields() {
+        var ids = [ 'first_name', 'last_name', 'company', 'vat', 'address_1', 'postcode', 'city', 'state', 'country', 'phone', 'email' ];
+        var data = {};
+        ids.forEach( function ( id ) {
+            data[ id ] = $root.find( '#mad-billing-' + id ).val() || '';
+        } );
+        data.is_company = $root.find( '#mad-billing-is_company' ).is( ':checked' ) ? 1 : 0;
+        return data;
+    }
+
     $root.on( 'click', '#mad-qp-reserve', function () {
         var $btn      = $( this );
         var selected  = $root.find( '.mad-qp__checkbox:checked' ).map( function () {
@@ -37,17 +52,26 @@
             return;
         }
 
+        var billing = billingFields();
+        var missing = [ 'first_name', 'last_name', 'address_1', 'postcode', 'city', 'phone', 'email' ].some( function ( key ) {
+            return '' === billing[ key ];
+        } );
+        if ( missing ) {
+            showResult( 'error', params.i18n.billing_required );
+            return;
+        }
+
         var originalText = $btn.text();
         $btn.prop( 'disabled', true ).text( params.i18n.reserving );
         $( '#mad-qp-result' ).hide();
 
-        $.post( params.ajax_url, {
+        $.post( params.ajax_url, $.extend( {
             action        : 'mad_quote_reserve',
             nonce         : params.nonce,
             quote_key     : params.quote_key,
             product_ids   : selected,
             accepts_terms : $terms.length ? ( $terms.is( ':checked' ) ? 1 : 0 ) : 1
-        } )
+        }, { billing: billing } ) )
         .done( function ( response ) {
             if ( response && response.success && response.data && response.data.redirect ) {
                 window.location.href = response.data.redirect;
