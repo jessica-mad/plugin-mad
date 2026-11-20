@@ -178,6 +178,15 @@ return new class( $core ) implements MAD_Suite_Module {
             add_action( 'woocommerce_thankyou_bacs', [ $this, 'render_pro_reservation_thankyou' ], 20 );
             add_action( 'template_redirect', [ $this, 'handle_recompra' ], 5 );
 
+            // El email nativo "Pedido en procesamiento" de WooCommerce se
+            // sustituye por "Pago confirmado" (sección 3) SOLO para compras
+            // con plazo — se vacía el destinatario en vez de desactivar el
+            // email entero, así los pedidos normales de tienda no se tocan.
+            add_filter( 'woocommerce_email_recipient_customer_processing_order', [ $this, 'suppress_native_processing_email' ], 10, 2 );
+
+            // Mi cuenta → Pedidos: botones de descarga de proforma/factura.
+            add_filter( 'woocommerce_my_account_my_orders_actions', [ $this, 'add_document_download_actions' ], 10, 2 );
+
             // ── Fase 8: admin — "Reservas activas", "Restablecer intentos",
             // aviso en la lista de pedidos (pensado para el personal de la
             // tienda física).
@@ -1222,6 +1231,7 @@ return new class( $core ) implements MAD_Suite_Module {
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-reservation-admin.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-proof-received-admin.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-piece-available.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-payment-confirmed.php';
 
         $email_classes['MAD_Quotes_Email_Confirmation']            = new MAD_Quotes_Email_Confirmation();
         $email_classes['MAD_Quotes_Email_New_Request']             = new MAD_Quotes_Email_New_Request();
@@ -1234,6 +1244,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $email_classes['MAD_Quotes_Email_New_Reservation_Admin']   = new MAD_Quotes_Email_New_Reservation_Admin();
         $email_classes['MAD_Quotes_Email_Proof_Received_Admin']    = new MAD_Quotes_Email_Proof_Received_Admin();
         $email_classes['MAD_Quotes_Email_Piece_Available']         = new MAD_Quotes_Email_Piece_Available();
+        $email_classes['MAD_Quotes_Email_Payment_Confirmed']       = new MAD_Quotes_Email_Payment_Confirmed();
 
         $this->disable_native_qwc_emails( $email_classes );
 
@@ -5102,6 +5113,34 @@ return new class( $core ) implements MAD_Suite_Module {
             $html .= '<a class="button" style="margin-right:8px;" href="' . esc_url( $url ) . '" target="_blank">' . esc_html( $label ) . '</a>';
         }
         return $html . '</p>';
+    }
+
+    /** @param string $recipient @param WC_Order|false $order */
+    public function suppress_native_processing_email( $recipient, $order ) {
+        if ( $order instanceof WC_Order && in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) {
+            return '';
+        }
+        return $recipient;
+    }
+
+    /** "Descargar proforma"/"Descargar factura" en Mi cuenta → Pedidos (sección 3). */
+    public function add_document_download_actions( array $actions, WC_Order $order ): array {
+        $module = $this->proforma_module();
+        if ( ! $module || ! method_exists( $module, 'get_download_url' ) ) return $actions;
+
+        if ( in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) {
+            $actions['mad_proforma'] = [
+                'url'  => $module->get_download_url( $order, 'proforma' ),
+                'name' => __( 'Proforma', 'mad-suite' ),
+            ];
+        }
+        if ( (string) $order->get_meta( '_mad_invoice_number' ) ) {
+            $actions['mad_invoice'] = [
+                'url'  => $module->get_download_url( $order, 'invoice' ),
+                'name' => __( 'Factura', 'mad-suite' ),
+            ];
+        }
+        return $actions;
     }
 
     /** Cuenta regresiva + datos bancarios de BACS para una reserva, agrupados en una tabla. */
