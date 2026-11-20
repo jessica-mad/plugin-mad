@@ -1,10 +1,11 @@
 <?php
 /**
- * Customer email: reservation confirmed (6.2).
+ * Customer email: "Proforma" (6.2 — antes "Reserva confirmada").
  *
  * Fires the instant a reservation order is created (quote_purchase or
- * pro_purchase) — includes the bank details and the deadline to upload
- * proof of payment before the reservation expires.
+ * pro_purchase) — genera la factura proforma (módulo Proforma, sin
+ * depender de ningún plugin de terceros) y la adjunta en PDF junto con los
+ * datos bancarios y el plazo para subir el comprobante.
  *
  * @package MAD_Suite/Quotes/Emails
  */
@@ -15,14 +16,17 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
 
     use MAD_Email_WPML_Trait;
 
+    /** @var string Ruta local de la proforma ya generada, para adjuntar en este envío. */
+    private $pdf_attachment_path = '';
+
     public function __construct() {
         $this->id             = 'mad_quotes_reservation_confirmed';
-        $this->title          = __( '[MAD Quotes] Reserva confirmada (cliente)', 'mad-suite' );
-        $this->description    = __( 'Se envía al confirmar una reserva con plazo (presupuesto o profesional) — incluye los datos bancarios y el plazo para subir el comprobante.', 'mad-suite' );
+        $this->title          = __( '[MAD Quotes] Proforma (cliente)', 'mad-suite' );
+        $this->description    = __( 'Se envía al confirmar una compra con plazo (presupuesto o profesional) — lleva la factura proforma adjunta en PDF y los datos bancarios.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'En proceso de compra', 'mad-suite' );
-        $this->subject = __( 'Su compra en proceso — Olofane (pedido #{order_number})', 'mad-suite' );
+        $this->heading = __( 'Su proforma', 'mad-suite' );
+        $this->subject = __( 'Su proforma y cómo completar la compra — Olofane (pedido #{order_number})', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-reservation-confirmed.php';
         $this->template_plain = 'emails/plain/mad-quote-reservation-confirmed.php';
@@ -43,6 +47,7 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
         if ( ! $this->get_recipient() ) return;
 
         $this->placeholders['{order_number}'] = $order->get_order_number();
+        $this->pdf_attachment_path             = $this->generate_proforma( $order );
 
         $orig_lang = $this->switch_to_order_language( $order );
         $content   = $this->get_content();
@@ -58,6 +63,31 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
         $this->restore_order_language( $orig_lang );
 
         do_action( 'mad_quotes_email_logged', $order->get_id(), $this->id, $this->get_recipient(), (bool) $sent, $content );
+    }
+
+    /**
+     * Resuelve el módulo Proforma (sin acoplarlo por require — mismo
+     * patrón que el resto del plugin para hablar entre módulos) y le pide
+     * el PDF. Si el módulo no está habilitado o algo falla al generarlo,
+     * el email se manda igual, solo sin adjunto — nunca debe bloquear la
+     * compra.
+     */
+    private function generate_proforma( WC_Order $order ): string {
+        $info = MAD_Suite_Core::instance()->get_all_modules_info();
+        if ( empty( $info['proforma']['enabled'] ) ) return '';
+
+        $module = $info['proforma']['instance'] ?? null;
+        if ( ! $module || ! method_exists( $module, 'generate_proforma_pdf' ) ) return '';
+
+        return (string) ( $module->generate_proforma_pdf( $order ) ?? '' );
+    }
+
+    public function get_attachments() {
+        $attachments = parent::get_attachments();
+        if ( $this->pdf_attachment_path && file_exists( $this->pdf_attachment_path ) ) {
+            $attachments[] = $this->pdf_attachment_path;
+        }
+        return $attachments;
     }
 
     public function get_content_html() {
@@ -103,34 +133,34 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( 'Su compra en proceso — Olofane (pedido #{order_number})', 'mad-suite' );
+        return __( 'Su proforma y cómo completar la compra — Olofane (pedido #{order_number})', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'En proceso de compra', 'mad-suite' );
+        return __( 'Su proforma', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
         return $this->body_text_defaults()['es'];
     }
 
-    /** ES/EN/FR tal cual (sección 6.2) — {datos_bancarios} se sustituye en get_body_text() (HTML o texto plano según el caso). */
+    /** ES/EN/FR tal cual (sección 2 del documento de cambios) — {datos_bancarios} se sustituye en get_body_text() (HTML o texto plano según el caso). */
     private function body_text_defaults(): array {
         return [
-            'es' => "Hemos puesto en proceso de compra, para usted, las piezas que ha seleccionado hasta las {hora_limite} (hora de Madrid).\n\n"
-                . "Para completar la compra, realice una transferencia de {total} a la siguiente cuenta y adjunte el comprobante con el botón «Adjuntar comprobante» que encontrará más abajo:\n\n"
+            'es' => "Gracias por su compra. Le adjuntamos la factura proforma de las piezas que ha seleccionado.\n\n"
+                . "Las piezas quedan apartadas para usted hasta las {hora_limite} (hora de Madrid). Para completar la compra, realice una transferencia de {total} a la siguiente cuenta y adjunte el comprobante con el botón de abajo:\n\n"
                 . "{datos_bancarios}\n\n"
-                . "Si no recibimos el comprobante antes de esa hora, el proceso de compra se liberará y las piezas volverán a estar disponibles.\n\n"
+                . "Si no recibimos el comprobante antes de esa hora, la compra se anulará y las piezas volverán a estar disponibles. Una vez confirmado el pago, le enviaremos la factura.\n\n"
                 . 'Quedamos a su disposición para cualquier consulta.',
-            'en' => "We have put the pieces you selected into the purchase process for you until {hora_limite} (Madrid time).\n\n"
-                . "To complete your purchase, please make a bank transfer of {total} to the account below and attach the proof of payment using the \u{201c}Attach proof of payment\u{201d} button below:\n\n"
+            'en' => "Thank you for your purchase. Please find attached the pro forma invoice for the pieces you selected.\n\n"
+                . "The pieces are held for you until {hora_limite} (Madrid time). To complete your purchase, please make a bank transfer of {total} to the account below and attach the proof of payment using the button below:\n\n"
                 . "{datos_bancarios}\n\n"
-                . "If we do not receive the proof of payment by then, the purchase process will be released and the pieces will become available again.\n\n"
+                . "If we do not receive the proof of payment by then, the purchase will be cancelled and the pieces will become available again. Once the payment is confirmed, we will send you the invoice.\n\n"
                 . 'We remain at your disposal for any questions.',
-            'fr' => "Nous avons mis en cours d'achat, pour vous, les pièces sélectionnées jusqu'à {hora_limite} (heure de Madrid).\n\n"
-                . "Pour finaliser votre achat, effectuez un virement de {total} sur le compte ci-dessous et joignez le justificatif à l'aide du bouton « Joindre le justificatif » ci-dessous :\n\n"
+            'fr' => "Merci pour votre achat. Vous trouverez ci-joint la facture pro forma des pièces sélectionnées.\n\n"
+                . "Les pièces restent à votre disposition jusqu'à {hora_limite} (heure de Madrid). Pour finaliser votre achat, effectuez un virement de {total} sur le compte ci-dessous et joignez le justificatif à l'aide du bouton ci-dessous :\n\n"
                 . "{datos_bancarios}\n\n"
-                . "Si nous ne recevons pas le justificatif avant cette heure, le processus d'achat sera libéré et les pièces seront de nouveau disponibles.\n\n"
+                . "Si nous ne recevons pas le justificatif avant cette heure, l'achat sera annulé et les pièces seront de nouveau disponibles. Une fois le paiement confirmé, nous vous enverrons la facture.\n\n"
                 . 'Nous restons à votre disposition pour toute question.',
         ];
     }
@@ -139,14 +169,14 @@ class MAD_Quotes_Email_Reservation_Confirmed extends WC_Email {
         parent::init_form_fields();
         $this->add_subject_heading_footer_form_fields( $this->form_fields, [
             'subject' => [
-                'es' => 'Su compra en proceso — Olofane (pedido #{order_number})',
-                'en' => 'Your purchase in progress — Olofane (order #{order_number})',
-                'fr' => 'Votre achat en cours — Olofane (commande n°{order_number})',
+                'es' => 'Su proforma y cómo completar la compra — Olofane (pedido #{order_number})',
+                'en' => 'Your pro forma invoice and how to complete your purchase — Olofane (order #{order_number})',
+                'fr' => 'Votre facture pro forma et comment finaliser votre achat — Olofane (commande n°{order_number})',
             ],
             'heading' => [
-                'es' => 'En proceso de compra',
-                'en' => 'Purchase in progress',
-                'fr' => 'Achat en cours',
+                'es' => 'Su proforma',
+                'en' => 'Your pro forma invoice',
+                'fr' => 'Votre facture pro forma',
             ],
         ] );
         $this->add_body_text_form_fields(

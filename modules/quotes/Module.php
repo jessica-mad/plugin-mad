@@ -5043,9 +5043,39 @@ return new class( $core ) implements MAD_Suite_Module {
             <?php else : ?>
                 <div class="woocommerce-info"><?php echo esc_html( $this->reservation_resolved_text( $lang ) ); ?></div>
             <?php endif; ?>
+
+            <?php echo $this->render_document_links( $order ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped — ya escapado dentro. ?>
         </div>
         <?php
         return ob_get_clean();
+    }
+
+    /** Resuelve el módulo Proforma sin acoplarlo por require (mismo patrón que el resto del plugin para hablar entre módulos). */
+    private function proforma_module(): ?object {
+        $info = MAD_Suite_Core::instance()->get_all_modules_info();
+        if ( empty( $info['proforma']['enabled'] ) ) return null;
+        return $info['proforma']['instance'] ?? null;
+    }
+
+    /** "Descargar proforma" (siempre) + "Descargar factura" (solo si ya se generó, sección 3: Mi cuenta y página de pago). */
+    private function render_document_links( WC_Order $order ): string {
+        $module = $this->proforma_module();
+        if ( ! $module || ! method_exists( $module, 'get_download_url' ) ) return '';
+
+        $links = [];
+        if ( in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) {
+            $links[] = [ $module->get_download_url( $order, 'proforma' ), __( 'Descargar proforma (PDF)', 'mad-suite' ) ];
+        }
+        if ( (string) $order->get_meta( '_mad_invoice_number' ) ) {
+            $links[] = [ $module->get_download_url( $order, 'invoice' ), __( 'Descargar factura (PDF)', 'mad-suite' ) ];
+        }
+        if ( ! $links ) return '';
+
+        $html = '<p class="mad-qp__documents">';
+        foreach ( $links as [ $url, $label ] ) {
+            $html .= '<a class="button" style="margin-right:8px;" href="' . esc_url( $url ) . '" target="_blank">' . esc_html( $label ) . '</a>';
+        }
+        return $html . '</p>';
     }
 
     /** Cuenta regresiva + datos bancarios de BACS para una reserva, agrupados en una tabla. */
