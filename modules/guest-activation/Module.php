@@ -574,6 +574,66 @@ return new class($core ?? null) implements MAD_Suite_Module {
     }
 
     /**
+     * API pública para otros módulos (Quotes, sección 3 del documento
+     * "Cambios tras la prueba en la web"): resuelve una cuenta de cliente
+     * por email — si ya existe, la devuelve (actualizando sus datos de
+     * facturación si se pasaron); si no existe, la crea con contraseña
+     * aleatoria, guarda los datos de facturación, y le manda el email de
+     * activación ya existente (mismo flujo de token que "Buscar pedidos
+     * previos"). Nunca autentica al visitante — eso lo decide quien llama.
+     *
+     * @param  string $email
+     * @param  array  $billing Opcional — claves billing_* sin el prefijo (first_name, last_name, company, vat, address_1, postcode, city, state, country, phone).
+     * @return int|WP_Error ID del usuario, o WP_Error si el email no es válido.
+     */
+    public function find_or_create_customer(string $email, array $billing = []) {
+        $email = sanitize_email($email);
+        if (empty($email) || !is_email($email)) {
+            return new WP_Error('mad_guest_activation_invalid_email', __('Email inválido.', 'mad-suite'));
+        }
+
+        $existing = email_exists($email);
+        if ($existing) {
+            $this->save_billing_meta($existing, $billing);
+            return (int) $existing;
+        }
+
+        $username = $this->generate_username_from_email($email);
+        $user_id  = wp_create_user($username, wp_generate_password(20, true, true), $email);
+        if (is_wp_error($user_id)) {
+            return $user_id;
+        }
+
+        $this->save_billing_meta($user_id, $billing);
+
+        $this->logger->log(sprintf(
+            'Cuenta creada automáticamente para email %s (Usuario ID: %d) desde find_or_create_customer()',
+            $email,
+            $user_id
+        ));
+
+        // Mismo email de activación que ya existe (token de 1 solo uso para
+        // establecer contraseña) — reutiliza el flujo ya probado en vez de
+        // duplicar su lógica.
+        $settings = $this->get_settings();
+        if (!empty($settings['activation_page_id'])) {
+            $token = $this->generate_activation_token($email);
+            $this->send_activation_email($email, $token);
+        }
+
+        return (int) $user_id;
+    }
+
+    /** @param array $billing Claves billing_* sin el prefijo (vat incluido). */
+    private function save_billing_meta(int $user_id, array $billing): void {
+        foreach ($billing as $key => $value) {
+            if ('' === trim((string) $value)) continue;
+            $meta_key = 'vat' === $key ? 'billing_vat' : 'billing_' . $key;
+            update_user_meta($user_id, $meta_key, $value);
+        }
+    }
+
+    /**
      * Generar token de activación
      */
     private function generate_activation_token($email) {

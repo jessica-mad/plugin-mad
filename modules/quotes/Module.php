@@ -422,6 +422,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $this->maybe_migrate_email_wpml_fields();
         $this->maybe_migrate_order_types();
         $this->maybe_fix_order_22247();
+        $this->maybe_migrate_guest_orders_to_accounts();
 
         $option_key = MAD_Suite_Core::option_key( $this->slug );
 
@@ -1822,8 +1823,15 @@ return new class( $core ) implements MAD_Suite_Module {
             $payment_method = 'efectivo';
         }
 
-        $user  = wp_get_current_user();
-        $order = wc_create_order( [ 'customer_id' => $is_store_manager ? 0 : $user->ID ] );
+        $user       = wp_get_current_user();
+        $customer_id = $is_store_manager ? 0 : $user->ID;
+        if ( ! $customer_id && '' !== $email ) {
+            // Invitado con email: se resuelve o se crea su cuenta ya en este
+            // punto (sección 3 del documento de cambios) — el presupuesto
+            // nunca queda como "invitado" si tenemos con quién asociarlo.
+            $customer_id = $this->resolve_customer_id_for_email( $email );
+        }
+        $order = wc_create_order( [ 'customer_id' => $customer_id ] );
 
         foreach ( WC()->cart->get_cart() as $item ) {
             $item_id = $order->add_product( $item['data'], $item['quantity'] );
@@ -5057,6 +5065,24 @@ return new class( $core ) implements MAD_Suite_Module {
         return $info['proforma']['instance'] ?? null;
     }
 
+    /**
+     * Resuelve (o crea) la cuenta de cliente de un email, vía el módulo
+     * Guest Activation (sección 3 del documento de cambios) — nunca
+     * acoplado por require, mismo patrón que proforma_module(). Si ese
+     * módulo no está habilitado o algo falla, devuelve 0 (invitado, el
+     * comportamiento de siempre) en vez de romper la creación del pedido.
+     */
+    private function resolve_customer_id_for_email( string $email, array $billing = [] ): int {
+        $info = MAD_Suite_Core::instance()->get_all_modules_info();
+        if ( empty( $info['guest-activation']['enabled'] ) ) return 0;
+
+        $module = $info['guest-activation']['instance'] ?? null;
+        if ( ! $module || ! method_exists( $module, 'find_or_create_customer' ) ) return 0;
+
+        $result = $module->find_or_create_customer( $email, $billing );
+        return is_wp_error( $result ) ? 0 : (int) $result;
+    }
+
     /** "Descargar proforma" (siempre) + "Descargar factura" (solo si ya se generó, sección 3: Mi cuenta y página de pago). */
     private function render_document_links( WC_Order $order ): string {
         $module = $this->proforma_module();
@@ -5308,11 +5334,22 @@ return new class( $core ) implements MAD_Suite_Module {
     /** Copia los datos de facturación a la cuenta del cliente logueado (sección 3) — los invitados se resuelven en C3. */
     private function save_billing_to_customer( WC_Order $order, array $billing ): void {
         $order->update_meta_data( '_billing_vat', $billing['vat'] );
+
+        if ( is_user_logged_in() ) {
+            $user_id = get_current_user_id();
+        } else {
+            // Invitado: se resuelve o se crea su cuenta ya en este punto
+            // (sección 3) — el pedido de compra nunca queda como
+            // "invitado" si tenemos con quién asociarlo.
+            $user_id = $this->resolve_customer_id_for_email( $billing['email'], $billing );
+            if ( $user_id ) {
+                $order->set_customer_id( $user_id );
+            }
+        }
+
         $order->save();
+        if ( ! $user_id ) return;
 
-        if ( ! is_user_logged_in() ) return;
-
-        $user_id = get_current_user_id();
         foreach ( $billing as $key => $value ) {
             $meta_key = 'vat' === $key ? 'billing_vat' : 'billing_' . $key;
             update_user_meta( $user_id, $meta_key, $value );
@@ -5771,6 +5808,41 @@ return new class( $core ) implements MAD_Suite_Module {
         $this->append_payment_proof_history( $order, (string) $order->get_meta( '_mad_payment_proof_url' ), 'mismatch' );
 
         do_action( 'mad_payment_proof_received', $order, 'mismatch', null );
+    }
+
+    /**
+     * Migración única (sección 3): asigna a su usuario los presupuestos y
+     * pedidos de invitado (customer_id=0) cuyo email coincida con una
+     * cuenta ya existente — solo los de este módulo (_mad_qwc_quote o
+     * _mad_order_type), nunca pedidos ajenos a Quotes.
+     */
+    private function maybe_migrate_guest_orders_to_accounts(): void {
+        if ( get_option( 'mad_quotes_guest_accounts_migrated' ) ) return;
+        update_option( 'mad_quotes_guest_accounts_migrated', '1' );
+
+        foreach ( [ '_mad_qwc_quote', '_mad_order_type' ] as $meta_key ) {
+            $order_ids = wc_get_orders( [
+                'type'        => 'shop_order',
+                'limit'       => -1,
+                'return'      => 'ids',
+                'customer_id' => 0,
+                'meta_query'  => [ [ 'key' => $meta_key, 'compare' => 'EXISTS' ] ],
+            ] );
+
+            foreach ( $order_ids as $order_id ) {
+                $order = wc_get_order( $order_id );
+                if ( ! $order || $order->get_customer_id() ) continue;
+
+                $email = $order->get_billing_email();
+                if ( ! $email ) continue;
+
+                $user_id = email_exists( $email );
+                if ( ! $user_id ) continue;
+
+                $order->set_customer_id( (int) $user_id );
+                $order->save();
+            }
+        }
     }
 
     /** Registra en el log de WooCommerce los fallos de entrega de email. */
