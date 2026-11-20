@@ -171,7 +171,7 @@ class MAD_Reservations {
             if ( ! $product || 'available' !== $this->product_state( $product ) ) {
                 return new WP_Error(
                     'mad_unavailable',
-                    __( 'Alguien acaba de reservar esta pieza.', 'mad-suite' ),
+                    __( 'Alguien ha puesto esta pieza en proceso de compra justo ahora.', 'mad-suite' ),
                     [ 'product_id' => $line['product_id'] ]
                 );
             }
@@ -181,7 +181,7 @@ class MAD_Reservations {
         if ( $failed ) {
             return new WP_Error(
                 'mad_lock_failed',
-                __( 'Alguien acaba de reservar esta pieza.', 'mad-suite' ),
+                __( 'Alguien ha puesto esta pieza en proceso de compra justo ahora.', 'mad-suite' ),
                 [ 'product_id' => $failed ]
             );
         }
@@ -194,7 +194,7 @@ class MAD_Reservations {
                 if ( ! $product || 'available' !== $this->product_state( $product ) ) {
                     return new WP_Error(
                         'mad_unavailable',
-                        __( 'Alguien acaba de reservar esta pieza.', 'mad-suite' ),
+                        __( 'Alguien ha puesto esta pieza en proceso de compra justo ahora.', 'mad-suite' ),
                         [ 'product_id' => $line['product_id'] ]
                     );
                 }

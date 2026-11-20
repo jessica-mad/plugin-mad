@@ -2,7 +2,7 @@
 /**
  * Customer email: reservation expired (6.3, variants A/B/C/D).
  *
- * A = quote_purchase, attempts left  → "Volver a reservar" button.
+ * A = quote_purchase, attempts left  → "Volver a comprar" button.
  * B = quote_purchase, no attempts    → next attempt date + contact.
  * C = pro_purchase,   attempts left  → "Volver a comprar" button.
  * D = pro_purchase,   no attempts    → next attempt date + contact.
@@ -28,8 +28,8 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
         $this->description    = __( 'Se envía cuando una reserva con plazo caduca sin comprobante, o el admin rechaza el comprobante subido. Cuatro variantes según el tipo de pedido y los intentos restantes.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Su reserva ha caducado', 'mad-suite' );
-        $this->subject = __( 'Su reserva ha caducado — Olofane', 'mad-suite' );
+        $this->heading = __( 'Su compra en proceso ha caducado', 'mad-suite' );
+        $this->subject = __( 'Su compra en proceso ha caducado — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-reservation-expired.php';
         $this->template_plain = 'emails/plain/mad-quote-reservation-expired.php';
@@ -119,16 +119,16 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
             'plain_text'         => $plain_text,
             'email'              => $this,
             'retry_url'          => $retry_url,
-            'retry_label'        => $is_pro ? __( 'Volver a comprar', 'mad-suite' ) : __( 'Volver a reservar', 'mad-suite' ),
+            'retry_label'        => __( 'Volver a comprar', 'mad-suite' ),
         ];
     }
 
     public function get_default_subject() {
-        return __( 'Su reserva ha caducado — Olofane', 'mad-suite' );
+        return __( 'Su compra en proceso ha caducado — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Su reserva ha caducado', 'mad-suite' );
+        return __( 'Su compra en proceso ha caducado', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
@@ -139,47 +139,47 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
     private function body_text_defaults( string $variant ): array {
         $texts = [
             'a' => [
-                'es' => "El plazo de su reserva ha finalizado sin que hayamos recibido el comprobante, por lo que las piezas vuelven a estar disponibles.\n\n"
-                    . "Si todavía le interesan, puede volver a reservarlas desde su lista de precios. {plural:intentos|Le queda|Le quedan} {intentos} {plural:intentos|intento|intentos} de reserva.\n\n"
+                'es' => "El plazo para completar su compra ha finalizado sin que hayamos recibido el comprobante, por lo que las piezas vuelven a estar disponibles.\n\n"
+                    . "Si todavía le interesan, puede volver a ponerlas en proceso de compra desde su lista de precios. {plural:intentos|Le queda|Le quedan} {intentos} {plural:intentos|intento|intentos} de compra.\n\n"
                     . 'Quedamos a su disposición para cualquier consulta.',
-                'en' => "Your reservation period has ended without us receiving the proof of payment, so the pieces are available again.\n\n"
-                    . "If you are still interested, you can reserve them again from your price list. You have {intentos} {plural:intentos|reservation attempt|reservation attempts} left.\n\n"
+                'en' => "The time allowed to complete your purchase has ended without us receiving the proof of payment, so the pieces are available again.\n\n"
+                    . "If you are still interested, you can put them back into the purchase process from your price list. You have {intentos} {plural:intentos|purchase attempt|purchase attempts} left.\n\n"
                     . 'We remain at your disposal for any questions.',
-                'fr' => "Le délai de votre réservation est écoulé sans que nous ayons reçu le justificatif ; les pièces sont donc de nouveau disponibles.\n\n"
-                    . "Si elles vous intéressent toujours, vous pouvez les réserver à nouveau depuis votre liste de prix. Il vous reste {intentos} {plural:intentos|tentative|tentatives} de réservation.\n\n"
+                'fr' => "Le délai pour finaliser votre achat est écoulé sans que nous ayons reçu le justificatif ; les pièces sont donc de nouveau disponibles.\n\n"
+                    . "Si elles vous intéressent toujours, vous pouvez les remettre en cours d'achat depuis votre liste de prix. Il vous reste {intentos} {plural:intentos|tentative|tentatives} d'achat.\n\n"
                     . 'Nous restons à votre disposition pour toute question.',
             ],
             'b' => [
-                'es' => "El plazo de su reserva ha finalizado sin que hayamos recibido el comprobante, por lo que las piezas vuelven a estar disponibles.\n\n"
-                    . "Ha utilizado los intentos de reserva disponibles por hoy. Podrá volver a reservar a partir del {proximo_intento} desde su lista de precios.\n\n"
+                'es' => "El plazo para completar su compra ha finalizado sin que hayamos recibido el comprobante, por lo que las piezas vuelven a estar disponibles.\n\n"
+                    . "Ha utilizado los intentos de compra disponibles por hoy. Podrá volver a intentarlo a partir del {proximo_intento} desde su lista de precios.\n\n"
                     . 'Si prefiere no esperar, escríbanos a info@olofane.com o llámenos al 91 365 46 50 y le ayudaremos a completar la compra.',
-                'en' => "Your reservation period has ended without us receiving the proof of payment, so the pieces are available again.\n\n"
-                    . "You have used today's reservation attempts. You will be able to reserve again from {proximo_intento} from your price list.\n\n"
+                'en' => "The time allowed to complete your purchase has ended without us receiving the proof of payment, so the pieces are available again.\n\n"
+                    . "You have used today's purchase attempts. You will be able to try again from {proximo_intento} from your price list.\n\n"
                     . 'If you would rather not wait, email us at info@olofane.com or call +34 91 365 46 50 and we will help you complete your purchase.',
-                'fr' => "Le délai de votre réservation est écoulé sans que nous ayons reçu le justificatif ; les pièces sont donc de nouveau disponibles.\n\n"
-                    . "Vous avez utilisé vos tentatives de réservation pour aujourd'hui. Vous pourrez réserver à nouveau à partir du {proximo_intento} depuis votre liste de prix.\n\n"
+                'fr' => "Le délai pour finaliser votre achat est écoulé sans que nous ayons reçu le justificatif ; les pièces sont donc de nouveau disponibles.\n\n"
+                    . "Vous avez utilisé vos tentatives d'achat pour aujourd'hui. Vous pourrez réessayer à partir du {proximo_intento} depuis votre liste de prix.\n\n"
                     . "Si vous préférez ne pas attendre, écrivez-nous à info@olofane.com ou appelez le +34 91 365 46 50 et nous vous aiderons à finaliser votre achat.",
             ],
             'c' => [
-                'es' => "El plazo de su reserva ha finalizado sin que hayamos recibido el comprobante, por lo que su pedido #{order_number} se ha cancelado y las piezas vuelven a estar disponibles.\n\n"
-                    . "Si todavía le interesan, puede volver a comprarlas desde el siguiente enlace mientras sigan disponibles. {plural:intentos|Le queda|Le quedan} {intentos} {plural:intentos|intento|intentos} de reserva para estas piezas.\n\n"
+                'es' => "El plazo para completar su compra ha finalizado sin que hayamos recibido el comprobante, por lo que su pedido #{order_number} se ha cancelado y las piezas vuelven a estar disponibles.\n\n"
+                    . "Si todavía le interesan, puede volver a comprarlas desde el siguiente enlace mientras sigan disponibles. {plural:intentos|Le queda|Le quedan} {intentos} {plural:intentos|intento|intentos} de compra para estas piezas.\n\n"
                     . 'Quedamos a su disposición para cualquier consulta.',
-                'en' => "Your reservation period has ended without us receiving the proof of payment, so your order #{order_number} has been cancelled and the pieces are available again.\n\n"
-                    . "If you are still interested, you can purchase them again using the link below while they remain available. You have {intentos} {plural:intentos|reservation attempt|reservation attempts} left for these pieces.\n\n"
+                'en' => "The time allowed to complete your purchase has ended without us receiving the proof of payment, so your order #{order_number} has been cancelled and the pieces are available again.\n\n"
+                    . "If you are still interested, you can purchase them again using the link below while they remain available. You have {intentos} {plural:intentos|purchase attempt|purchase attempts} left for these pieces.\n\n"
                     . 'We remain at your disposal for any questions.',
-                'fr' => "Le délai de votre réservation est écoulé sans que nous ayons reçu le justificatif ; votre commande n°{order_number} a donc été annulée et les pièces sont de nouveau disponibles.\n\n"
-                    . "Si elles vous intéressent toujours, vous pouvez les acheter à nouveau via le lien ci-dessous tant qu'elles restent disponibles. Il vous reste {intentos} {plural:intentos|tentative|tentatives} de réservation pour ces pièces.\n\n"
+                'fr' => "Le délai pour finaliser votre achat est écoulé sans que nous ayons reçu le justificatif ; votre commande n°{order_number} a donc été annulée et les pièces sont de nouveau disponibles.\n\n"
+                    . "Si elles vous intéressent toujours, vous pouvez les acheter à nouveau via le lien ci-dessous tant qu'elles restent disponibles. Il vous reste {intentos} {plural:intentos|tentative|tentatives} d'achat pour ces pièces.\n\n"
                     . 'Nous restons à votre disposition pour toute question.',
             ],
             'd' => [
-                'es' => "El plazo de su reserva ha finalizado sin que hayamos recibido el comprobante, por lo que su pedido #{order_number} se ha cancelado y las piezas vuelven a estar disponibles.\n\n"
-                    . "Ha utilizado los intentos de reserva disponibles para estas piezas. Podrá volver a comprarlas a partir del {proximo_intento}, si siguen disponibles.\n\n"
+                'es' => "El plazo para completar su compra ha finalizado sin que hayamos recibido el comprobante, por lo que su pedido #{order_number} se ha cancelado y las piezas vuelven a estar disponibles.\n\n"
+                    . "Ha utilizado los intentos de compra disponibles para estas piezas. Podrá volver a comprarlas a partir del {proximo_intento}, si siguen disponibles.\n\n"
                     . 'Si prefiere no esperar, escríbanos a info@olofane.com o llámenos al 91 365 46 50 y le ayudaremos a completar la compra.',
-                'en' => "Your reservation period has ended without us receiving the proof of payment, so your order #{order_number} has been cancelled and the pieces are available again.\n\n"
-                    . "You have used the reservation attempts available for these pieces. You will be able to purchase them again from {proximo_intento}, if they are still available.\n\n"
+                'en' => "The time allowed to complete your purchase has ended without us receiving the proof of payment, so your order #{order_number} has been cancelled and the pieces are available again.\n\n"
+                    . "You have used the purchase attempts available for these pieces. You will be able to purchase them again from {proximo_intento}, if they are still available.\n\n"
                     . 'If you would rather not wait, email us at info@olofane.com or call +34 91 365 46 50 and we will help you complete your purchase.',
-                'fr' => "Le délai de votre réservation est écoulé sans que nous ayons reçu le justificatif ; votre commande n°{order_number} a donc été annulée et les pièces sont de nouveau disponibles.\n\n"
-                    . "Vous avez utilisé les tentatives de réservation disponibles pour ces pièces. Vous pourrez les acheter à nouveau à partir du {proximo_intento}, si elles sont toujours disponibles.\n\n"
+                'fr' => "Le délai pour finaliser votre achat est écoulé sans que nous ayons reçu le justificatif ; votre commande n°{order_number} a donc été annulée et les pièces sont de nouveau disponibles.\n\n"
+                    . "Vous avez utilisé les tentatives d'achat disponibles pour ces pièces. Vous pourrez les acheter à nouveau à partir du {proximo_intento}, si elles sont toujours disponibles.\n\n"
                     . "Si vous préférez ne pas attendre, écrivez-nous à info@olofane.com ou appelez le +34 91 365 46 50 et nous vous aiderons à finaliser votre achat.",
             ],
         ];
@@ -200,14 +200,14 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
         parent::init_form_fields();
         $this->add_subject_heading_footer_form_fields( $this->form_fields, [
             'subject' => [
-                'es' => 'Su reserva ha caducado — Olofane',
-                'en' => 'Your reservation has expired — Olofane',
-                'fr' => 'Votre réservation a expiré — Olofane',
+                'es' => 'Su compra en proceso ha caducado — Olofane',
+                'en' => 'Your purchase in progress has expired — Olofane',
+                'fr' => 'Votre achat en cours a expiré — Olofane',
             ],
             'heading' => [
-                'es' => 'Su reserva ha caducado',
-                'en' => 'Your reservation has expired',
-                'fr' => 'Votre réservation a expiré',
+                'es' => 'Su compra en proceso ha caducado',
+                'en' => 'Your purchase in progress has expired',
+                'fr' => 'Votre achat en cours a expiré',
             ],
         ] );
 

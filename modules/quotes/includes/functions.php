@@ -340,14 +340,14 @@ function mad_quotes_default_reservation_message( string $state, string $lang ): 
             'fr' => 'Cette pièce est en cours d\'achat. Si l\'achat n\'est pas finalisé, elle sera libérée dans {tiempo}.',
         ],
         'pending_proof' => [
-            'es' => 'Esta pieza está reservada, pendiente de confirmación del pago.',
-            'en' => 'This piece is reserved, pending payment confirmation.',
-            'fr' => 'Cette pièce est réservée, en attente de confirmation du paiement.',
+            'es' => 'Esta pieza está en proceso de compra, pendiente de confirmación del pago.',
+            'en' => 'This piece is currently being purchased, pending payment confirmation.',
+            'fr' => "Cette pièce est en cours d'achat, en attente de confirmation du paiement.",
         ],
         'contested' => [
-            'es' => 'Alguien acaba de reservar esta pieza. Si no se completa la compra, volverá a estar disponible en {tiempo}.',
-            'en' => 'Someone has just reserved this piece. If the purchase is not completed, it will be available again in {tiempo}.',
-            'fr' => 'Quelqu\'un vient de réserver cette pièce. Si l\'achat n\'est pas finalisé, elle sera de nouveau disponible dans {tiempo}.',
+            'es' => 'Alguien ha puesto esta pieza en proceso de compra justo ahora. Si no se completa la compra, volverá a estar disponible en {tiempo}.',
+            'en' => 'Someone has just started buying this piece. If the purchase is not completed, it will be available again in {tiempo}.',
+            'fr' => "Quelqu'un vient de commencer l'achat de cette pièce. Si l'achat n'est pas finalisé, elle sera de nouveau disponible dans {tiempo}.",
         ],
         'sold' => [
             'es' => 'Esta pieza ya ha sido vendida.',

@@ -138,21 +138,21 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
     private function body_text_defaults(): array {
         return [
             'es' => "Le enviamos la lista de precios correspondiente a su solicitud.\n\n"
-                . "Desde el siguiente enlace podrá seleccionar las piezas que desea adquirir. Al confirmar su selección, quedarán reservadas para usted durante {plazo}, el tiempo para realizar la transferencia y adjuntar el comprobante.\n\n"
-                . "Le recordamos que, al tratarse de artículos únicos, las piezas no quedan reservadas hasta ese momento: permanecen disponibles hasta que la compra se confirma con el pago.\n\n"
-                . "Dispone de {intentos_total} {plural:intentos_total|intento|intentos} de reserva cada {ventana}. Si no pudiera completar la compra a tiempo, podrá volver a intentarlo desde este mismo enlace mientras su presupuesto esté vigente.\n\n"
+                . "Desde el siguiente enlace podrá seleccionar las piezas que desea adquirir. Al confirmar su selección, quedarán en proceso de compra para usted durante {plazo}, el tiempo para realizar la transferencia y adjuntar el comprobante.\n\n"
+                . "Le recordamos que, al tratarse de artículos únicos, las piezas no quedan en proceso de compra hasta ese momento: permanecen disponibles hasta que la compra se confirma con el pago.\n\n"
+                . "Dispone de {intentos_total} {plural:intentos_total|intento|intentos} de compra cada {ventana}. Si no pudiera completar la compra a tiempo, podrá volver a intentarlo desde este mismo enlace mientras su presupuesto esté vigente.\n\n"
                 . "Si necesita transporte, consúltenos y le prepararemos un presupuesto personalizado. También puede recoger su pieza en nuestra tienda de Madrid.\n\n"
                 . 'Quedamos a su disposición para cualquier consulta.',
             'en' => "We are sending you the price list corresponding to your request.\n\n"
-                . "Using the link below, you can select the pieces you would like to purchase. Once you confirm your selection, they will be reserved for you for {plazo}, giving you time to make the bank transfer and attach the proof of payment.\n\n"
-                . "Please note that, as these are one-of-a-kind items, the pieces are not reserved until then: they remain available until the purchase is confirmed with payment.\n\n"
-                . "You have {intentos_total} {plural:intentos_total|reservation attempt|reservation attempts} every {ventana}. If you are unable to complete the purchase in time, you can try again from this same link while your quote remains valid.\n\n"
+                . "Using the link below, you can select the pieces you would like to purchase. Once you confirm your selection, they will be put into the purchase process for you for {plazo}, giving you time to make the bank transfer and attach the proof of payment.\n\n"
+                . "Please note that, as these are one-of-a-kind items, the pieces are not put into the purchase process until then: they remain available until the purchase is confirmed with payment.\n\n"
+                . "You have {intentos_total} {plural:intentos_total|purchase attempt|purchase attempts} every {ventana}. If you are unable to complete the purchase in time, you can try again from this same link while your quote remains valid.\n\n"
                 . "If you need delivery, get in touch and we will prepare a personalised shipping quote. You can also collect your piece at our shop in Madrid.\n\n"
                 . 'We remain at your disposal for any questions.',
             'fr' => "Nous vous envoyons la liste de prix correspondant à votre demande.\n\n"
-                . "Le lien ci-dessous vous permet de sélectionner les pièces que vous souhaitez acquérir. Une fois votre sélection confirmée, elles vous seront réservées pendant {plazo}, le temps d'effectuer le virement et de joindre le justificatif.\n\n"
-                . "Nous vous rappelons que, s'agissant d'articles uniques, les pièces ne sont pas réservées jusque-là : elles restent disponibles jusqu'à la confirmation de l'achat par le paiement.\n\n"
-                . "Vous disposez de {intentos_total} {plural:intentos_total|tentative|tentatives} de réservation sur une période de {ventana}. Si vous ne pouviez pas finaliser l'achat à temps, vous pourrez réessayer depuis ce même lien tant que votre devis reste valable.\n\n"
+                . "Le lien ci-dessous vous permet de sélectionner les pièces que vous souhaitez acquérir. Une fois votre sélection confirmée, elles seront mises en cours d'achat pour vous pendant {plazo}, le temps d'effectuer le virement et de joindre le justificatif.\n\n"
+                . "Nous vous rappelons que, s'agissant d'articles uniques, les pièces ne sont pas mises en cours d'achat jusque-là : elles restent disponibles jusqu'à la confirmation de l'achat par le paiement.\n\n"
+                . "Vous disposez de {intentos_total} {plural:intentos_total|tentative|tentatives} d'achat sur une période de {ventana}. Si vous ne pouviez pas finaliser l'achat à temps, vous pourrez réessayer depuis ce même lien tant que votre devis reste valable.\n\n"
                 . "Si vous avez besoin d'une livraison, contactez-nous et nous vous préparerons un devis de transport personnalisé. Vous pouvez également retirer votre pièce dans notre boutique de Madrid.\n\n"
                 . 'Nous restons à votre disposition pour toute question.',
         ];

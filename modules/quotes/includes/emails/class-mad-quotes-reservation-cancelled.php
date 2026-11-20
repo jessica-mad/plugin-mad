@@ -24,8 +24,8 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
         $this->description    = __( 'Se envía cuando el admin anula manualmente una reserva (p. ej. la pieza se vendió en la tienda física). El intento consumido se devuelve al cliente.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Reserva anulada', 'mad-suite' );
-        $this->subject = __( 'Su reserva ha sido anulada — Olofane', 'mad-suite' );
+        $this->heading = __( 'Compra anulada', 'mad-suite' );
+        $this->subject = __( 'Su compra ha sido anulada — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-reservation-cancelled.php';
         $this->template_plain = 'emails/plain/mad-quote-reservation-cancelled.php';
@@ -119,11 +119,11 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( 'Su reserva ha sido anulada — Olofane', 'mad-suite' );
+        return __( 'Su compra ha sido anulada — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Reserva anulada', 'mad-suite' );
+        return __( 'Compra anulada', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
@@ -133,9 +133,9 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
     /** ES/EN/FR tal cual (sección 6.6). */
     private function body_text_defaults(): array {
         return [
-            'es' => 'Lamentamos informarle de que hemos tenido que anular su reserva porque la pieza ya no está disponible. No se ha descontado ningún intento de reserva. Quedamos a su disposición para cualquier consulta.',
-            'en' => 'We regret to inform you that we have had to cancel your reservation as the piece is no longer available. No reservation attempt has been used. We remain at your disposal for any questions.',
-            'fr' => "Nous sommes au regret de vous informer que nous avons dû annuler votre réservation, la pièce n'étant plus disponible. Aucune tentative de réservation n'a été décomptée. Nous restons à votre disposition pour toute question.",
+            'es' => 'Lamentamos informarle de que hemos tenido que anular su compra porque la pieza ya no está disponible. No se ha descontado ningún intento de compra. Quedamos a su disposición para cualquier consulta.',
+            'en' => 'We regret to inform you that we have had to cancel your purchase as the piece is no longer available. No purchase attempt has been used. We remain at your disposal for any questions.',
+            'fr' => "Nous sommes au regret de vous informer que nous avons dû annuler votre achat, la pièce n'étant plus disponible. Aucune tentative d'achat n'a été décomptée. Nous restons à votre disposition pour toute question.",
         ];
     }
 
@@ -143,14 +143,14 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
         parent::init_form_fields();
         $this->add_subject_heading_footer_form_fields( $this->form_fields, [
             'subject' => [
-                'es' => 'Su reserva ha sido anulada — Olofane',
-                'en' => 'Your reservation has been cancelled — Olofane',
-                'fr' => 'Votre réservation a été annulée — Olofane',
+                'es' => 'Su compra ha sido anulada — Olofane',
+                'en' => 'Your purchase has been cancelled — Olofane',
+                'fr' => 'Votre achat a été annulé — Olofane',
             ],
             'heading' => [
-                'es' => 'Reserva anulada',
-                'en' => 'Reservation cancelled',
-                'fr' => 'Réservation annulée',
+                'es' => 'Compra anulada',
+                'en' => 'Purchase cancelled',
+                'fr' => 'Achat annulé',
             ],
         ] );
         $this->add_body_text_form_fields( $this->form_fields, '', $this->body_text_defaults() );

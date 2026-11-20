@@ -123,12 +123,12 @@ return new class( $core ) implements MAD_Suite_Module {
         // reserva — tanto para compras desde un presupuesto como para
         // profesionales pagando por transferencia (sección 7 bis).
         register_post_status( 'wc-quote-reserved', [
-            'label'                     => _x( 'Reservado', 'Order status', 'mad-suite' ),
+            'label'                     => _x( 'En proceso de compra', 'Order status', 'mad-suite' ),
             'public'                    => false,
             'exclude_from_search'       => false,
             'show_in_admin_all_list'    => true,
             'show_in_admin_status_list' => true,
-            'label_count'               => _n_noop( 'Reservado (%s)', 'Reservados (%s)', 'mad-suite' ),
+            'label_count'               => _n_noop( 'En proceso de compra (%s)', 'En proceso de compra (%s)', 'mad-suite' ),
         ] );
         add_filter( 'wc_order_statuses',                           [ $this, 'add_wc_order_statuses' ] );
         add_filter( 'woocommerce_valid_order_statuses_for_payment', [ $this, 'valid_payment_statuses' ] );
@@ -710,7 +710,7 @@ return new class( $core ) implements MAD_Suite_Module {
     public function add_wc_order_statuses( $statuses ) {
         $statuses['wc-quote-pending']  = __( 'Presupuesto pendiente', 'mad-suite' );
         $statuses['wc-quote-sent']     = __( 'Presupuesto enviado',   'mad-suite' );
-        $statuses['wc-quote-reserved'] = __( 'Reservado',             'mad-suite' );
+        $statuses['wc-quote-reserved'] = __( 'En proceso de compra',  'mad-suite' );
         return $statuses;
     }
 
@@ -926,7 +926,7 @@ return new class( $core ) implements MAD_Suite_Module {
         return 'quote-reserved';
     }
 
-    /** "Su reserva está confirmada hasta las {hora_limite}..." — reemplaza el texto nativo de WC en la página de pedido recibido, salvo que el admin ya tenga uno propio configurado para quote-reserved. */
+    /** "Su compra está en proceso hasta las {hora_limite}..." — reemplaza el texto nativo de WC en la página de pedido recibido, salvo que el admin ya tenga uno propio configurado para quote-reserved. */
     public function filter_pro_reservation_thankyou_text( $text, $order ) {
         if ( ! $order instanceof WC_Order ) return $text;
         if ( 'pro_purchase' !== $order->get_meta( '_mad_order_type' ) ) return $text;
@@ -942,9 +942,9 @@ return new class( $core ) implements MAD_Suite_Module {
         $until   = ( $created ? $created->getTimestamp() : time() ) + $minutes * MINUTE_IN_SECONDS;
 
         $templates = [
-            'es' => 'Su reserva está confirmada hasta las %s (hora de Madrid). Realice la transferencia y adjunte el comprobante más abajo antes de que termine el plazo.',
-            'en' => 'Your reservation is confirmed until %s (Madrid time). Please make the bank transfer and attach the proof of payment below before the deadline.',
-            'fr' => "Votre réservation est confirmée jusqu'à %s (heure de Madrid). Veuillez effectuer le virement et joindre le justificatif ci-dessous avant la fin du délai.",
+            'es' => 'Su compra está en proceso hasta las %s (hora de Madrid). Realice la transferencia y adjunte el comprobante más abajo antes de que termine el plazo.',
+            'en' => 'Your purchase is in progress until %s (Madrid time). Please make the bank transfer and attach the proof of payment below before the deadline.',
+            'fr' => "Votre achat est en cours jusqu'à %s (heure de Madrid). Veuillez effectuer le virement et joindre le justificatif ci-dessous avant la fin du délai.",
         ];
 
         return sprintf( $templates[ $lang ] ?? $templates['es'], mad_quotes_madrid_time( $until ) );
@@ -3286,12 +3286,12 @@ return new class( $core ) implements MAD_Suite_Module {
         return $is_reservation && 'cancelled' === $order->get_status() && ! $order->get_meta( '_mad_payment_proof_url' );
     }
 
-    /** "Su reserva ha caducado; hemos recibido su comprobante y nos pondremos en contacto con usted." (ES/EN/FR, sección 8). */
+    /** "Su proceso de compra ha caducado; hemos recibido su comprobante y nos pondremos en contacto con usted." (ES/EN/FR, sección 8). */
     private function late_proof_message( string $lang ): string {
         $messages = [
-            'es' => 'Su reserva ha caducado; hemos recibido su comprobante y nos pondremos en contacto con usted.',
-            'en' => 'Your reservation has expired; we have received your proof of payment and will contact you.',
-            'fr' => "Votre réservation a expiré ; nous avons bien reçu votre justificatif et nous vous contacterons.",
+            'es' => 'Su proceso de compra ha caducado; hemos recibido su comprobante y nos pondremos en contacto con usted.',
+            'en' => 'Your purchase process has expired; we have received your proof of payment and will contact you.',
+            'fr' => "Votre processus d'achat a expiré ; nous avons bien reçu votre justificatif et nous vous contacterons.",
         ];
         return $messages[ $lang ] ?? $messages['es'];
     }
@@ -4328,7 +4328,7 @@ return new class( $core ) implements MAD_Suite_Module {
             $order    = $order_id ? wc_get_order( $order_id ) : false;
 
             if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) {
-                return $this->reservation_notice_box( __( 'No encontramos esa reserva. Comprueba el enlace de tu email.', 'mad-suite' ) );
+                return $this->reservation_notice_box( __( 'No encontramos esa compra en proceso. Comprueba el enlace de tu email.', 'mad-suite' ) );
             }
 
             return $this->render_reservation_payment_page( $order );
@@ -4353,7 +4353,7 @@ return new class( $core ) implements MAD_Suite_Module {
             return $this->render_quote_selection_page( $quote );
         }
 
-        return $this->reservation_notice_box( __( 'Enlace incompleto: falta identificar el presupuesto o la reserva.', 'mad-suite' ) );
+        return $this->reservation_notice_box( __( 'Enlace incompleto: falta identificar el presupuesto o la compra en proceso.', 'mad-suite' ) );
     }
 
     /**
@@ -4465,9 +4465,9 @@ return new class( $core ) implements MAD_Suite_Module {
     /** "{plural:intentos|...}" ya resuelto, en los 3 idiomas. */
     private function attempts_remaining_text( int $remaining, string $lang ): string {
         $templates = [
-            'es' => '{plural:intentos|Le queda|Le quedan} {intentos} {plural:intentos|intento|intentos} de reserva.',
-            'en' => 'You have {intentos} {plural:intentos|attempt|attempts} left to reserve.',
-            'fr' => 'Il vous reste {intentos} {plural:intentos|tentative|tentatives} de réservation.',
+            'es' => '{plural:intentos|Le queda|Le quedan} {intentos} {plural:intentos|intento|intentos} de compra.',
+            'en' => 'You have {intentos} {plural:intentos|purchase attempt|purchase attempts} left.',
+            'fr' => "Il vous reste {intentos} {plural:intentos|tentative|tentatives} d'achat.",
         ];
         $text = mad_quotes_apply_plural_placeholders( $templates[ $lang ] ?? $templates['es'], [ 'intentos' => $remaining ], $lang );
         return str_replace( '{intentos}', (string) $remaining, $text );
@@ -4480,9 +4480,9 @@ return new class( $core ) implements MAD_Suite_Module {
         $contact  = trim( trim( (string) ( $settings['contact_email'] ?? '' ) ) . ' · ' . trim( (string) ( $settings['contact_phone'] ?? '' ) ), ' ·' );
 
         $templates = [
-            'es' => 'Has agotado tus intentos de reserva. Podrás volver a intentarlo a partir del %1$s. Si necesitas ayuda, contáctanos: %2$s.',
-            'en' => 'You have used all your reservation attempts. You can try again from %1$s. If you need help, contact us: %2$s.',
-            'fr' => 'Vous avez épuisé vos tentatives de réservation. Vous pourrez réessayer à partir du %1$s. Besoin d\'aide ? Contactez-nous : %2$s.',
+            'es' => 'Has agotado tus intentos de compra. Podrás volver a intentarlo a partir del %1$s. Si necesitas ayuda, contáctanos: %2$s.',
+            'en' => 'You have used all your purchase attempts. You can try again from %1$s. If you need help, contact us: %2$s.',
+            'fr' => 'Vous avez épuisé vos tentatives d\'achat. Vous pourrez réessayer à partir du %1$s. Besoin d\'aide ? Contactez-nous : %2$s.',
         ];
         return sprintf( $templates[ $lang ] ?? $templates['es'], $when, $contact );
     }
@@ -4590,7 +4590,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
                 <p>
                     <button type="button" id="mad-qp-reserve" class="button wp-element-button" disabled>
-                        <?php esc_html_e( 'Reservar y pagar', 'mad-suite' ); ?>
+                        <?php esc_html_e( 'Comprar', 'mad-suite' ); ?>
                     </button>
                 </p>
                 <div id="mad-qp-result" role="alert" style="display:none;"></div>
@@ -4626,8 +4626,8 @@ return new class( $core ) implements MAD_Suite_Module {
             'i18n'       => [
                 'select_one'   => __( 'Selecciona al menos una pieza.', 'mad-suite' ),
                 'accept_terms' => __( 'Debes aceptar las condiciones de venta.', 'mad-suite' ),
-                'reserving'    => __( 'Reservando…', 'mad-suite' ),
-                'error'        => __( 'No se pudo completar la reserva. Inténtalo de nuevo.', 'mad-suite' ),
+                'reserving'    => __( 'Procesando…', 'mad-suite' ),
+                'error'        => __( 'No se pudo completar la compra. Inténtalo de nuevo.', 'mad-suite' ),
                 'available'    => $this->available_label( mad_quotes_order_lang( $quote ) ),
             ],
         ] );
@@ -4748,9 +4748,9 @@ return new class( $core ) implements MAD_Suite_Module {
 
     private function reservation_resolved_text( string $lang ): string {
         $templates = [
-            'es' => 'Esta reserva ya no está activa — puede haber caducado o haberse anulado. Si quieres volver a intentarlo, visita de nuevo la tienda.',
-            'en' => 'This reservation is no longer active — it may have expired or been cancelled. If you would like to try again, please visit the shop.',
-            'fr' => 'Cette réservation n\'est plus active — elle a peut-être expiré ou été annulée. Si vous souhaitez réessayer, visitez à nouveau la boutique.',
+            'es' => 'Esta compra ya no está en proceso — puede haber caducado o haberse anulado. Si quieres volver a intentarlo, visita de nuevo la tienda.',
+            'en' => 'This purchase is no longer in progress — it may have expired or been cancelled. If you would like to try again, please visit the shop.',
+            'fr' => "Cet achat n'est plus en cours — il a peut-être expiré ou été annulé. Si vous souhaitez réessayer, visitez à nouveau la boutique.",
         ];
         return $templates[ $lang ] ?? $templates['es'];
     }
@@ -4776,11 +4776,11 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $settings = mad_quotes_get_settings();
         if ( empty( $settings['reservations_enabled'] ) ) {
-            wp_send_json_error( [ 'message' => __( 'Las reservas no están activas en este momento.', 'mad-suite' ) ] );
+            wp_send_json_error( [ 'message' => __( 'No es posible completar la compra en este momento.', 'mad-suite' ) ] );
         }
 
         if ( $this->reservations->attempts_remaining( $quote_id ) <= 0 ) {
-            wp_send_json_error( [ 'message' => __( 'Has agotado tus intentos de reserva para este presupuesto.', 'mad-suite' ) ] );
+            wp_send_json_error( [ 'message' => __( 'Has agotado tus intentos de compra para este presupuesto.', 'mad-suite' ) ] );
         }
 
         $terms_page_id = absint( $settings['terms_page_id'] ?? 0 );
