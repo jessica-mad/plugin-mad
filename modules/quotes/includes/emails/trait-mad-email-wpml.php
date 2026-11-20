@@ -56,62 +56,199 @@ trait MAD_Email_WPML_Trait {
     }
 
     /**
-     * Get body text for the current WPML language.
-     * Falls back to the default-language option, then to the supplied default string.
-     *
-     * @param  string $default_text
-     * @return string
+     * Valor por idioma de un campo de texto cualquiera (body_text,
+     * body_text_a, subject, heading, additional_content...): idioma del
+     * pedido → idioma por defecto → el valor por defecto DECLARADO para
+     * ese idioma en form_fields (add_text_form_fields()) → $fallback.
+     * Sin WPML, usa directamente el campo sin sufijo de idioma.
      */
-    private function get_body_text_for_lang( string $default_text ): string {
+    private function get_text_for_lang( string $field_name, string $fallback = '' ): string {
         $langs = $this->get_wpml_languages();
         if ( empty( $langs ) ) {
-            return $this->get_option( 'body_text', $default_text );
+            return $this->get_option( $field_name, $fallback );
         }
 
         $current_lang = (string) apply_filters( 'wpml_current_language', null );
         $default_lang = (string) apply_filters( 'wpml_default_language', null );
 
-        $text = '';
         if ( $current_lang ) {
-            $text = $this->get_option( 'body_text_' . $current_lang, '' );
+            $text = $this->get_option( $field_name . '_' . $current_lang, $this->lang_field_default( $field_name, $current_lang ) );
+            if ( '' !== $text ) return $text;
         }
-        if ( $text === '' && $default_lang && $default_lang !== $current_lang ) {
-            $text = $this->get_option( 'body_text_' . $default_lang, '' );
+        if ( $default_lang && $default_lang !== $current_lang ) {
+            $text = $this->get_option( $field_name . '_' . $default_lang, $this->lang_field_default( $field_name, $default_lang ) );
+            if ( '' !== $text ) return $text;
         }
-        return $text !== '' ? $text : $default_text;
+        return $fallback;
+    }
+
+    /** El "default" declarado en form_fields para {field}_{lang}, o '' si no hay ninguno. */
+    private function lang_field_default( string $field_name, string $lang ): string {
+        return (string) ( $this->form_fields[ $field_name . '_' . $lang ]['default'] ?? '' );
+    }
+
+    /**
+     * Get body text for the current WPML language.
+     * Falls back to the default-language option, then to the supplied default string.
+     */
+    private function get_body_text_for_lang( string $default_text ): string {
+        return $this->get_text_for_lang( 'body_text', $default_text );
+    }
+
+    /**
+     * Igual que get_text_for_lang(), pero ignora el idioma "actual" y usa
+     * siempre el idioma POR DEFECTO de WPML — la vista previa nativa de
+     * WooCommerce (sin pedido real) debe mostrar ese idioma (sección 6.0),
+     * no el que el admin tenga elegido en ese momento en el wp-admin.
+     */
+    private function get_text_for_default_lang( string $field_name, string $fallback = '' ): string {
+        $langs = $this->get_wpml_languages();
+        if ( empty( $langs ) ) {
+            return $this->get_option( $field_name, $fallback );
+        }
+
+        $default_lang = (string) apply_filters( 'wpml_default_language', null );
+        if ( $default_lang ) {
+            $text = $this->get_option( $field_name . '_' . $default_lang, $this->lang_field_default( $field_name, $default_lang ) );
+            if ( '' !== $text ) return $text;
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * Resuelve {campo}_{idioma_actual} → {campo}_{idioma_por_defecto} →
+     * valor por defecto declarado para ese idioma → '' (y entonces el
+     * llamador cae al campo nativo de WC_Email — subject/heading/
+     * additional_content —, que sigue existiendo siempre).
+     */
+    private function get_lang_option_value( string $field ): string {
+        return $this->get_text_for_lang( $field, '' );
+    }
+
+    /**
+     * Asunto por idioma del pedido (sección 6.0 — hasta ahora el asunto era
+     * un único valor en español para todos los idiomas). Pasa por
+     * format_string() igual que el nativo, para que {order_number},
+     * {blogname}, etc. se sigan sustituyendo.
+     */
+    public function get_subject() {
+        $override = $this->get_lang_option_value( 'subject' );
+        if ( '' === $override ) return parent::get_subject();
+
+        return apply_filters( 'woocommerce_email_subject_' . $this->id, $this->format_string( $override ), $this->object );
+    }
+
+    /** Encabezado por idioma del pedido — mismo mecanismo que get_subject(). */
+    public function get_heading() {
+        $override = $this->get_lang_option_value( 'heading' );
+        if ( '' === $override ) return parent::get_heading();
+
+        return apply_filters( 'woocommerce_email_heading_' . $this->id, $this->format_string( $override ), $this->object );
+    }
+
+    /** Firma/contenido adicional por idioma del pedido — mismo mecanismo que get_subject(). */
+    public function get_additional_content() {
+        $override = $this->get_lang_option_value( 'additional_content' );
+        if ( '' === $override ) return parent::get_additional_content();
+
+        return apply_filters( 'woocommerce_email_additional_content_' . $this->id, $this->format_string( $override ), $this->object );
+    }
+
+    /** "El equipo de Olofane" / "The Olofane team" / "L'équipe Olofane" — firma por defecto de todos los emails de cliente (sección 6.0). */
+    private function olofane_signature_defaults(): array {
+        return [
+            'es' => 'El equipo de Olofane',
+            'en' => 'The Olofane team',
+            'fr' => "L'équipe Olofane",
+        ];
+    }
+
+    /**
+     * Añade subject_{idioma}/heading_{idioma}/additional_content_{idioma}
+     * por cada idioma activo de WPML — ADEMÁS de los campos nativos
+     * "Asunto"/"Encabezado"/"Contenido adicional" de WC_Email (que no se
+     * tocan: siguen siendo el valor de reserva si WPML está desactivado).
+     * Sin WPML no añade nada — el comportamiento de siempre, un único
+     * valor para todos.
+     *
+     * @param array $defaults ['subject'=>[lang=>texto], 'heading'=>[...], 'additional_content'=>[...]].
+     *                         Si se omite 'additional_content', se usa la firma de Olofane por defecto.
+     */
+    private function add_subject_heading_footer_form_fields( array &$form_fields, array $defaults = [] ): void {
+        $langs = $this->get_wpml_languages();
+        if ( empty( $langs ) ) return;
+
+        $defaults['additional_content'] = $defaults['additional_content'] ?? $this->olofane_signature_defaults();
+
+        foreach ( $langs as $code => $name ) {
+            $suffix = sprintf( ' <small>(%s)</small>', esc_html( strtoupper( $code ) ) );
+
+            $form_fields[ 'subject_' . $code ] = [
+                'title'       => __( 'Asunto', 'mad-suite' ) . $suffix,
+                'type'        => 'text',
+                'desc_tip'    => true,
+                'description' => __( 'Vacío = se usa el valor por defecto de este idioma.', 'mad-suite' ),
+                'default'     => $defaults['subject'][ $code ] ?? '',
+            ];
+            $form_fields[ 'heading_' . $code ] = [
+                'title'       => __( 'Encabezado', 'mad-suite' ) . $suffix,
+                'type'        => 'text',
+                'desc_tip'    => true,
+                'description' => __( 'Vacío = se usa el valor por defecto de este idioma.', 'mad-suite' ),
+                'default'     => $defaults['heading'][ $code ] ?? '',
+            ];
+            $form_fields[ 'additional_content_' . $code ] = [
+                'title'       => __( 'Contenido adicional (firma)', 'mad-suite' ) . $suffix,
+                'type'        => 'textarea',
+                'desc_tip'    => true,
+                'description' => __( 'Vacío = se usa el valor por defecto de este idioma.', 'mad-suite' ),
+                'css'         => 'width:400px;height:60px;',
+                'default'     => $defaults['additional_content'][ $code ] ?? '',
+            ];
+        }
     }
 
     /**
      * Append per-language body_text form fields (or a single field when WPML is absent).
      *
-     * @param  array  $form_fields  Reference to the email's form_fields array.
-     * @param  string $description  Optional custom field description.
+     * @param  array  $form_fields    Reference to the email's form_fields array.
+     * @param  string $description    Optional custom field description.
+     * @param  array  $lang_defaults  Opcional [lang => texto por defecto]. Sin esto, se usa
+     *                                get_default_body_text() (un único texto) para todos los idiomas,
+     *                                como antes.
+     * @param  string $field_name     Nombre base del campo — "body_text" salvo que el email
+     *                                tenga varias variantes de cuerpo (ej. "body_text_a").
+     * @param  string $title          Título del campo en el admin.
      */
-    private function add_body_text_form_fields( array &$form_fields, string $description = '' ): void {
+    private function add_body_text_form_fields(
+        array &$form_fields,
+        string $description = '',
+        array $lang_defaults = [],
+        string $field_name = 'body_text',
+        string $title = ''
+    ): void {
         $langs = $this->get_wpml_languages();
         $desc  = $description ?: __( 'Usa {customer_name} para insertar el nombre del cliente.', 'mad-suite' );
+        $title = $title ?: __( 'Cuerpo del email', 'mad-suite' );
 
         if ( empty( $langs ) ) {
-            $form_fields['body_text'] = [
-                'title'       => __( 'Cuerpo del email', 'mad-suite' ),
+            $form_fields[ $field_name ] = [
+                'title'       => $title,
                 'type'        => 'textarea',
                 'description' => $desc,
-                'default'     => $this->get_default_body_text(),
+                'default'     => $lang_defaults['es'] ?? $this->get_default_body_text(),
                 'css'         => 'width:400px;height:120px;',
             ];
             return;
         }
 
         foreach ( $langs as $code => $name ) {
-            $form_fields[ 'body_text_' . $code ] = [
-                'title'       => sprintf(
-                    '%s <small>(%s)</small>',
-                    __( 'Cuerpo del email', 'mad-suite' ),
-                    esc_html( strtoupper( $code ) )
-                ),
+            $form_fields[ $field_name . '_' . $code ] = [
+                'title'       => sprintf( '%s <small>(%s)</small>', $title, esc_html( strtoupper( $code ) ) ),
                 'type'        => 'textarea',
                 'description' => $desc,
-                'default'     => $this->get_default_body_text(),
+                'default'     => $lang_defaults[ $code ] ?? $this->get_default_body_text(),
                 'css'         => 'width:400px;height:120px;',
             ];
         }

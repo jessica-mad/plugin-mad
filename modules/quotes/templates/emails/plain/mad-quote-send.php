@@ -71,7 +71,7 @@ if ( ! empty( $admin_note ) ) {
     echo esc_html( $admin_note ) . "\n\n";
 }
 
-echo esc_html__( 'Aceptar y pagar: ', 'mad-suite' ) . esc_url( $order->get_checkout_payment_url() ) . "\n";
+echo esc_html__( 'Ver precios y comprar: ', 'mad-suite' ) . esc_url( mad_quotes_quote_selection_url( $order ) ) . "\n";
 
 if ( $additional_content ) {
     echo "\n" . wp_strip_all_tags( wptexturize( $additional_content ) ) . "\n";

@@ -20,8 +20,8 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
         $this->description    = __( 'Se envía al cliente cuando el administrador envía el presupuesto finalizado.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Tu presupuesto está listo', 'mad-suite' );
-        $this->subject = __( '[{blogname}] Tu presupuesto (Pedido #{order_number})', 'mad-suite' );
+        $this->heading = __( 'Su lista de precios', 'mad-suite' );
+        $this->subject = __( 'Su lista de precios — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-send.php';
         $this->template_plain = 'emails/plain/mad-quote-send.php';
@@ -123,31 +123,79 @@ class MAD_Quotes_Email_Send_Quote extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( '[{blogname}] Tu presupuesto (Pedido #{order_number})', 'mad-suite' );
+        return __( 'Su lista de precios — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Tu presupuesto está listo', 'mad-suite' );
+        return __( 'Su lista de precios', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, tu presupuesto está listo. Puedes revisarlo a continuación.', 'mad-suite' );
+        return $this->body_text_defaults()['es'];
+    }
+
+    /** ES/EN/FR tal cual (sección 6.1). */
+    private function body_text_defaults(): array {
+        return [
+            'es' => "Le enviamos la lista de precios correspondiente a su solicitud.\n\n"
+                . "Desde el siguiente enlace podrá seleccionar las piezas que desea adquirir. Al confirmar su selección, quedarán reservadas para usted durante {plazo}, el tiempo para realizar la transferencia y adjuntar el comprobante.\n\n"
+                . "Le recordamos que, al tratarse de artículos únicos, las piezas no quedan reservadas hasta ese momento: permanecen disponibles hasta que la compra se confirma con el pago.\n\n"
+                . "Dispone de {intentos_total} {plural:intentos_total|intento|intentos} de reserva cada {ventana}. Si no pudiera completar la compra a tiempo, podrá volver a intentarlo desde este mismo enlace mientras su presupuesto esté vigente.\n\n"
+                . "Si necesita transporte, consúltenos y le prepararemos un presupuesto personalizado. También puede recoger su pieza en nuestra tienda de Madrid.\n\n"
+                . 'Quedamos a su disposición para cualquier consulta.',
+            'en' => "We are sending you the price list corresponding to your request.\n\n"
+                . "Using the link below, you can select the pieces you would like to purchase. Once you confirm your selection, they will be reserved for you for {plazo}, giving you time to make the bank transfer and attach the proof of payment.\n\n"
+                . "Please note that, as these are one-of-a-kind items, the pieces are not reserved until then: they remain available until the purchase is confirmed with payment.\n\n"
+                . "You have {intentos_total} {plural:intentos_total|reservation attempt|reservation attempts} every {ventana}. If you are unable to complete the purchase in time, you can try again from this same link while your quote remains valid.\n\n"
+                . "If you need delivery, get in touch and we will prepare a personalised shipping quote. You can also collect your piece at our shop in Madrid.\n\n"
+                . 'We remain at your disposal for any questions.',
+            'fr' => "Nous vous envoyons la liste de prix correspondant à votre demande.\n\n"
+                . "Le lien ci-dessous vous permet de sélectionner les pièces que vous souhaitez acquérir. Une fois votre sélection confirmée, elles vous seront réservées pendant {plazo}, le temps d'effectuer le virement et de joindre le justificatif.\n\n"
+                . "Nous vous rappelons que, s'agissant d'articles uniques, les pièces ne sont pas réservées jusque-là : elles restent disponibles jusqu'à la confirmation de l'achat par le paiement.\n\n"
+                . "Vous disposez de {intentos_total} {plural:intentos_total|tentative|tentatives} de réservation sur une période de {ventana}. Si vous ne pouviez pas finaliser l'achat à temps, vous pourrez réessayer depuis ce même lien tant que votre devis reste valable.\n\n"
+                . "Si vous avez besoin d'une livraison, contactez-nous et nous vous préparerons un devis de transport personnalisé. Vous pouvez également retirer votre pièce dans notre boutique de Madrid.\n\n"
+                . 'Nous restons à votre disposition pour toute question.',
+        ];
     }
 
     public function init_form_fields() {
         parent::init_form_fields();
-        $this->add_body_text_form_fields( $this->form_fields );
+        $this->add_subject_heading_footer_form_fields( $this->form_fields, [
+            'subject' => [
+                'es' => 'Su lista de precios — Olofane',
+                'en' => 'Your price list — Olofane',
+                'fr' => 'Votre liste de prix — Olofane',
+            ],
+            'heading' => [
+                'es' => 'Su lista de precios',
+                'en' => 'Your price list',
+                'fr' => 'Votre liste de prix',
+            ],
+        ] );
+        $this->add_body_text_form_fields(
+            $this->form_fields,
+            __( 'Usa {plazo} (plazo de reserva), {intentos_total}, {ventana} y {plural:intentos_total|singular|plural} (sección "Reservas con plazo" de los ajustes).', 'mad-suite' ),
+            $this->body_text_defaults()
+        );
     }
 
-    private function get_body_text( $order ): string {
+    private function get_body_text( WC_Order $order ): string {
+        $lang     = mad_quotes_order_lang( $order );
+        $settings = mad_quotes_get_settings();
+        $intentos = (int) $settings['reservation_attempts'];
+
         $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
-        return str_replace( '{customer_name}', $order->get_billing_first_name(), $text );
+        $text = mad_quotes_apply_plural_placeholders( $text, [ 'intentos_total' => $intentos ], $lang );
+        $text = str_replace( '{plazo}', mad_quotes_format_duration( (int) $settings['reservation_minutes'], $lang ), $text );
+        $text = str_replace( '{intentos_total}', (string) $intentos, $text );
+        $text = str_replace( '{ventana}', mad_quotes_format_window( (int) $settings['reservation_window_hours'], $lang ), $text );
+        return $text;
     }
 
     private function get_preview_fallback_html(): string {
         ob_start();
         do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo '<p>' . esc_html( $this->get_option( 'body_text', $this->get_default_body_text() ) ) . '</p>';
+        echo wp_kses_post( wpautop( $this->get_text_for_default_lang( 'body_text', $this->get_default_body_text() ) ) );
         if ( $this->get_additional_content() ) {
             echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
         }

@@ -17,8 +17,8 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
         $this->description    = __( 'Se envía al cliente cuando recibimos su solicitud de presupuesto.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Hemos recibido tu solicitud', 'mad-suite' );
-        $this->subject = __( '[{blogname}] Solicitud de presupuesto recibida (#{order_number})', 'mad-suite' );
+        $this->heading = __( 'Hemos recibido su solicitud', 'mad-suite' );
+        $this->subject = __( 'Hemos recibido su solicitud de precios — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-confirmation.php';
         $this->template_plain = 'emails/plain/mad-quote-confirmation.php';
@@ -106,19 +106,31 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( '[{blogname}] Solicitud de presupuesto recibida (#{order_number})', 'mad-suite' );
+        return __( 'Hemos recibido su solicitud de precios — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Hemos recibido tu solicitud', 'mad-suite' );
+        return __( 'Hemos recibido su solicitud', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
-        return __( 'Hola {customer_name}, hemos recibido tu solicitud de presupuesto correctamente. Te responderemos lo antes posible.', 'mad-suite' );
+        return __( 'Hola {customer_name}, hemos recibido su solicitud de presupuesto correctamente. Le responderemos lo antes posible.', 'mad-suite' );
     }
 
     public function init_form_fields() {
         parent::init_form_fields();
+        $this->add_subject_heading_footer_form_fields( $this->form_fields, [
+            'subject' => [
+                'es' => 'Hemos recibido su solicitud de precios — Olofane',
+                'en' => 'We have received your price request — Olofane',
+                'fr' => 'Nous avons bien reçu votre demande de prix — Olofane',
+            ],
+            'heading' => [
+                'es' => 'Hemos recibido su solicitud',
+                'en' => 'We have received your request',
+                'fr' => 'Nous avons bien reçu votre demande',
+            ],
+        ] );
         $this->add_body_text_form_fields( $this->form_fields );
     }
 
@@ -130,7 +142,7 @@ class MAD_Quotes_Email_Confirmation extends WC_Email {
     private function get_preview_fallback_html(): string {
         ob_start();
         do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo '<p>' . esc_html( $this->get_option( 'body_text', $this->get_default_body_text() ) ) . '</p>';
+        echo wp_kses_post( wpautop( $this->get_text_for_default_lang( 'body_text', $this->get_default_body_text() ) ) );
         if ( $this->get_additional_content() ) {
             echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
         }
