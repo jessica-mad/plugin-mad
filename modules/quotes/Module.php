@@ -372,7 +372,15 @@ return new class( $core ) implements MAD_Suite_Module {
         // incluso después de liberarse. Por eso el aviso + la desactivación
         // visual del botón se pintan enteramente por JS (sección 5).
         add_action( 'woocommerce_single_product_summary',    [ $this, 'render_reservation_notice_product_page' ], 25 );
+        // Respaldo para temas (p. ej. Impreza/WPBakery) cuya plantilla de
+        // ficha no ejecuta woocommerce_single_product_summary — el marcador
+        // nunca se duplica (ver render_reservation_notice_product_page()).
+        add_action( 'woocommerce_before_add_to_cart_form',    [ $this, 'render_reservation_notice_product_page' ], 25 );
         add_action( 'woocommerce_after_shop_loop_item_title', [ $this, 'render_reservation_notice_catalog' ],      15 );
+
+        // AJAX "Avísenme si no se completa la compra" (sección 4).
+        add_action( 'wp_ajax_mad_quote_notify_subscribe',        [ $this, 'ajax_notify_subscribe' ] );
+        add_action( 'wp_ajax_nopriv_mad_quote_notify_subscribe', [ $this, 'ajax_notify_subscribe' ] );
 
         // Carrito/checkout de profesionales (o de cualquier otro visitante):
         // si una pieza que ya tenían en el carrito se reserva mientras tanto,
@@ -817,7 +825,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $order = wc_get_order( $order_id );
         if ( ! $order || ! in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true ) ) return;
 
-        $this->reservations->release_reservation( $order );
+        $this->reservations->release_reservation( $order, '', true );
         $this->reservations->notify_pieces_sold( $order );
 
         // Una reserva que termina en compra no cuenta contra el límite de
@@ -1092,6 +1100,7 @@ return new class( $core ) implements MAD_Suite_Module {
             . '<th>' . esc_html__( 'Pedido', 'mad-suite' ) . '</th>'
             . '<th>' . esc_html__( 'Estado', 'mad-suite' ) . '</th>'
             . '<th>' . esc_html__( 'Tiempo restante', 'mad-suite' ) . '</th>'
+            . '<th title="' . esc_attr__( 'Personas que pulsaron "Avísenme" en la ficha de esta pieza.', 'mad-suite' ) . '">' . esc_html__( 'Avisos pendientes', 'mad-suite' ) . '</th>'
             . '<th>&nbsp;</th>'
             . '</tr></thead><tbody>';
 
@@ -1110,9 +1119,11 @@ return new class( $core ) implements MAD_Suite_Module {
                 'mad_quotes_void_reservation_' . $order->get_id()
             );
 
+            $notify_count = count( $this->reservations->get_notify_subscribers( $product->get_id() ) );
+
             printf(
-                '<tr><td><a href="%1$s">%2$s</a></td><td>%3$s</td><td><a href="%4$s">%5$s</a></td><td>%6$s</td><td>%7$s</td>'
-                . '<td><a class="button button-small" href="%8$s" onclick="return confirm(\'%9$s\');">%10$s</a></td></tr>',
+                '<tr><td><a href="%1$s">%2$s</a></td><td>%3$s</td><td><a href="%4$s">%5$s</a></td><td>%6$s</td><td>%7$s</td><td>%8$s</td>'
+                . '<td><a class="button button-small" href="%9$s" onclick="return confirm(\'%10$s\');">%11$s</a></td></tr>',
                 esc_url( (string) get_edit_post_link( $product->get_id() ) ),
                 esc_html( $product->get_name() ),
                 esc_html( $order->get_formatted_billing_full_name() . ' — ' . $order->get_billing_email() ),
@@ -1120,6 +1131,7 @@ return new class( $core ) implements MAD_Suite_Module {
                 esc_html( $order->get_order_number() ),
                 esc_html( $state_label ),
                 esc_html( $remaining ),
+                $notify_count > 0 ? esc_html( (string) $notify_count ) : '—',
                 esc_url( $void_url ),
                 esc_js( __( '¿Anular esta reserva?', 'mad-suite' ) ),
                 esc_html__( 'Anular reserva', 'mad-suite' )
@@ -1208,6 +1220,7 @@ return new class( $core ) implements MAD_Suite_Module {
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-reservation-cancelled.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-new-reservation-admin.php';
         require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-proof-received-admin.php';
+        require_once MAD_QUOTES_DIR . 'includes/emails/class-mad-quotes-piece-available.php';
 
         $email_classes['MAD_Quotes_Email_Confirmation']            = new MAD_Quotes_Email_Confirmation();
         $email_classes['MAD_Quotes_Email_New_Request']             = new MAD_Quotes_Email_New_Request();
@@ -1219,6 +1232,7 @@ return new class( $core ) implements MAD_Suite_Module {
         $email_classes['MAD_Quotes_Email_Reservation_Cancelled']   = new MAD_Quotes_Email_Reservation_Cancelled();
         $email_classes['MAD_Quotes_Email_New_Reservation_Admin']   = new MAD_Quotes_Email_New_Reservation_Admin();
         $email_classes['MAD_Quotes_Email_Proof_Received_Admin']    = new MAD_Quotes_Email_Proof_Received_Admin();
+        $email_classes['MAD_Quotes_Email_Piece_Available']         = new MAD_Quotes_Email_Piece_Available();
 
         $this->disable_native_qwc_emails( $email_classes );
 
@@ -5083,6 +5097,58 @@ return new class( $core ) implements MAD_Suite_Module {
         wp_send_json_success( $response );
     }
 
+    /* ================================================================ */
+    /*  "Avísenme si no se completa la compra" (sección 4)                */
+    /* ================================================================ */
+
+    /** AJAX pub+nopriv: inscribe un email para avisarle si la pieza vuelve a estar disponible. */
+    public function ajax_notify_subscribe(): void {
+        if ( ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) ), 'mad_quote_notify_subscribe' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
+        }
+
+        // Campo trampa: un bot de formularios rellena todo lo que encuentra;
+        // un humano nunca ve este campo (ver notify_form_html()). Se
+        // responde éxito falso para no revelarle que fue detectado.
+        if ( '' !== trim( (string) ( $_POST['website'] ?? '' ) ) ) {
+            wp_send_json_success();
+        }
+
+        $ip_key = 'mad_notify_ip_' . md5( $this->client_ip() );
+        $count  = (int) get_transient( $ip_key );
+        if ( $count >= 10 ) {
+            wp_send_json_error( [ 'message' => __( 'Demasiados intentos. Inténtalo más tarde.', 'mad-suite' ) ] );
+        }
+        set_transient( $ip_key, $count + 1, HOUR_IN_SECONDS );
+
+        $product_id = absint( $_POST['product_id'] ?? 0 );
+        $email      = sanitize_email( wp_unslash( $_POST['email'] ?? '' ) );
+
+        if ( ! $product_id || ! wc_get_product( $product_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Pieza no válida.', 'mad-suite' ) ] );
+        }
+        if ( '' === $email || ! is_email( $email ) ) {
+            wp_send_json_error( [ 'message' => __( 'Introduce un email válido.', 'mad-suite' ) ] );
+        }
+
+        // Da igual si ya estaba inscrito (dedup silencioso) — para el
+        // cliente es éxito en los dos casos, no hay nada más que decidir.
+        $this->reservations->add_notify_subscriber( $product_id, $email, $this->visitor_lang() );
+
+        wp_send_json_success();
+    }
+
+    /** IP del visitante, respetando un proxy/CDN delante si lo hay (mismo criterio que el límite de intentos de otros formularios del sitio). */
+    private function client_ip(): string {
+        foreach ( [ 'HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'REMOTE_ADDR' ] as $key ) {
+            if ( ! empty( $_SERVER[ $key ] ) ) {
+                $ip = trim( explode( ',', sanitize_text_field( wp_unslash( $_SERVER[ $key ] ) ) )[0] );
+                if ( filter_var( $ip, FILTER_VALIDATE_IP ) ) return $ip;
+            }
+        }
+        return '0.0.0.0';
+    }
+
     /**
      * Encola reservation-timer.js en todas las páginas del front — es un
      * script pequeño e inactivo salvo que encuentre cuentas atrás/estados
@@ -5120,6 +5186,14 @@ return new class( $core ) implements MAD_Suite_Module {
 .mad-reservation-disabled-btn {
     opacity: 0.55;
     cursor: not-allowed;
+}
+.mad-notify-link {
+    font-size: 0.85em;
+    text-decoration: underline;
+    color: inherit;
+}
+.mad-notify-form {
+    margin-top: 6px;
 }
 .mad-quote-purchase__table {
     width: 100%;
@@ -5178,10 +5252,63 @@ return new class( $core ) implements MAD_Suite_Module {
         $settings = mad_quotes_get_settings();
         if ( empty( $settings['reservations_enabled'] ) ) return;
 
+        // Este método está enganchado a DOS hooks (woocommerce_single_product_summary
+        // y woocommerce_before_add_to_cart_form) para cubrir temas como
+        // Impreza/WPBakery que no ejecutan el primero — si un tema SÍ
+        // ejecuta ambos, no se duplica el marcador para el mismo producto.
+        static $printed = [];
+        $product_id = $product->get_id();
+        if ( isset( $printed[ $product_id ] ) ) return;
+        $printed[ $product_id ] = true;
+
+        $lang = $this->visitor_lang();
         printf(
-            '<div class="mad-reservation-notice woocommerce-info" data-mad-product-id="%1$d" data-mad-disable-form="1" style="display:none;"></div>',
-            esc_attr( $product->get_id() )
+            '<div class="mad-reservation-notice" data-mad-product-id="%1$d" data-mad-disable-form="1" style="display:none;"></div>'
+            . '<p class="mad-notify-link-wrap" style="display:none;margin:4px 0 0;">'
+            . '<a href="#" class="mad-notify-link" data-mad-product-id="%1$d">%2$s</a>'
+            . '</p>'
+            . '<div class="mad-notify-form" data-mad-product-id="%1$d" style="display:none;">%3$s</div>',
+            esc_attr( $product_id ),
+            esc_html( $this->notify_link_text( $lang ) ),
+            $this->notify_form_html( $lang ) // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped — ya escapado dentro.
         );
+    }
+
+    /** "Avísenme si no se completa la compra" — texto estático, no depende del estado de la reserva, a salvo de la caché igual que el resto de la ficha. */
+    private function notify_link_text( string $lang ): string {
+        $texts = [
+            'es' => 'Avísenme si no se completa la compra',
+            'en' => 'Let me know if the purchase is not completed',
+            'fr' => "Prévenez-moi si l'achat n'aboutit pas",
+        ];
+        return $texts[ $lang ] ?? $texts['es'];
+    }
+
+    /** Formulario desplegable del enlace "Avísenme" — email + política de privacidad + botón. Oculto por JS hasta que el enlace se pulsa. */
+    private function notify_form_html( string $lang ): string {
+        $labels = [
+            'es' => [ 'placeholder' => 'Tu email', 'privacy' => 'Acepto la política de privacidad.', 'submit' => 'Avisarme', 'confirm' => 'Le avisaremos por email si la pieza vuelve a estar disponible.' ],
+            'en' => [ 'placeholder' => 'Your email', 'privacy' => 'I accept the privacy policy.', 'submit' => 'Notify me', 'confirm' => 'We will email you if the piece becomes available again.' ],
+            'fr' => [ 'placeholder' => 'Votre e-mail', 'privacy' => 'J\'accepte la politique de confidentialité.', 'submit' => 'Me prévenir', 'confirm' => 'Nous vous préviendrons par e-mail si la pièce redevient disponible.' ],
+        ];
+        $l = $labels[ $lang ] ?? $labels['es'];
+
+        $user_email = is_user_logged_in() ? wp_get_current_user()->user_email : '';
+
+        ob_start();
+        ?>
+        <input type="email" class="mad-notify-email" placeholder="<?php echo esc_attr( $l['placeholder'] ); ?>" value="<?php echo esc_attr( $user_email ); ?>" style="display:block;margin:4px 0;width:100%;max-width:260px;">
+        <label style="display:block;font-size:12px;margin-bottom:4px;">
+            <input type="checkbox" class="mad-notify-privacy"> <?php echo esc_html( $l['privacy'] ); ?>
+        </label>
+        <!-- Campo trampa contra spam: un bot de formularios suele rellenar todo lo que encuentra; un humano nunca ve este campo. -->
+        <input type="text" class="mad-notify-trap" name="mad_notify_website" value="" autocomplete="off" tabindex="-1" style="position:absolute;left:-9999px;" aria-hidden="true">
+        <button type="button" class="button button-small mad-notify-submit"><?php echo esc_html( $l['submit'] ); ?></button>
+        <span class="mad-notify-msg" style="margin-left:6px;font-size:12px;"></span>
+        <input type="hidden" class="mad-notify-confirm-text" value="<?php echo esc_attr( $l['confirm'] ); ?>">
+        <input type="hidden" class="mad-notify-nonce" value="<?php echo esc_attr( wp_create_nonce( 'mad_quote_notify_subscribe' ) ); ?>">
+        <?php
+        return ob_get_clean();
     }
 
     /** Mismo marcador vacío que en la ficha, pero en la tarjeta del catálogo — ver la nota de render_reservation_notice_product_page(). */

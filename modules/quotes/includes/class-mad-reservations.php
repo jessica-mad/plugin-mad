@@ -304,8 +304,15 @@ class MAD_Reservations {
      * Libera una reserva: limpia las metas de cada producto que esté
      * reservado por ESTE pedido (nunca toca la de otro pedido — por si ya
      * fue reasignada) y cancela la acción de caducidad pendiente, si la hay.
+     *
+     * @param bool $piece_sold true cuando se llama porque la compra se
+     *                         confirmó (clear_reservation_meta_on_sale):
+     *                         la lista de "Avísenme" se vacía SIN avisar a
+     *                         nadie. false (caducidad/rechazo/anulación
+     *                         manual): se avisa a cada inscrito antes de
+     *                         vaciarla (sección 4 del documento de cambios).
      */
-    public function release_reservation( WC_Order $order, string $reason = '' ): void {
+    public function release_reservation( WC_Order $order, string $reason = '', bool $piece_sold = false ): void {
         foreach ( $order->get_items() as $item ) {
             $product_id = $item->get_product_id();
             if ( ! $product_id ) continue;
@@ -313,6 +320,11 @@ class MAD_Reservations {
             if ( (int) get_post_meta( $product_id, '_mad_reserved_order', true ) === $order->get_id() ) {
                 delete_post_meta( $product_id, '_mad_reserved_until' );
                 delete_post_meta( $product_id, '_mad_reserved_order' );
+
+                $subscribers = $this->clear_notify_subscribers( $product_id );
+                if ( $subscribers && ! $piece_sold ) {
+                    do_action( 'mad_quotes_piece_available_again', $product_id, $subscribers );
+                }
             }
         }
 
@@ -321,6 +333,39 @@ class MAD_Reservations {
         if ( $reason ) {
             $order->add_order_note( $reason );
         }
+    }
+
+    /* ────────────────────────────────────────────────────────────────
+     * "Avísenme si no se completa la compra" (sección 4, nuevo).
+     * ──────────────────────────────────────────────────────────────── */
+
+    /** @return array Lista de ['email'=>string,'lang'=>string,'time'=>int]. */
+    public function get_notify_subscribers( int $product_id ): array {
+        $raw  = get_post_meta( $product_id, '_mad_notify_subscribers', true );
+        $list = $raw ? json_decode( (string) $raw, true ) : [];
+        return is_array( $list ) ? $list : [];
+    }
+
+    /** @return bool false si ese email ya estaba inscrito para esta pieza (sin duplicar). */
+    public function add_notify_subscriber( int $product_id, string $email, string $lang ): bool {
+        $list = $this->get_notify_subscribers( $product_id );
+        foreach ( $list as $entry ) {
+            if ( isset( $entry['email'] ) && 0 === strcasecmp( (string) $entry['email'], $email ) ) {
+                return false;
+            }
+        }
+        $list[] = [ 'email' => $email, 'lang' => $lang, 'time' => time() ];
+        update_post_meta( $product_id, '_mad_notify_subscribers', wp_json_encode( $list ) );
+        return true;
+    }
+
+    /** Vacía la lista de inscritos de una pieza y la devuelve — vendida o liberada, nunca se deja a medias. */
+    public function clear_notify_subscribers( int $product_id ): array {
+        $list = $this->get_notify_subscribers( $product_id );
+        if ( $list ) {
+            delete_post_meta( $product_id, '_mad_notify_subscribers' );
+        }
+        return $list;
     }
 
     /* ────────────────────────────────────────────────────────────────
@@ -742,6 +787,13 @@ class MAD_Reservations {
 
         $order = wc_get_order( $order_id );
         if ( ! $order || 'quote-reserved' !== $order->get_status() ) return;
+
+        // La pieza se VENDIÓ, no quedó libre — la lista de "Avísenme" se
+        // vacía sin avisar a nadie (sección 4). Se hace ANTES de cancelar
+        // el pedido para que release_reservation() (que corre al cambiar
+        // el estado, vía el hook genérico de cancelación) no encuentre ya
+        // nada que notificar.
+        $this->clear_notify_subscribers( $product->get_id() );
 
         // Pieza vendida fuera de este pedido (tienda física) mientras había
         // una reserva activa: se anula esa reserva, se cancela SU pedido

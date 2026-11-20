@@ -28,8 +28,8 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
         $this->description    = __( 'Se envía cuando una reserva con plazo caduca sin comprobante, o el admin rechaza el comprobante subido. Cuatro variantes según el tipo de pedido y los intentos restantes.', 'mad-suite' );
         $this->customer_email = true;
 
-        $this->heading = __( 'Su compra en proceso ha caducado', 'mad-suite' );
-        $this->subject = __( 'Su compra en proceso ha caducado — Olofane', 'mad-suite' );
+        $this->heading = __( 'El plazo para completar su compra ha finalizado', 'mad-suite' );
+        $this->subject = __( 'El plazo para completar su compra ha finalizado — Olofane', 'mad-suite' );
 
         $this->template_html  = 'emails/mad-quote-reservation-expired.php';
         $this->template_plain = 'emails/plain/mad-quote-reservation-expired.php';
@@ -124,11 +124,11 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
     }
 
     public function get_default_subject() {
-        return __( 'Su compra en proceso ha caducado — Olofane', 'mad-suite' );
+        return __( 'El plazo para completar su compra ha finalizado — Olofane', 'mad-suite' );
     }
 
     public function get_default_heading() {
-        return __( 'Su compra en proceso ha caducado', 'mad-suite' );
+        return __( 'El plazo para completar su compra ha finalizado', 'mad-suite' );
     }
 
     public function get_default_body_text(): string {
@@ -200,14 +200,14 @@ class MAD_Quotes_Email_Reservation_Expired extends WC_Email {
         parent::init_form_fields();
         $this->add_subject_heading_footer_form_fields( $this->form_fields, [
             'subject' => [
-                'es' => 'Su compra en proceso ha caducado — Olofane',
-                'en' => 'Your purchase in progress has expired — Olofane',
-                'fr' => 'Votre achat en cours a expiré — Olofane',
+                'es' => 'El plazo para completar su compra ha finalizado — Olofane',
+                'en' => 'The time to complete your purchase has ended — Olofane',
+                'fr' => 'Le délai pour finaliser votre achat est écoulé — Olofane',
             ],
             'heading' => [
-                'es' => 'Su compra en proceso ha caducado',
-                'en' => 'Your purchase in progress has expired',
-                'fr' => 'Votre achat en cours a expiré',
+                'es' => 'El plazo para completar su compra ha finalizado',
+                'en' => 'The time to complete your purchase has ended',
+                'fr' => 'Le délai pour finaliser votre achat est écoulé',
             ],
         ] );
 

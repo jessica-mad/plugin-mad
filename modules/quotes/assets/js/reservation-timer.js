@@ -54,6 +54,19 @@
             return;
         }
 
+        // La cuenta atrás de la ficha vive dentro del propio botón de
+        // compra (sección 4) — no dentro de .mad-reservation-notice, que
+        // se vacía y oculta. Se resuelve por el product_id que
+        // applyFichaButtonState() le dejó al botón.
+        var btnProductId = $el.closest( '[data-mad-product-id]' ).attr( 'data-mad-product-id' );
+        if ( btnProductId ) {
+            var $ownerNotice = $( '.mad-reservation-notice[data-mad-product-id="' + btnProductId + '"]' );
+            if ( $ownerNotice.length ) {
+                refreshNotice( $ownerNotice );
+                return;
+            }
+        }
+
         var $selectionRow = $el.closest( '.mad-qp__row[data-mad-product-id]' );
         if ( $selectionRow.length ) {
             refreshSelectionRow( $selectionRow );
@@ -68,23 +81,62 @@
         return $( '.mad-reservation-notice[data-mad-product-id]' );
     }
 
+    /**
+     * El aviso aparte ya no se muestra como caja (sección 4 del documento
+     * de cambios): el propio botón de compra se convierte en el mensaje —
+     * texto + cuenta atrás en el botón, deshabilitado de verdad (bloquea
+     * clic y toque), y recupera su texto original sin recargar al liberarse.
+     */
+    function applyFichaButtonState( $notice, unavailable, message ) {
+        var $form = $notice.nextAll( 'form.cart' ).first();
+        if ( ! $form.length ) $form = $notice.closest( '.summary, .product' ).find( 'form.cart' ).first();
+        var $btn = $form.find( '.single_add_to_cart_button, button[type="submit"]' ).first();
+        if ( ! $btn.length ) return;
+
+        if ( unavailable ) {
+            if ( undefined === $btn.data( 'madOriginalHtml' ) ) {
+                $btn.data( 'madOriginalHtml', $btn.html() );
+            }
+            $btn.html( message )
+                .attr( 'data-mad-product-id', $notice.attr( 'data-mad-product-id' ) )
+                .prop( 'disabled', true )
+                .addClass( 'mad-reservation-disabled-btn' )
+                .attr( 'aria-disabled', 'true' )
+                .on( 'click.madReservation touchend.madReservation', function ( e ) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                } );
+        } else {
+            var original = $btn.data( 'madOriginalHtml' );
+            if ( undefined !== original ) $btn.html( original );
+            $btn.prop( 'disabled', false )
+                .removeClass( 'mad-reservation-disabled-btn' )
+                .removeAttr( 'aria-disabled' )
+                .off( 'click.madReservation touchend.madReservation' );
+        }
+    }
+
+    /** Enlace "Avísenme" + su formulario desplegable — visibles solo mientras la pieza no está disponible. */
+    function toggleNotifyUi( productId, unavailable ) {
+        var $link = $( '.mad-notify-link[data-mad-product-id="' + productId + '"]' );
+        var $form = $( '.mad-notify-form[data-mad-product-id="' + productId + '"]' );
+
+        if ( unavailable ) {
+            $link.closest( '.mad-notify-link-wrap' ).show();
+        } else {
+            $link.closest( '.mad-notify-link-wrap' ).hide();
+            $form.hide();
+        }
+    }
+
     function applyNoticeState( $notice, state, message ) {
-        $notice.attr( 'data-mad-state', state );
+        $notice.attr( 'data-mad-state', state ).hide().empty();
 
         var unavailable = ( 'reserved' === state || 'pending_proof' === state );
 
-        if ( unavailable ) {
-            $notice.html( message ).show();
-        } else {
-            $notice.hide().empty();
-        }
-
         if ( $notice.is( '[data-mad-disable-form]' ) ) {
-            var $form = $notice.nextAll( 'form.cart' ).first();
-            if ( ! $form.length ) $form = $notice.closest( '.summary, .product' ).find( 'form.cart' ).first();
-            $form.find( '.single_add_to_cart_button, button[type="submit"]' )
-                .prop( 'disabled', unavailable )
-                .toggleClass( 'disabled', unavailable );
+            applyFichaButtonState( $notice, unavailable, message );
+            toggleNotifyUi( $notice.attr( 'data-mad-product-id' ), unavailable );
         }
 
         if ( $notice.is( '[data-mad-disable-link]' ) ) {
@@ -103,6 +155,53 @@
             } );
         }
     }
+
+    /* ────────────────────────────────────────────────────────────────
+     * Enlace "Avísenme si no se completa la compra" (sección 4).
+     * ──────────────────────────────────────────────────────────────── */
+
+    $( document ).on( 'click', '.mad-notify-link', function ( e ) {
+        e.preventDefault();
+        var id = $( this ).attr( 'data-mad-product-id' );
+        $( this ).closest( '.mad-notify-link-wrap' ).hide();
+        $( '.mad-notify-form[data-mad-product-id="' + id + '"]' ).show();
+    } );
+
+    $( document ).on( 'click', '.mad-notify-submit', function () {
+        var $form  = $( this ).closest( '.mad-notify-form' );
+        var id     = $form.attr( 'data-mad-product-id' );
+        var email  = $form.find( '.mad-notify-email' ).val();
+        var $msg   = $form.find( '.mad-notify-msg' );
+
+        if ( ! $form.find( '.mad-notify-privacy' ).is( ':checked' ) ) {
+            $msg.css( 'color', 'red' ).text( '—' );
+            return;
+        }
+
+        var $btn = $( this );
+        $btn.prop( 'disabled', true );
+        $msg.text( '' );
+
+        $.post( params.ajax_url, {
+            action    : 'mad_quote_notify_subscribe',
+            product_id: id,
+            email     : email,
+            website   : $form.find( '.mad-notify-trap' ).val(), // campo trampa: un bot lo rellena, un humano nunca lo ve.
+            nonce     : $form.find( '.mad-notify-nonce' ).val(),
+        } )
+        .done( function ( response ) {
+            if ( response && response.success ) {
+                $form.html( '<span style="font-size:12px;">' + $form.find( '.mad-notify-confirm-text' ).val() + '</span>' );
+            } else {
+                $btn.prop( 'disabled', false );
+                $msg.css( 'color', 'red' ).text( ( response && response.data && response.data.message ) || 'Error.' );
+            }
+        } )
+        .fail( function () {
+            $btn.prop( 'disabled', false );
+            $msg.css( 'color', 'red' ).text( 'Error.' );
+        } );
+    } );
 
     /** Vuelve a consultar UN aviso (cuenta atrás a cero) y lo actualiza, sin recargar la página. */
     function refreshNotice( $notice ) {

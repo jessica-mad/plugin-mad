@@ -335,14 +335,14 @@ function mad_quotes_default_reservation_message( string $state, string $lang ): 
             'fr' => "Nous sommes désolés, {pieza} n'est plus disponible pour le moment et a été retirée de votre commande.",
         ],
         'reserved' => [
-            'es' => 'Esta pieza está en proceso de compra. De no ser comprada, se libera en {tiempo}.',
-            'en' => 'This piece is currently being purchased. If the purchase is not completed, it will be released in {tiempo}.',
-            'fr' => 'Cette pièce est en cours d\'achat. Si l\'achat n\'est pas finalisé, elle sera libérée dans {tiempo}.',
+            'es' => 'Pieza en proceso de compra · disponible de nuevo en {tiempo} si no se completa',
+            'en' => 'Purchase in progress · available again in {tiempo} if not completed',
+            'fr' => "Achat en cours · de nouveau disponible dans {tiempo} si l'achat n'aboutit pas",
         ],
         'pending_proof' => [
-            'es' => 'Esta pieza está en proceso de compra, pendiente de confirmación del pago.',
-            'en' => 'This piece is currently being purchased, pending payment confirmation.',
-            'fr' => "Cette pièce est en cours d'achat, en attente de confirmation du paiement.",
+            'es' => 'Pieza en proceso de compra · pendiente de confirmación del pago',
+            'en' => 'Purchase in progress · awaiting payment confirmation',
+            'fr' => "Achat en cours · en attente de confirmation du paiement",
         ],
         'contested' => [
             'es' => 'Alguien ha puesto esta pieza en proceso de compra justo ahora. Si no se completa la compra, volverá a estar disponible en {tiempo}.',
