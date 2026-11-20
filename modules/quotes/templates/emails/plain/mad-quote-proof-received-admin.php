@@ -7,17 +7,23 @@
  * @var string   $body_text
  * @var string   $additional_content
  * @var string   $ai_result_text
+ * @var string   $verdict_label
  * @var string   $order_edit_url
+ * @var string   $approve_url
  */
 
 defined( 'ABSPATH' ) || exit;
 
 echo esc_html( $email_heading ) . "\n\n";
+echo esc_html( $verdict_label ) . "\n\n";
 echo wp_strip_all_tags( $body_text ) . "\n\n";
 echo wp_strip_all_tags( $ai_result_text ) . "\n\n";
 
 echo wc_get_email_order_items( $order, [ 'plain_text' => true ] ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
 
+if ( $approve_url ) {
+    echo "\n" . esc_html__( 'Aprobar pago:', 'mad-suite' ) . ' ' . esc_url( $approve_url ) . "\n";
+}
 echo "\n" . esc_html__( 'Ver pedido:', 'mad-suite' ) . ' ' . esc_url( $order_edit_url ) . "\n";
 
 if ( $additional_content ) {

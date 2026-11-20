@@ -413,6 +413,7 @@ return new class( $core ) implements MAD_Suite_Module {
 
         $this->maybe_migrate_email_wpml_fields();
         $this->maybe_migrate_order_types();
+        $this->maybe_fix_order_22247();
 
         $option_key = MAD_Suite_Core::option_key( $this->slug );
 
@@ -656,6 +657,9 @@ return new class( $core ) implements MAD_Suite_Module {
         add_action( 'wp_ajax_mad_quotes_update_status',       [ $this, 'ajax_update_status' ] );
         add_action( 'wp_ajax_mad_quotes_send_quote',          [ $this, 'ajax_send_quote' ] );
         add_action( 'wp_ajax_mad_admin_upload_payment_proof', [ $this, 'ajax_admin_upload_payment_proof' ] );
+        add_action( 'wp_ajax_mad_quotes_approve_payment',     [ $this, 'ajax_approve_payment' ] );
+        add_action( 'wp_ajax_mad_quotes_reject_payment',      [ $this, 'ajax_reject_payment' ] );
+        add_action( 'admin_post_mad_quotes_approve_payment',  [ $this, 'handle_approve_payment_link' ] );
 
         // ── Adoptar como presupuesto un pedido nativo de WooCommerce ───
         // (creado desde Pedidos → Añadir nuevo, sin pasar por el carrito
@@ -2850,6 +2854,8 @@ return new class( $core ) implements MAD_Suite_Module {
             'i18n_error'          => __( 'Error. Inténtalo de nuevo.', 'mad-suite' ),
             'i18n_uploading'      => __( 'Verificando…', 'mad-suite' ),
             'i18n_file_error'     => __( 'Tipo de archivo no permitido.', 'mad-suite' ),
+            'i18n_confirm_approve'=> __( '¿Aprobar el pago de este pedido?', 'mad-suite' ),
+            'i18n_reject_reason'  => __( 'Motivo del rechazo (se incluye en el email al cliente, puede dejarse en blanco):', 'mad-suite' ),
             'currency_format'     => [
                 'symbol'      => get_woocommerce_currency_symbol(),
                 'symbol_pos'  => get_option( 'woocommerce_currency_pos', 'left' ),
@@ -3034,18 +3040,35 @@ return new class( $core ) implements MAD_Suite_Module {
             ? $post_or_order
             : wc_get_order( $post_or_order->ID );
 
-        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) return;
+        // Antes solo se pintaba para presupuestos clásicos (_mad_qwc_quote):
+        // los pedidos de compra (C-) y de profesionales se quedaban sin caja
+        // aunque el comprobante ya estuviera guardado (bug de C-22247).
+        if ( ! $order ) return;
+        if ( ! $order->get_meta( '_mad_payment_proof_url' ) && ! $this->order_accepts_payment_proof( $order ) ) return;
 
         $this->render_proof_block( $order );
     }
 
+    /** Etiqueta + color del veredicto de la IA (sección 5, punto 4). */
+    private function proof_verdict_badge( string $verdict ): string {
+        $badges = [
+            'matches'    => [ '#2e7d32', __( '✔ Importe correcto', 'mad-suite' ) ],
+            'mismatch'   => [ '#e65100', __( '⚠ Importe no coincide', 'mad-suite' ) ],
+            'unreadable' => [ '#757575', __( '? No se pudo leer', 'mad-suite' ) ],
+        ];
+        [ $color, $label ] = $badges[ $verdict ] ?? [ '#757575', __( 'Sin verificar', 'mad-suite' ) ];
+        return '<span style="color:' . esc_attr( $color ) . ';font-weight:600;">' . esc_html( $label ) . '</span>';
+    }
+
     private function render_proof_block( WC_Order $order ): void {
         $proof_url = $order->get_meta( '_mad_payment_proof_url' );
-        $verified  = $order->get_meta( '_mad_payment_proof_verified' );
+        $verdict   = (string) $order->get_meta( '_mad_payment_proof_verdict' );
         $ai_json   = $order->get_meta( '_mad_payment_proof_ai_result' );
         $ai        = $ai_json ? json_decode( (string) $ai_json, true ) : null;
         $is_pdf    = $proof_url && 'pdf' === strtolower( pathinfo( $proof_url, PATHINFO_EXTENSION ) );
         $nonce     = wp_create_nonce( 'mad_admin_proof_' . $order->get_id() );
+        $history   = array_filter( (array) $order->get_meta( '_mad_payment_proof_history' ), static fn( $h ) => is_array( $h ) );
+        $status    = $order->get_status();
         ?>
         <?php if ( $proof_url ) : ?>
             <div id="mad-proof-preview" style="margin-bottom:8px;">
@@ -3060,10 +3083,11 @@ return new class( $core ) implements MAD_Suite_Module {
                 <a href="<?php echo esc_url( $proof_url ); ?>" target="_blank" style="font-size:12px;">
                     <?php esc_html_e( '↗ Abrir en pestaña nueva', 'mad-suite' ); ?>
                 </a>
-                <?php if ( $verified ) : ?>
-                    <span style="color:green;margin-left:10px;font-size:12px;">✔ <?php esc_html_e( 'Verificado por IA', 'mad-suite' ); ?></span>
-                <?php endif; ?>
             </div>
+
+            <?php if ( $verdict ) : ?>
+                <p style="margin:0 0 8px;"><?php echo wp_kses_post( $this->proof_verdict_badge( $verdict ) ); ?></p>
+            <?php endif; ?>
 
             <?php if ( is_array( $ai ) ) : ?>
             <ul style="margin:0 0 8px;padding-left:16px;font-size:12px;color:#444;">
@@ -3083,6 +3107,37 @@ return new class( $core ) implements MAD_Suite_Module {
                     <li style="color:<?php echo esc_attr( $leg_color ); ?>;"><?php echo esc_html( $leg_label ); ?></li>
                 <?php endif; ?>
             </ul>
+            <?php endif; ?>
+
+            <?php if ( count( $history ) > 1 ) : ?>
+                <details style="margin:0 0 8px;font-size:12px;">
+                    <summary style="cursor:pointer;color:#666;"><?php esc_html_e( 'Ver comprobantes anteriores', 'mad-suite' ); ?></summary>
+                    <ul style="margin:6px 0 0;padding-left:16px;">
+                        <?php foreach ( array_reverse( array_slice( $history, 0, -1 ) ) as $entry ) : ?>
+                            <li>
+                                <a href="<?php echo esc_url( $entry['url'] ?? '' ); ?>" target="_blank"><?php esc_html_e( 'Archivo', 'mad-suite' ); ?></a>
+                                — <?php echo wp_kses_post( $this->proof_verdict_badge( (string) ( $entry['verdict'] ?? '' ) ) ); ?>
+                                — <?php echo esc_html( ! empty( $entry['time'] ) ? date_i18n( 'd/m/Y H:i', (int) $entry['time'] ) : '' ); ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                </details>
+            <?php endif; ?>
+
+            <?php if ( 'on-hold' === $status ) : ?>
+                <p style="margin:0 0 8px;">
+                    <button type="button" id="mad-proof-approve-btn" class="button button-primary button-small" style="margin-right:6px;">
+                        <?php esc_html_e( 'Aprobar pago', 'mad-suite' ); ?>
+                    </button>
+                    <button type="button" id="mad-proof-reject-btn" class="button button-small">
+                        <?php esc_html_e( 'Rechazar', 'mad-suite' ); ?>
+                    </button>
+                </p>
+                <input type="hidden" id="mad-proof-decision-nonce" value="<?php echo esc_attr( wp_create_nonce( 'mad_quotes_proof_decision_' . $order->get_id() ) ); ?>">
+            <?php elseif ( in_array( $status, [ 'processing', 'completed' ], true ) ) : ?>
+                <p style="margin:0 0 8px;color:#2e7d32;"><?php esc_html_e( '✔ Pago aprobado.', 'mad-suite' ); ?></p>
+            <?php elseif ( 'cancelled' === $status ) : ?>
+                <p style="margin:0 0 8px;color:#c00;"><?php esc_html_e( '✘ Pago rechazado / pedido cancelado.', 'mad-suite' ); ?></p>
             <?php endif; ?>
 
             <button type="button" id="mad-proof-replace-btn" class="button button-small" style="margin-bottom:6px;">
@@ -3123,7 +3178,7 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         $order = wc_get_order( $order_id );
-        if ( ! $order || '1' !== $order->get_meta( '_mad_qwc_quote' ) ) {
+        if ( ! $order || ( ! $this->order_accepts_payment_proof( $order ) && ! $order->get_meta( '_mad_payment_proof_url' ) ) ) {
             wp_send_json_error( [ 'message' => __( 'Pedido no válido.', 'mad-suite' ) ] );
         }
 
@@ -3165,50 +3220,147 @@ return new class( $core ) implements MAD_Suite_Module {
         $order->update_meta_data( '_mad_payment_proof_ai_result', '' );
         $order->save();
 
-        $result = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+        $result    = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+        $ai_failed = is_wp_error( $result );
+        $verdict   = $ai_failed ? 'unreadable' : ( $result['amount_matches'] ? 'matches' : 'mismatch' );
 
-        if ( is_wp_error( $result ) ) {
-            wp_send_json_success( [
-                'message'   => __( 'Comprobante guardado. No se pudo verificar con IA: ', 'mad-suite' ) . $result->get_error_message(),
-                'proof_url' => $file_url,
-                'is_pdf'    => 'application/pdf' === $mime,
-            ] );
-        }
-
-        $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
-
-        if ( $result['amount_matches'] ) {
-            $order->update_meta_data( '_mad_payment_proof_verified', '1' );
-            $order->save();
-            if ( $order->get_status() === 'on-hold' ) {
-                $order->update_status( 'processing', __( 'Comprobante verificado por admin + IA. Importe coincide.', 'mad-suite' ) );
-            } else {
-                $order->add_order_note( __( 'Admin subió nuevo comprobante. Verificado por IA — importe coincide.', 'mad-suite' ) );
+        if ( ! $ai_failed ) {
+            $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
+            if ( 'matches' === $verdict ) {
+                $order->update_meta_data( '_mad_payment_proof_verified', '1' );
             }
-            $message = __( '✔ Verificado. El importe coincide.', 'mad-suite' );
-        } else {
-            $order->save();
-            $detected = isset( $result['detected_amount'] ) && $result['detected_amount'] !== null
-                ? wc_price( (float) $result['detected_amount'] )
-                : __( 'no detectado', 'mad-suite' );
-            $order->add_order_note( sprintf(
-                __( 'Admin subió comprobante. Importe detectado: %s — Esperado: %s.', 'mad-suite' ),
-                wp_strip_all_tags( $detected ),
-                wc_price( (float) $order->get_total() )
-            ) );
-            $message = sprintf(
-                __( 'Guardado. Importe detectado: %s (esperado: %s).', 'mad-suite' ),
-                wp_strip_all_tags( $detected ),
-                wp_strip_all_tags( wc_price( (float) $order->get_total() ) )
-            );
         }
+        $order->update_meta_data( '_mad_payment_proof_verdict', $verdict );
+        $this->append_payment_proof_history( $order, $file_url, $verdict );
+
+        // El admin ya sabe que lo subió — esto solo detiene el plazo si
+        // seguía corriendo, no envía el aviso a Olofane (sería avisarse a
+        // sí mismo) ni cambia el estado solo: eso lo decide con "Aprobar
+        // pago" / "Rechazar" en la misma caja.
+        if ( in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true )
+            && 'quote-reserved' === $order->get_status() ) {
+            $this->reservations->cancel_expiry_only( $order->get_id() );
+            $order->update_status( 'on-hold', __( 'Admin subió el comprobante. Plazo detenido.', 'mad-suite' ) );
+        } else {
+            $order->add_order_note( sprintf(
+                /* translators: %s: Importe correcto | El importe no coincide | No se pudo leer */
+                __( 'Admin subió un comprobante. IA: %s.', 'mad-suite' ),
+                [ 'matches' => __( 'importe correcto', 'mad-suite' ), 'mismatch' => __( 'el importe no coincide', 'mad-suite' ), 'unreadable' => __( 'no se pudo leer', 'mad-suite' ) ][ $verdict ]
+            ) );
+            $order->save();
+        }
+
+        $messages = [
+            'matches'    => __( '✔ Verificado. El importe coincide.', 'mad-suite' ),
+            'mismatch'   => __( 'Guardado. El importe detectado no coincide con el total del pedido.', 'mad-suite' ),
+            'unreadable' => __( 'Guardado. No se pudo verificar el importe con IA.', 'mad-suite' ),
+        ];
 
         wp_send_json_success( [
-            'message'   => $message,
+            'message'   => $messages[ $verdict ],
             'proof_url' => $file_url,
             'is_pdf'    => 'application/pdf' === $mime,
-            'verified'  => $result['amount_matches'],
+            'verified'  => 'matches' === $verdict,
         ] );
+    }
+
+    /* ================================================================ */
+    /*  Aprobar / rechazar el pago (sección 5, punto 4)                   */
+    /* ================================================================ */
+
+    /** AJAX (botón "Aprobar pago" de la caja de comprobante): on-hold → processing, dispara la factura (sección 3). */
+    public function ajax_approve_payment(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Permiso denegado.', 'mad-suite' ) ] );
+        }
+
+        $order_id = absint( $_POST['order_id'] ?? 0 );
+        $nonce    = sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) );
+        if ( ! wp_verify_nonce( $nonce, 'mad_quotes_proof_decision_' . $order_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
+        }
+
+        $order = wc_get_order( $order_id );
+        $error = $this->do_approve_payment( $order );
+        if ( $error ) {
+            wp_send_json_error( [ 'message' => $error ] );
+        }
+        wp_send_json_success();
+    }
+
+    /** AJAX (botón "Rechazar"): pide un motivo, cancela el pedido y libera la pieza. */
+    public function ajax_reject_payment(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( [ 'message' => __( 'Permiso denegado.', 'mad-suite' ) ] );
+        }
+
+        $order_id = absint( $_POST['order_id'] ?? 0 );
+        $nonce    = sanitize_text_field( wp_unslash( $_POST['nonce'] ?? '' ) );
+        if ( ! wp_verify_nonce( $nonce, 'mad_quotes_proof_decision_' . $order_id ) ) {
+            wp_send_json_error( [ 'message' => __( 'Error de seguridad.', 'mad-suite' ) ] );
+        }
+
+        $order  = wc_get_order( $order_id );
+        $reason = sanitize_textarea_field( wp_unslash( $_POST['reason'] ?? '' ) );
+        $error  = $this->do_reject_payment( $order, $reason );
+        if ( $error ) {
+            wp_send_json_error( [ 'message' => $error ] );
+        }
+        wp_send_json_success();
+    }
+
+    /** Enlace directo desde el email a Olofane (6.7) — mismo efecto que el botón AJAX, pero por GET con nonce propio. */
+    public function handle_approve_payment_link(): void {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_die( esc_html__( 'No tienes permisos suficientes.', 'mad-suite' ) );
+        }
+
+        $order_id = absint( $_GET['order_id'] ?? 0 );
+        check_admin_referer( 'mad_quotes_approve_payment_' . $order_id );
+
+        $order = wc_get_order( $order_id );
+        $error = $this->do_approve_payment( $order );
+
+        $redirect = $order ? $order->get_edit_order_url() : admin_url( 'edit.php?post_type=shop_order' );
+        if ( $error ) {
+            $redirect = add_query_arg( 'mad_proof_error', rawurlencode( $error ), $redirect );
+        }
+        wp_safe_redirect( $redirect );
+        exit;
+    }
+
+    /** @return string Mensaje de error, o '' si se aprobó correctamente. */
+    private function do_approve_payment( ?WC_Order $order ): string {
+        if ( ! $order ) return __( 'Pedido no encontrado.', 'mad-suite' );
+        if ( ! $order->get_meta( '_mad_payment_proof_url' ) ) return __( 'Este pedido no tiene comprobante.', 'mad-suite' );
+        if ( 'on-hold' !== $order->get_status() ) return __( 'Este pedido ya no está en espera de revisión.', 'mad-suite' );
+
+        $order->update_status( 'processing', __( 'Pago aprobado por el administrador desde la caja de comprobante.', 'mad-suite' ) );
+        do_action( 'mad_quotes_payment_approved', $order );
+        return '';
+    }
+
+    /** @return string Mensaje de error, o '' si se rechazó correctamente. */
+    private function do_reject_payment( ?WC_Order $order, string $reason ): string {
+        if ( ! $order ) return __( 'Pedido no encontrado.', 'mad-suite' );
+        if ( ! $order->get_meta( '_mad_payment_proof_url' ) ) return __( 'Este pedido no tiene comprobante.', 'mad-suite' );
+        if ( 'on-hold' !== $order->get_status() ) return __( 'Este pedido ya no está en espera de revisión.', 'mad-suite' );
+
+        $note = __( 'Pago rechazado por el administrador desde la caja de comprobante.', 'mad-suite' );
+        if ( '' !== $reason ) {
+            $note .= ' ' . sprintf(
+                /* translators: %s: motivo escrito por el admin */
+                __( 'Motivo: %s', 'mad-suite' ),
+                $reason
+            );
+        }
+        $order->update_meta_data( '_mad_payment_rejection_reason', $reason );
+        $order->update_status( 'cancelled', $note );
+        // release_reservation_on_cancel() ya libera la pieza (hook en
+        // woocommerce_order_status_cancelled); aquí solo se dispara el email
+        // de compra anulada con el motivo.
+        do_action( 'mad_reservation_voided', $order, $reason );
+        return '';
     }
 
     /**
@@ -3415,65 +3567,94 @@ return new class( $core ) implements MAD_Suite_Module {
             ] );
         }
 
-        // Verificar con IA.
-        $result = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+        // Verificar con IA — su resultado es una AYUDA para el admin, nunca
+        // la decisión: cualquier comprobante a tiempo detiene el plazo,
+        // coincida el importe o no, e incluso si la IA falla al leerlo.
+        $result  = $this->verify_payment_proof_with_ai( $target, $mime, (float) $order->get_total() );
+        $ai_failed = is_wp_error( $result );
 
-        if ( is_wp_error( $result ) ) {
+        if ( $ai_failed ) {
+            $verdict = 'unreadable';
             $order->add_order_note( sprintf(
-                __( 'Comprobante subido pero no se pudo verificar con IA: %s', 'mad-suite' ),
+                __( 'Comprobante subido. No se pudo verificar con IA: %s', 'mad-suite' ),
                 $result->get_error_message()
             ) );
-            wp_send_json_error( [ 'message' => $result->get_error_message(), 'proof_url' => $file_url ] );
-        }
+        } else {
+            $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
+            $verdict = $result['amount_matches'] ? 'matches' : 'mismatch';
 
-        $order->update_meta_data( '_mad_payment_proof_ai_result', wp_json_encode( $result ) );
-
-        if ( $result['amount_matches'] ) {
-            $order->update_meta_data( '_mad_payment_proof_verified', '1' );
-            $order->save();
-
-            $is_reservation = in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true );
-
-            if ( $is_reservation ) {
-                // Reserva con plazo: el comprobante NO aprueba la venta por
-                // sí solo — pasa a "En espera" (se descuenta el stock, deja
-                // de caducar) y un humano revisa la transferencia a mano
-                // (aprobar → Procesando, rechazar → Cancelado).
-                $this->reservations->cancel_expiry_only( $order->get_id() );
-                $order->update_status( 'on-hold', sprintf(
-                    __( 'Comprobante verificado por IA. Importe detectado: %s. Pendiente de revisión por el administrador.', 'mad-suite' ),
+            if ( 'matches' === $verdict ) {
+                $order->update_meta_data( '_mad_payment_proof_verified', '1' );
+                $order->add_order_note( sprintf(
+                    __( 'Comprobante subido. IA: importe correcto (%s). Pendiente de revisión por el administrador.', 'mad-suite' ),
                     wc_price( (float) $result['detected_amount'] )
                 ) );
-                do_action( 'mad_payment_proof_received', $order, $result );
             } else {
-                $order->update_status( 'processing', sprintf(
-                    __( 'Comprobante verificado por IA. Importe detectado: %s. Pendiente de revisión por el administrador.', 'mad-suite' ),
-                    wc_price( (float) $result['detected_amount'] )
+                $order->add_order_note( sprintf(
+                    __( 'Comprobante subido. IA: el importe no coincide. Detectado: %s — Esperado: %s.', 'mad-suite' ),
+                    wc_price( (float) ( $result['detected_amount'] ?? 0 ) ),
+                    wc_price( (float) $order->get_total() )
                 ) );
             }
+        }
 
-            wp_send_json_success( [
-                'message' => __( 'Comprobante verificado. Tu pedido está siendo procesado.', 'mad-suite' ),
-                'reload'  => true,
-            ] );
+        $order->update_meta_data( '_mad_payment_proof_verdict', $verdict );
+        $this->append_payment_proof_history( $order, $file_url, $verdict );
+
+        $is_reservation = in_array( $order->get_meta( '_mad_order_type' ), [ 'quote_purchase', 'pro_purchase' ], true );
+
+        if ( $is_reservation && 'quote-reserved' === $order->get_status() ) {
+            // El plazo se detiene SIEMPRE que llega un comprobante a tiempo
+            // — nadie más puede comprar la pieza mientras Olofane decide.
+            $this->reservations->cancel_expiry_only( $order->get_id() );
+            $order->update_status( 'on-hold', __( 'Comprobante recibido a tiempo. Plazo detenido, pendiente de revisión por el administrador.', 'mad-suite' ) );
+        } elseif ( ! $is_reservation && 'matches' === $verdict ) {
+            // Presupuesto clásico (sin plazo): el comportamiento de siempre.
+            $order->update_status( 'processing', __( 'Comprobante verificado por IA. Importe correcto. Pendiente de revisión por el administrador.', 'mad-suite' ) );
         } else {
             $order->save();
-            $order->add_order_note( sprintf(
-                __( 'Comprobante subido pero el importe no coincide. Detectado: %s — Esperado: %s.', 'mad-suite' ),
-                wc_price( (float) ( $result['detected_amount'] ?? 0 ) ),
-                wc_price( (float) $order->get_total() )
-            ) );
-
-            $message = isset( $result['detected_amount'] ) && $result['detected_amount'] !== null
-                ? sprintf(
-                    __( 'El importe detectado (%s) no coincide con el total del pedido (%s). Revisa el comprobante.', 'mad-suite' ),
-                    wc_price( (float) $result['detected_amount'] ),
-                    wc_price( (float) $order->get_total() )
-                )
-                : __( 'No se pudo detectar el importe en el comprobante.', 'mad-suite' );
-
-            wp_send_json_error( [ 'message' => $message ] );
         }
+
+        do_action( 'mad_payment_proof_received', $order, $verdict, is_wp_error( $result ) ? null : $result );
+
+        $lang = mad_quotes_order_lang( $order );
+        wp_send_json_success( [
+            'message' => $this->payment_proof_uploaded_message( $verdict, $lang ),
+            'reload'  => true,
+        ] );
+    }
+
+    /** Mensaje al cliente tras subir el comprobante — mismo texto para "no coincide" y "no se pudo leer" (sección 5, punto 2 del documento de cambios). */
+    private function payment_proof_uploaded_message( string $verdict, string $lang ): string {
+        if ( 'matches' === $verdict ) {
+            $texts = [
+                'es' => 'Comprobante verificado. Tu pedido está siendo procesado.',
+                'en' => 'Proof of payment verified. Your order is being processed.',
+                'fr' => 'Justificatif vérifié. Votre commande est en cours de traitement.',
+            ];
+        } else {
+            $texts = [
+                'es' => 'Hemos recibido su comprobante. El importe no coincide con el total del pedido; lo revisaremos y nos pondremos en contacto con usted.',
+                'en' => 'We have received your proof of payment. The amount does not match the order total; we will review it and contact you.',
+                'fr' => 'Nous avons bien reçu votre justificatif de paiement. Le montant ne correspond pas au total de la commande ; nous allons le vérifier et nous vous contacterons.',
+            ];
+        }
+        return $texts[ $lang ] ?? $texts['es'];
+    }
+
+    /**
+     * Historial de comprobantes de un pedido (sección 5, punto 4): cada
+     * subida (cliente o admin) se añade, nunca se sobrescribe, para que la
+     * caja de admin pueda mostrar los anteriores si se reemplazó alguno.
+     */
+    private function append_payment_proof_history( WC_Order $order, string $file_url, string $verdict ): void {
+        $history   = (array) $order->get_meta( '_mad_payment_proof_history' );
+        $history[] = [ 'url' => $file_url, 'verdict' => $verdict, 'time' => time() ];
+        if ( count( $history ) > 20 ) {
+            $history = array_slice( $history, -20 );
+        }
+        $order->update_meta_data( '_mad_payment_proof_history', $history );
+        $order->save();
     }
 
     /**
@@ -4639,6 +4820,7 @@ return new class( $core ) implements MAD_Suite_Module {
      * estado final si ya se resolvió (en revisión, vendida, caducada).
      */
     private function render_reservation_payment_page( WC_Order $order ): string {
+        $order  = $this->reservations->ensure_fresh( $order );
         $lang   = mad_quotes_order_lang( $order );
         $status = $order->get_status();
 
@@ -4893,6 +5075,7 @@ return new class( $core ) implements MAD_Suite_Module {
             $order_id  = wc_get_order_id_by_order_key( $order_key );
             $order     = $order_id ? wc_get_order( $order_id ) : false;
             if ( $order ) {
+                $order = $this->reservations->ensure_fresh( $order );
                 $response['order'] = [ 'status' => $order->get_status() ];
             }
         }
@@ -5153,6 +5336,34 @@ return new class( $core ) implements MAD_Suite_Module {
         }
 
         update_option( 'mad_quotes_order_type_migrated', '1' );
+    }
+
+    /**
+     * Migración de datos de una sola vez (sección 5, punto 7 del documento
+     * de cambios): el pedido C-22247 se quedó en el limbo por el bug que
+     * esta entrega corrige — un comprobante de 300€ contra un pedido de
+     * 350€ nunca detuvo el plazo ni avisó a Olofane. Se fuerza a "En
+     * espera" con la marca "Importe no coincide" para que se resuelva a
+     * mano desde la caja ya corregida, y se avisa a Olofane por si no
+     * llegó a verlo. Si el pedido ya se resolvió por otra vía (aprobado,
+     * rechazado, o no tiene comprobante), no se toca nada.
+     */
+    private function maybe_fix_order_22247(): void {
+        if ( get_option( 'mad_quotes_fix_22247_done' ) ) return;
+        update_option( 'mad_quotes_fix_22247_done', '1' );
+
+        $order = wc_get_order( 22247 );
+        if ( ! $order ) return;
+        if ( ! $order->get_meta( '_mad_payment_proof_url' ) ) return;
+        if ( ! in_array( $order->get_status(), [ 'quote-reserved', 'cancelled' ], true ) ) return;
+
+        $this->reservations->cancel_expiry_only( $order->get_id() );
+        $order->update_meta_data( '_mad_payment_proof_verdict', 'mismatch' );
+        $order->update_status( 'on-hold', __( 'Corregido por migración: el comprobante no detuvo el plazo a tiempo por el bug ya arreglado. Importe no coincide — revisar a mano.', 'mad-suite' ) );
+
+        $this->append_payment_proof_history( $order, (string) $order->get_meta( '_mad_payment_proof_url' ), 'mismatch' );
+
+        do_action( 'mad_payment_proof_received', $order, 'mismatch', null );
     }
 
     /** Registra en el log de WooCommerce los fallos de entrega de email. */

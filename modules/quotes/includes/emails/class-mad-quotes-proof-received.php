@@ -2,9 +2,11 @@
 /**
  * Customer email: proof of payment received (6.4).
  *
- * Fires right after the AI verifies the uploaded proof's amount matches
- * (order moves from quote-reserved/on-hold to on-hold, awaiting manual
- * admin review — see Module::ajax_upload_payment_proof()).
+ * Fires every time a proof is saved on time (order moves to on-hold,
+ * awaiting manual admin review — see Module::ajax_upload_payment_proof()),
+ * regardless of whether the AI's amount check matched. Two text variants:
+ * 'matches' (amount confirmed by AI) and 'review' (amount mismatch or AI
+ * could not read it — same message either way, a human will check it).
  *
  * @package MAD_Suite/Quotes/Emails
  */
@@ -14,6 +16,9 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class MAD_Quotes_Email_Proof_Received extends WC_Email {
 
     use MAD_Email_WPML_Trait;
+
+    /** @var string 'matches'|'review' — fijado en trigger(), 'matches' en vista previa/sin pedido. */
+    private $variant = 'matches';
 
     public function __construct() {
         $this->id             = 'mad_quotes_proof_received';
@@ -28,16 +33,18 @@ class MAD_Quotes_Email_Proof_Received extends WC_Email {
         $this->template_plain = 'emails/plain/mad-quote-proof-received.php';
         $this->template_base  = MAD_QUOTES_TEMPLATE_PATH;
 
-        add_action( 'mad_payment_proof_received', [ $this, 'trigger' ], 10, 1 );
+        add_action( 'mad_payment_proof_received', [ $this, 'trigger' ], 10, 2 );
 
         parent::__construct();
     }
 
-    public function trigger( $order ) {
+    /** @param string $verdict 'matches'|'mismatch'|'unreadable' — las dos últimas comparten el mismo texto ("review"). */
+    public function trigger( $order, string $verdict = 'matches' ) {
         if ( ! $order instanceof WC_Order ) return;
         if ( ! $this->is_enabled() ) return;
 
-        $this->object = $order;
+        $this->object  = $order;
+        $this->variant = 'matches' === $verdict ? 'matches' : 'review';
 
         $this->recipient = $order->get_billing_email();
         if ( ! $this->get_recipient() ) return;
@@ -70,7 +77,7 @@ class MAD_Quotes_Email_Proof_Received extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
-                'body_text'          => $this->get_body_text( $this->object ),
+                'body_text'          => $this->get_body_text( $this->object, $this->variant ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => false,
@@ -91,7 +98,7 @@ class MAD_Quotes_Email_Proof_Received extends WC_Email {
             [
                 'order'              => $this->object,
                 'email_heading'      => $this->get_heading(),
-                'body_text'          => $this->get_body_text( $this->object ),
+                'body_text'          => $this->get_body_text( $this->object, $this->variant ),
                 'additional_content' => $this->get_additional_content(),
                 'sent_to_admin'      => false,
                 'plain_text'         => true,
@@ -111,15 +118,30 @@ class MAD_Quotes_Email_Proof_Received extends WC_Email {
     }
 
     public function get_default_body_text(): string {
-        return $this->body_text_defaults()['es'];
+        return $this->body_text_defaults( 'matches' )['es'];
     }
 
-    /** ES/EN/FR tal cual (sección 6.4). */
-    private function body_text_defaults(): array {
+    /** ES/EN/FR tal cual (sección 6.4), una variante a la vez. 'review' cubre tanto importe que no coincide como IA que no pudo leerlo — mismo texto en los dos casos, lo revisa un humano. */
+    private function body_text_defaults( string $variant ): array {
+        $texts = [
+            'matches' => [
+                'es' => "Hemos recibido el comprobante de su transferencia. Lo revisaremos en breve y le confirmaremos la compra por correo.\n\nMientras tanto, las piezas quedan apartadas para usted.",
+                'en' => "We have received your bank transfer receipt. We will review it shortly and confirm your purchase by email.\n\nIn the meantime, the pieces are held for you.",
+                'fr' => "Nous avons bien reçu le justificatif de votre virement. Nous le vérifierons sous peu et vous confirmerons l'achat par e-mail.\n\nEn attendant, les pièces restent à votre disposition.",
+            ],
+            'review' => [
+                'es' => 'Hemos recibido su comprobante. El importe no coincide con el total del pedido; lo revisaremos y nos pondremos en contacto con usted.',
+                'en' => 'We have received your proof of payment. The amount does not match the order total; we will review it and contact you.',
+                'fr' => 'Nous avons bien reçu votre justificatif de paiement. Le montant ne correspond pas au total de la commande ; nous allons le vérifier et nous vous contacterons.',
+            ],
+        ];
+        return $texts[ $variant ] ?? $texts['matches'];
+    }
+
+    private function variant_labels(): array {
         return [
-            'es' => "Hemos recibido el comprobante de su transferencia. Lo revisaremos en breve y le confirmaremos la compra por correo.\n\nMientras tanto, las piezas quedan apartadas para usted.",
-            'en' => "We have received your bank transfer receipt. We will review it shortly and confirm your purchase by email.\n\nIn the meantime, the pieces are set aside for you.",
-            'fr' => "Nous avons bien reçu le justificatif de votre virement. Nous le vérifierons sous peu et vous confirmerons l'achat par e-mail.\n\nEn attendant, les pièces vous sont réservées.",
+            'matches' => __( 'Importe correcto', 'mad-suite' ),
+            'review'  => __( 'Importe no coincide / IA no pudo leerlo', 'mad-suite' ),
         ];
     }
 
@@ -137,17 +159,25 @@ class MAD_Quotes_Email_Proof_Received extends WC_Email {
                 'fr' => 'Justificatif reçu',
             ],
         ] );
-        $this->add_body_text_form_fields( $this->form_fields, '', $this->body_text_defaults() );
+        foreach ( $this->variant_labels() as $variant => $label ) {
+            $this->add_body_text_form_fields(
+                $this->form_fields,
+                '',
+                $this->body_text_defaults( $variant ),
+                'body_text_' . $variant,
+                $label
+            );
+        }
     }
 
-    private function get_body_text( WC_Order $order ): string {
-        return $this->get_body_text_for_lang( $this->get_default_body_text() );
+    private function get_body_text( WC_Order $order, string $variant ): string {
+        return $this->get_text_for_lang( 'body_text_' . $variant, $this->body_text_defaults( $variant )['es'] );
     }
 
     private function get_preview_fallback_html(): string {
         ob_start();
         do_action( 'woocommerce_email_header', $this->get_heading(), $this );
-        echo wp_kses_post( wpautop( $this->get_text_for_default_lang( 'body_text', $this->get_default_body_text() ) ) );
+        echo wp_kses_post( wpautop( $this->get_text_for_default_lang( 'body_text_matches', $this->get_default_body_text() ) ) );
         if ( $this->get_additional_content() ) {
             echo wp_kses_post( wpautop( wptexturize( $this->get_additional_content() ) ) );
         }

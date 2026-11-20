@@ -18,6 +18,9 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
     /** @var MAD_Reservations */
     private $reservations;
 
+    /** @var string Motivo opcional del rechazo (sección 5, punto 4) — vacío = texto normal, sin frase añadida. */
+    private $reason = '';
+
     public function __construct() {
         $this->id             = 'mad_quotes_reservation_cancelled';
         $this->title          = __( '[MAD Quotes] Reserva anulada (cliente)', 'mad-suite' );
@@ -33,13 +36,15 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
 
         $this->reservations = new MAD_Reservations();
 
-        add_action( 'mad_reservation_voided', [ $this, 'trigger' ], 10, 1 );
+        add_action( 'mad_reservation_voided', [ $this, 'trigger' ], 10, 2 );
 
         parent::__construct();
     }
 
-    public function trigger( $order ) {
+    /** @param string $reason Motivo opcional escrito por el admin al rechazar un pago (vacío en una anulación por venta en tienda). */
+    public function trigger( $order, string $reason = '' ) {
         if ( ! $order instanceof WC_Order ) return;
+        $this->reason = $reason;
 
         // El intento se devuelve siempre, esté o no activado este email —
         // es un efecto de la anulación, no de la notificación. Guarda
@@ -156,8 +161,20 @@ class MAD_Quotes_Email_Reservation_Cancelled extends WC_Email {
         $this->add_body_text_form_fields( $this->form_fields, '', $this->body_text_defaults() );
     }
 
+    /** Añade el motivo del rechazo, si lo hay, como frase final — el documento no da un texto distinto para este caso, solo pide incluirlo. */
+    private function reason_sentence( string $lang ): string {
+        if ( '' === trim( $this->reason ) ) return '';
+        $templates = [
+            'es' => 'Motivo: %s',
+            'en' => 'Reason: %s',
+            'fr' => 'Motif : %s',
+        ];
+        return ' ' . sprintf( $templates[ $lang ] ?? $templates['es'], $this->reason );
+    }
+
     private function get_body_text( WC_Order $order ): string {
-        return $this->get_body_text_for_lang( $this->get_default_body_text() );
+        $text = $this->get_body_text_for_lang( $this->get_default_body_text() );
+        return $text . $this->reason_sentence( mad_quotes_order_lang( $order ) );
     }
 
     private function get_preview_fallback_html(): string {

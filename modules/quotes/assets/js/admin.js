@@ -200,4 +200,57 @@
         } );
     } );
 
+    // ------------------------------------------------------------------ //
+    //  "Aprobar pago" / "Rechazar" (caja de comprobante)                  //
+    // ------------------------------------------------------------------ //
+    $( document ).on( 'click', '#mad-proof-approve-btn', function () {
+        var $btn = $( this );
+        if ( ! window.confirm( params.i18n_confirm_approve || '¿Aprobar el pago de este pedido?' ) ) return;
+
+        $btn.prop( 'disabled', true );
+        $.post( params.ajax_url, {
+            action  : 'mad_quotes_approve_payment',
+            order_id: params.order_id,
+            nonce   : $( '#mad-proof-decision-nonce' ).val(),
+        } )
+        .done( function ( response ) {
+            if ( response && response.success ) {
+                location.reload();
+            } else {
+                $btn.prop( 'disabled', false );
+                alert( ( response && response.data && response.data.message ) || params.i18n_error || 'Error.' );
+            }
+        } )
+        .fail( function () {
+            $btn.prop( 'disabled', false );
+            alert( params.i18n_error || 'Error. Inténtalo de nuevo.' );
+        } );
+    } );
+
+    $( document ).on( 'click', '#mad-proof-reject-btn', function () {
+        var $btn = $( this );
+        var reason = window.prompt( params.i18n_reject_reason || 'Motivo del rechazo (se incluye en el email al cliente, puede dejarse en blanco):', '' );
+        if ( reason === null ) return; // Canceló el prompt.
+
+        $btn.prop( 'disabled', true );
+        $.post( params.ajax_url, {
+            action  : 'mad_quotes_reject_payment',
+            order_id: params.order_id,
+            reason  : reason,
+            nonce   : $( '#mad-proof-decision-nonce' ).val(),
+        } )
+        .done( function ( response ) {
+            if ( response && response.success ) {
+                location.reload();
+            } else {
+                $btn.prop( 'disabled', false );
+                alert( ( response && response.data && response.data.message ) || params.i18n_error || 'Error.' );
+            }
+        } )
+        .fail( function () {
+            $btn.prop( 'disabled', false );
+            alert( params.i18n_error || 'Error. Inténtalo de nuevo.' );
+        } );
+    } );
+
 } )( jQuery );

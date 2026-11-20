@@ -129,7 +129,18 @@ class MAD_Order_Types {
             }
         }
 
+        if ( $this->needs_proof_review( $order ) ) {
+            $html .= '<br><span style="color:#e65100;font-weight:600;" title="'
+                . esc_attr__( 'Tiene un comprobante subido a la espera de que se apruebe o rechace el pago.', 'mad-suite' )
+                . '">⚠ ' . esc_html__( 'Comprobante por revisar', 'mad-suite' ) . '</span>';
+        }
+
         return $html;
+    }
+
+    /** "En espera" + comprobante subido = nadie ha pulsado todavía "Aprobar pago"/"Rechazar" (sección 5, puntos 4 y 5 del documento de cambios). */
+    private function needs_proof_review( WC_Order $order ): bool {
+        return 'on-hold' === $order->get_status() && (bool) $order->get_meta( '_mad_payment_proof_url' );
     }
 
     /* ────────────────────────────────────────────────────────────────
@@ -143,6 +154,7 @@ class MAD_Order_Types {
             'quote_purchase' => __( 'Compras de presupuesto', 'mad-suite' ),
             'pro_purchase'   => __( 'Compras profesionales', 'mad-suite' ),
             'store'          => __( 'Pedidos de tienda', 'mad-suite' ),
+            'proof_review'   => __( 'Comprobante por revisar', 'mad-suite' ),
         ];
     }
 
@@ -181,6 +193,12 @@ class MAD_Order_Types {
             return;
         }
 
+        if ( 'proof_review' === $type ) {
+            $query->set( 'post_status', [ 'wc-on-hold' ] );
+            $query->set( 'meta_query', [ [ 'key' => '_mad_payment_proof_url', 'compare' => 'EXISTS' ] ] );
+            return;
+        }
+
         $query->set( 'meta_key', '_mad_order_type' );
         $query->set( 'meta_value', $type );
     }
@@ -192,6 +210,14 @@ class MAD_Order_Types {
         if ( 'store' === $type ) {
             $args['meta_query'] = array_merge( $args['meta_query'] ?? [], [
                 [ 'key' => '_mad_order_type', 'compare' => 'NOT EXISTS' ],
+            ] );
+            return $args;
+        }
+
+        if ( 'proof_review' === $type ) {
+            $args['status']     = [ 'wc-on-hold' ];
+            $args['meta_query'] = array_merge( $args['meta_query'] ?? [], [
+                [ 'key' => '_mad_payment_proof_url', 'compare' => 'EXISTS' ],
             ] );
             return $args;
         }

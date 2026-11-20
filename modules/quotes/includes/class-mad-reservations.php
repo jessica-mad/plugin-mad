@@ -63,6 +63,16 @@ class MAD_Reservations {
                     return 'reserved';
                 }
 
+                // Caducidad al vuelo (sección 5, punto 6 del documento de
+                // cambios): no esperar a que corra la cola de Action
+                // Scheduler — cualquier consulta del estado de la pieza
+                // (ficha, catálogo, panel, AJAX) cancela el pedido en el
+                // momento si ya venció sin comprobante.
+                if ( $until > 0 && $until <= time() && 'quote-reserved' === $order->get_status() ) {
+                    $this->handle_expire( $order_id );
+                    return $product->is_in_stock() ? 'available' : 'sold';
+                }
+
                 // Comprobante subido: en espera, pendiente de que el admin
                 // apruebe o rechace la transferencia. Ya no depende del
                 // plazo (la caducidad se cancela al recibir el comprobante).
@@ -81,6 +91,28 @@ class MAD_Reservations {
     /** true si YA hay una reserva activa (no vencida) sobre este producto, la haya hecho quien la haya hecho. */
     public function is_actively_reserved( WC_Product $product ): bool {
         return 'reserved' === $this->product_state( $product );
+    }
+
+    /**
+     * Caducidad al vuelo a nivel de PEDIDO (sección 5, punto 6): si sigue
+     * en "En proceso de compra" y ya pasó su plazo sin comprobante, lo
+     * cancela ahora mismo en vez de esperar a Action Scheduler, y devuelve
+     * el pedido ya actualizado. Se usa en los puntos que leen el pedido
+     * directamente (página de pago, pantalla "Reservas activas", AJAX de
+     * estado) — product_state() ya hace lo mismo a nivel de producto.
+     */
+    public function ensure_fresh( WC_Order $order ): WC_Order {
+        if ( 'quote-reserved' !== $order->get_status() ) return $order;
+
+        $minutes = (int) $order->get_meta( '_mad_reservation_minutes' );
+        $created = $order->get_date_created();
+        $until   = ( $created ? $created->getTimestamp() : time() ) + $minutes * MINUTE_IN_SECONDS;
+
+        if ( $until > time() ) return $order;
+
+        $this->handle_expire( $order->get_id() );
+        $fresh = wc_get_order( $order->get_id() );
+        return $fresh instanceof WC_Order ? $fresh : $order;
     }
 
     /* ────────────────────────────────────────────────────────────────

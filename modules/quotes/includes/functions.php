@@ -417,6 +417,21 @@ function mad_quotes_recompra_url( WC_Order $order ): string {
     return add_query_arg( 'mad_recompra', $order->get_order_key(), home_url( '/' ) );
 }
 
+/**
+ * URL firmada del botón "Aprobar pago" del email a Olofane (6.7, sección 5
+ * punto 4) — pulsarla desde el correo aprueba el pago sin tener que abrir
+ * el pedido. Resuelta por Module::handle_approve_payment_link() (admin-post).
+ */
+function mad_quotes_approve_payment_url( WC_Order $order ): string {
+    return wp_nonce_url(
+        add_query_arg(
+            [ 'action' => 'mad_quotes_approve_payment', 'order_id' => $order->get_id() ],
+            admin_url( 'admin-post.php' )
+        ),
+        'mad_quotes_approve_payment_' . $order->get_id()
+    );
+}
+
 /** Cuentas bancarias configuradas en la pasarela nativa BACS de WooCommerce — compartido entre la página de pago y los emails 6.2/6.3. */
 /** {datos_bancarios} en HTML: titular/banco/cuenta/IBAN/BIC + concepto "Pedido #N". Usado en la página de pago y en el email 6.2. */
 function mad_quotes_bacs_details_html( WC_Order $order ): string {
