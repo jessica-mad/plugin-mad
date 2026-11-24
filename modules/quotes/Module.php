@@ -208,6 +208,12 @@ return new class( $core ) implements MAD_Suite_Module {
         add_filter( 'woocommerce_variable_price_html', [ $this, 'show_price_breakdown_for_store_manager' ], 1100, 2 );
         add_action( 'woocommerce_before_calculate_totals', [ $this, 'apply_regular_price_for_store_manager' ], 35 );
 
+        // ── Gestión de tienda: "Detalle para administrador" — nota interna
+        // por producto que solo ven los roles de Gestión de tienda, junto al
+        // precio (ficha y catálogo). Se edita en Producto → General.
+        add_action( 'woocommerce_product_options_pricing',      [ $this, 'render_admin_detail_field' ] );
+        add_action( 'woocommerce_admin_process_product_object', [ $this, 'save_admin_detail_field' ] );
+
         // ── Precio real por rol: el precio nativo de WooCommerce es un valor
         // simbólico (para poder usar el carrito y para el feed de Google
         // Shopping sin publicar el precio real). Los roles configurados en
@@ -1320,13 +1326,85 @@ return new class( $core ) implements MAD_Suite_Module {
         if ( ! $this->current_user_is_store_manager_role() ) return $price_html;
         if ( ! $product instanceof WC_Product ) return $price_html;
 
+        $detail_html = $this->get_admin_detail_html( $product );
+
         $breakdown = $this->get_store_manager_price_breakdown( $product );
-        if ( null === $breakdown ) return $price_html;
+        if ( null === $breakdown ) return $price_html . $detail_html;
 
         return '<span class="mad-store-manager-price">'
             . '<span class="mad-smp-line mad-smp-base">' . esc_html__( 'Base:', 'mad-suite' ) . ' ' . wc_price( $breakdown['excl'] ) . '</span>'
             . '<span class="mad-smp-line mad-smp-iva">' . esc_html__( 'IVA:', 'mad-suite' ) . ' ' . wc_price( $breakdown['iva'] ) . '</span>'
             . '<span class="mad-smp-line mad-smp-total"><strong>' . esc_html__( 'Total:', 'mad-suite' ) . ' ' . wc_price( $breakdown['incl'] ) . '</strong></span>'
+            . '</span>'
+            . $detail_html;
+    }
+
+    /* ── Detalle para administrador ─────────────────────────────────── */
+
+    const ADMIN_DETAIL_META = '_mad_admin_detail';
+
+    /** Campo "Detalle para administrador" en Producto → General, bajo los precios. */
+    public function render_admin_detail_field(): void {
+        woocommerce_wp_textarea_input( [
+            'id'          => self::ADMIN_DETAIL_META,
+            'label'       => __( 'Detalle para administrador', 'mad-suite' ),
+            'description' => __( 'Nota interna. Solo la ven los roles de "Gestión de tienda" (ajustes de MAD Quotes), junto al precio en la ficha y en el catálogo. Nunca la ven clientes ni profesionales.', 'mad-suite' ),
+            'desc_tip'    => true,
+            'rows'        => 3,
+            'style'       => 'height:auto;',
+        ] );
+    }
+
+    public function save_admin_detail_field( WC_Product $product ): void {
+        // WooCommerce ya verificó el nonce del formulario de producto antes de este hook.
+        if ( ! isset( $_POST[ self::ADMIN_DETAIL_META ] ) ) return; // phpcs:ignore WordPress.Security.NonceVerification
+
+        $value = sanitize_textarea_field( wp_unslash( $_POST[ self::ADMIN_DETAIL_META ] ) ); // phpcs:ignore WordPress.Security.NonceVerification
+        if ( '' === trim( $value ) ) {
+            $product->delete_meta_data( self::ADMIN_DETAIL_META );
+        } else {
+            $product->update_meta_data( self::ADMIN_DETAIL_META, $value );
+        }
+    }
+
+    /**
+     * Texto del detalle de un producto. En una traducción de WPML sin
+     * detalle propio usa el del producto en el idioma original, para no
+     * tener que copiarlo a mano en EN y FR. En una variación, el del padre.
+     */
+    private function get_admin_detail( WC_Product $product ): string {
+        $id = $product->get_parent_id() ?: $product->get_id();
+
+        $text = (string) get_post_meta( $id, self::ADMIN_DETAIL_META, true );
+        if ( '' !== trim( $text ) ) return $text;
+
+        $default_lang = apply_filters( 'wpml_default_language', null );
+        if ( $default_lang ) {
+            $original_id = (int) apply_filters( 'wpml_object_id', $id, 'product', true, $default_lang );
+            if ( $original_id && $original_id !== $id ) {
+                $text = (string) get_post_meta( $original_id, self::ADMIN_DETAIL_META, true );
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * HTML del detalle, solo para roles de Gestión de tienda (el mismo
+     * control que el desglose de precio). Para cualquier otro visitante
+     * devuelve vacío: el texto no llega nunca al HTML de clientes ni de
+     * profesionales.
+     */
+    private function get_admin_detail_html( WC_Product $product ): string {
+        if ( $this->current_user_is_quote_role() ) return '';
+        if ( ! $this->current_user_is_store_manager_role() ) return '';
+
+        $text = trim( $this->get_admin_detail( $product ) );
+        if ( '' === $text ) return '';
+
+        return '<span class="mad-smp-line mad-smp-admin-detail">'
+            . '<span class="mad-smp-admin-detail__label">' . esc_html__( 'Detalle para administrador:', 'mad-suite' ) . '</span> '
+            . nl2br( esc_html( $text ) )
             . '</span>';
     }
 
@@ -1597,6 +1675,18 @@ return new class( $core ) implements MAD_Suite_Module {
 .mad-smp-total {
     margin-top: 3px;
     font-size: 1.05em;
+}
+.mad-smp-admin-detail {
+    margin-top: 6px;
+    padding: 6px 8px;
+    font-size: 0.85em;
+    line-height: 1.4;
+    color: #5a4a00;
+    background: #fff8e1;
+    border-left: 3px solid #e0b400;
+}
+.mad-smp-admin-detail__label {
+    font-weight: 600;
 }
 </style>';
     }
